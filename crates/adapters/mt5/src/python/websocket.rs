@@ -25,9 +25,12 @@ use nautilus_core::python::to_pyruntime_err;
 use nautilus_model::{
     identifiers::AccountId,
     instruments::Instrument,
-    python::{data::data_to_pycapsule, instruments::pyobject_to_instrument_any},
+    python::{
+        data::data_to_pycapsule,
+        instruments::{instrument_any_to_pyobject, pyobject_to_instrument_any},
+    },
 };
-use pyo3::prelude::*;
+use pyo3::{conversion::IntoPyObjectExt, prelude::*, types::{PyDict, PyList}};
 
 use crate::websocket::client::{Mt5Client, Mt5ClientConfig, NautilusMessage};
 
@@ -180,13 +183,16 @@ impl Mt5Client {
                 .map_err(to_pyruntime_err)?;
 
             Python::with_gil(|py| {
-                let py_list = pyo3::types::PyList::empty_bound(py);
-                for inst in instruments {
-                    // Convert to pyo3 object
-                    let py_inst = inst.into_py(py);
-                    py_list.append(py_inst)?;
-                }
-                Ok(py_list.into_py(py))
+                // Convert instruments to PyObjects
+                let py_instruments: PyResult<Vec<Py<PyAny>>> = instruments
+                    .into_iter()
+                    .map(|inst| instrument_any_to_pyobject(py, inst))
+                    .collect();
+
+                PyList::new(py, py_instruments?)
+                    .unwrap()
+                    .into_any()
+                    .into_py_any(py)
             })
         })
     }
@@ -202,7 +208,7 @@ impl Mt5Client {
 
             Python::with_gil(|py| {
                 // Convert to Python dict
-                let dict = pyo3::types::PyDict::new_bound(py);
+                let dict = PyDict::new(py);
                 dict.set_item("login", account.login)?;
                 dict.set_item("name", account.name.as_str())?;
                 dict.set_item("broker", account.broker.as_str())?;
@@ -216,7 +222,7 @@ impl Mt5Client {
                 dict.set_item("margin_free", account.margin_free)?;
                 dict.set_item("margin_level", account.margin_level)?;
                 dict.set_item("profit", account.profit)?;
-                Ok(dict.into_py(py))
+                dict.into_py_any(py)
             })
         })
     }
@@ -228,22 +234,28 @@ impl Mt5Client {
             let orders = client.request_orders().await.map_err(to_pyruntime_err)?;
 
             Python::with_gil(|py| {
-                let py_list = pyo3::types::PyList::empty_bound(py);
-                for order in orders {
-                    let dict = pyo3::types::PyDict::new_bound(py);
-                    dict.set_item("ticket", order.ticket)?;
-                    dict.set_item("symbol", order.symbol.as_str())?;
-                    dict.set_item("type_order", order.type_order)?;
-                    dict.set_item("state", order.state)?;
-                    dict.set_item("volume", order.volume)?;
-                    dict.set_item("price_open", order.price_open)?;
-                    dict.set_item("sl", order.sl)?;
-                    dict.set_item("tp", order.tp)?;
-                    dict.set_item("time_setup", order.time_setup)?;
-                    dict.set_item("comment", order.comment.as_str())?;
-                    py_list.append(dict)?;
-                }
-                Ok(py_list.into_py(py))
+                let py_orders: PyResult<Vec<Py<PyAny>>> = orders
+                    .into_iter()
+                    .map(|order| {
+                        let dict = PyDict::new(py);
+                        dict.set_item("ticket", order.ticket)?;
+                        dict.set_item("symbol", order.symbol.as_str())?;
+                        dict.set_item("type_order", order.type_order)?;
+                        dict.set_item("state", order.state)?;
+                        dict.set_item("volume", order.volume)?;
+                        dict.set_item("price_open", order.price_open)?;
+                        dict.set_item("sl", order.sl)?;
+                        dict.set_item("tp", order.tp)?;
+                        dict.set_item("time_setup", order.time_setup)?;
+                        dict.set_item("comment", order.comment.as_str())?;
+                        dict.into_py_any(py)
+                    })
+                    .collect();
+
+                PyList::new(py, py_orders?)
+                    .unwrap()
+                    .into_any()
+                    .into_py_any(py)
             })
         })
     }
@@ -258,21 +270,27 @@ impl Mt5Client {
                 .map_err(to_pyruntime_err)?;
 
             Python::with_gil(|py| {
-                let py_list = pyo3::types::PyList::empty_bound(py);
-                for pos in positions {
-                    let dict = pyo3::types::PyDict::new_bound(py);
-                    dict.set_item("ticket", pos.ticket)?;
-                    dict.set_item("symbol", pos.symbol.as_str())?;
-                    dict.set_item("type_position", pos.type_position)?;
-                    dict.set_item("volume", pos.volume)?;
-                    dict.set_item("price_open", pos.price_open)?;
-                    dict.set_item("sl", pos.sl)?;
-                    dict.set_item("tp", pos.tp)?;
-                    dict.set_item("profit", pos.profit)?;
-                    dict.set_item("comment", pos.comment.as_str())?;
-                    py_list.append(dict)?;
-                }
-                Ok(py_list.into_py(py))
+                let py_positions: PyResult<Vec<Py<PyAny>>> = positions
+                    .into_iter()
+                    .map(|pos| {
+                        let dict = PyDict::new(py);
+                        dict.set_item("ticket", pos.ticket)?;
+                        dict.set_item("symbol", pos.symbol.as_str())?;
+                        dict.set_item("type_position", pos.type_position)?;
+                        dict.set_item("volume", pos.volume)?;
+                        dict.set_item("price_open", pos.price_open)?;
+                        dict.set_item("sl", pos.sl)?;
+                        dict.set_item("tp", pos.tp)?;
+                        dict.set_item("profit", pos.profit)?;
+                        dict.set_item("comment", pos.comment.as_str())?;
+                        dict.into_py_any(py)
+                    })
+                    .collect();
+
+                PyList::new(py, py_positions?)
+                    .unwrap()
+                    .into_any()
+                    .into_py_any(py)
             })
         })
     }
@@ -326,7 +344,7 @@ impl Mt5Client {
             let response = client.submit_order(request).await.map_err(to_pyruntime_err)?;
 
             Python::with_gil(|py| {
-                let dict = pyo3::types::PyDict::new_bound(py);
+                let dict = PyDict::new(py);
                 dict.set_item("error", response.error)?;
                 dict.set_item("retcode", response.retcode)?;
                 dict.set_item("description", response.description.as_str())?;
@@ -336,7 +354,7 @@ impl Mt5Client {
                 dict.set_item("bid", response.bid)?;
                 dict.set_item("ask", response.ask)?;
                 dict.set_item("function", response.function.as_str())?;
-                Ok(dict.into_py(py))
+                dict.into_py_any(py)
             })
         })
     }
@@ -352,12 +370,12 @@ impl Mt5Client {
             let response = client.cancel_order(ticket).await.map_err(to_pyruntime_err)?;
 
             Python::with_gil(|py| {
-                let dict = pyo3::types::PyDict::new_bound(py);
+                let dict = PyDict::new(py);
                 dict.set_item("error", response.error)?;
                 dict.set_item("retcode", response.retcode)?;
                 dict.set_item("description", response.description.as_str())?;
                 dict.set_item("order", response.order)?;
-                Ok(dict.into_py(py))
+                dict.into_py_any(py)
             })
         })
     }
