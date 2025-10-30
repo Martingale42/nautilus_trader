@@ -1,0 +1,453 @@
+# -------------------------------------------------------------------------------------------------
+#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+#  https://nautechsystems.io
+#
+#  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+#  You may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+# -------------------------------------------------------------------------------------------------
+
+import asyncio
+from typing import Any
+
+from nautilus_trader.adapters.mt5.config import MT5DataClientConfig
+from nautilus_trader.adapters.mt5.constants import MT5
+from nautilus_trader.adapters.mt5.providers import MT5InstrumentProvider
+from nautilus_trader.cache.cache import Cache
+from nautilus_trader.common.component import LiveClock
+from nautilus_trader.common.component import MessageBus
+from nautilus_trader.common.enums import LogColor
+from nautilus_trader.core import nautilus_pyo3
+from nautilus_trader.data.messages import RequestBars
+from nautilus_trader.data.messages import RequestInstrument
+from nautilus_trader.data.messages import RequestInstruments
+from nautilus_trader.data.messages import RequestQuoteTicks
+from nautilus_trader.data.messages import RequestTradeTicks
+from nautilus_trader.data.messages import SubscribeBars
+from nautilus_trader.data.messages import SubscribeInstrument
+from nautilus_trader.data.messages import SubscribeInstruments
+from nautilus_trader.data.messages import SubscribeQuoteTicks
+from nautilus_trader.data.messages import SubscribeTradeTicks
+from nautilus_trader.data.messages import UnsubscribeBars
+from nautilus_trader.data.messages import UnsubscribeInstrument
+from nautilus_trader.data.messages import UnsubscribeInstruments
+from nautilus_trader.data.messages import UnsubscribeQuoteTicks
+from nautilus_trader.data.messages import UnsubscribeTradeTicks
+from nautilus_trader.live.cancellation import DEFAULT_FUTURE_CANCELLATION_TIMEOUT
+from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
+from nautilus_trader.live.data_client import LiveMarketDataClient
+from nautilus_trader.model.data import capsule_to_data
+from nautilus_trader.model.enums import PriceType
+from nautilus_trader.model.identifiers import ClientId
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.instruments import CurrencyPair
+from nautilus_trader.model.instruments import Instrument
+
+
+class MT5DataClient(LiveMarketDataClient):
+    """
+    Provides a data client for the MetaTrader 5 trading platform.
+
+    Parameters
+    ----------
+    loop : asyncio.AbstractEventLoop
+        The event loop for the client.
+    client : nautilus_pyo3.Mt5Client
+        The MT5 ZeroMQ client.
+    msgbus : MessageBus
+        The message bus for the client.
+    cache : Cache
+        The cache for the client.
+    clock : LiveClock
+        The clock for the client.
+    instrument_provider : MT5InstrumentProvider
+        The instrument provider.
+    config : MT5DataClientConfig
+        The configuration for the client.
+    name : str, optional
+        The custom client ID.
+
+    """
+
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        client: nautilus_pyo3.Mt5Client,
+        msgbus: MessageBus,
+        cache: Cache,
+        clock: LiveClock,
+        instrument_provider: MT5InstrumentProvider,
+        config: MT5DataClientConfig,
+        name: str | None,
+    ) -> None:
+        super().__init__(
+            loop=loop,
+            client_id=ClientId(name or MT5),
+            venue=None,  # Multi-venue (MT5 can connect to multiple brokers)
+            msgbus=msgbus,
+            cache=cache,
+            clock=clock,
+            instrument_provider=instrument_provider,
+        )
+        self._instrument_provider: MT5InstrumentProvider = instrument_provider
+
+        # Configuration
+        self._config = config
+        self._log.info(f"Host: {config.host}:{config.live_port}", LogColor.BLUE)
+
+        # ZeroMQ client
+        self._client = client
+        self._client_futures: set[asyncio.Future] = set()
+
+        # Subscription tracking
+        self._subscribed_quotes: set[InstrumentId] = set()
+        self._subscribed_trades: set[InstrumentId] = set()
+
+    @property
+    def mt5_instrument_provider(self) -> MT5InstrumentProvider:
+        return self._instrument_provider
+
+    async def _connect(self) -> None:
+        """
+        Connect to MT5 and initialize instruments.
+
+        """
+        # Initialize instrument provider (loads from MT5)
+        await self._instrument_provider.initialize()
+        self._cache_instruments()
+        self._send_all_instruments_to_data_engine()
+
+        # Connect ZeroMQ client with callback for incoming messages
+        await self._client.connect(
+            instruments=self.mt5_instrument_provider.instruments_pyo3(),
+            callback=self._handle_msg,
+        )
+
+        # Wait for connection
+        await self._client.wait_until_active(timeout_secs=10.0)
+        self._log.info(f"Connected to MT5-ZeroMQ at {self._config.host}", LogColor.GREEN)
+
+    async def _disconnect(self) -> None:
+        """
+        Disconnect from MT5.
+
+        """
+        # Allow time for pending messages
+        await asyncio.sleep(1.0)
+
+        # Close ZeroMQ connection
+        if self._client.is_active():
+            self._log.info("Disconnecting from MT5")
+            self._client.disconnect()
+            self._log.info(f"Disconnected from MT5-ZeroMQ at {self._config.host}", LogColor.BLUE)
+
+        # Cancel pending futures
+        await cancel_tasks_with_timeout(
+            self._client_futures,
+            self._log,
+            timeout_secs=DEFAULT_FUTURE_CANCELLATION_TIMEOUT,
+        )
+        self._client_futures.clear()
+
+    def _cache_instruments(self) -> None:
+        """
+        Cache instruments for the HTTP client and internal use.
+
+        """
+        instruments_pyo3 = self.mt5_instrument_provider.instruments_pyo3()
+        for inst in instruments_pyo3:
+            self._client.add_instrument(inst)
+
+        self._log.debug(f"Cached {len(instruments_pyo3)} instruments", LogColor.MAGENTA)
+
+    def _cache_instrument(self, instrument: Instrument) -> None:
+        """
+        Cache a single instrument.
+
+        Parameters
+        ----------
+        instrument : Instrument
+            The instrument to cache.
+
+        """
+        self._instrument_provider.add(instrument)
+        self._client.add_instrument(instrument)
+        self._log.debug(f"Cached instrument {instrument.id}", LogColor.MAGENTA)
+
+    def _send_all_instruments_to_data_engine(self) -> None:
+        """
+        Send all cached instruments to the data engine.
+
+        """
+        for currency in self._instrument_provider.currencies().values():
+            self._cache.add_currency(currency)
+
+        for instrument in self._instrument_provider.get_all().values():
+            self._handle_data(instrument)
+
+    async def _subscribe_instruments(self, command: SubscribeInstruments) -> None:
+        """
+        Subscribe to all instruments (no-op for MT5).
+
+        """
+        pass  # MT5 doesn't support instrument updates subscription
+
+    async def _subscribe_instrument(self, command: SubscribeInstrument) -> None:
+        """
+        Subscribe to a single instrument (no-op for MT5).
+
+        """
+        pass  # MT5 doesn't support instrument updates subscription
+
+    async def _subscribe_quote_ticks(self, command: SubscribeQuoteTicks) -> None:
+        """
+        Subscribe to quote ticks for an instrument.
+
+        Parameters
+        ----------
+        command : SubscribeQuoteTicks
+            The subscription command.
+
+        """
+        instrument_id = command.instrument_id
+        symbol = instrument_id.symbol.value
+
+        if instrument_id in self._subscribed_quotes:
+            self._log.warning(f"Already subscribed to {instrument_id} quotes")
+            return
+
+        self._subscribed_quotes.add(instrument_id)
+
+        # Subscribe via MT5 ZeroMQ client (sends CONFIG message)
+        self._client.subscribe([symbol])
+        self._log.info(f"Subscribed to {instrument_id} quote ticks", LogColor.BLUE)
+
+    async def _subscribe_trade_ticks(self, command: SubscribeTradeTicks) -> None:
+        """
+        Subscribe to trade ticks for an instrument.
+
+        MT5 doesn't distinguish between quotes and trades in the same way as exchanges.
+        Subscribing to trades will use the same tick stream as quotes.
+
+        Parameters
+        ----------
+        command : SubscribeTradeTicks
+            The subscription command.
+
+        """
+        instrument_id = command.instrument_id
+        symbol = instrument_id.symbol.value
+
+        if instrument_id in self._subscribed_trades:
+            self._log.warning(f"Already subscribed to {instrument_id} trades")
+            return
+
+        self._subscribed_trades.add(instrument_id)
+
+        # Subscribe via MT5 ZeroMQ client
+        self._client.subscribe([symbol])
+        self._log.info(f"Subscribed to {instrument_id} trade ticks", LogColor.BLUE)
+
+    async def _subscribe_bars(self, command: SubscribeBars) -> None:
+        """
+        Subscribe to bar data (not yet implemented for MT5).
+
+        Parameters
+        ----------
+        command : SubscribeBars
+            The subscription command.
+
+        """
+        self._log.error(
+            f"Cannot subscribe to bars for {command.bar_type}: not yet implemented for MT5",
+        )
+
+    async def _unsubscribe_instruments(self, command: UnsubscribeInstruments) -> None:
+        """
+        Unsubscribe from all instruments (no-op for MT5).
+
+        """
+        pass
+
+    async def _unsubscribe_instrument(self, command: UnsubscribeInstrument) -> None:
+        """
+        Unsubscribe from a single instrument (no-op for MT5).
+
+        """
+        pass
+
+    async def _unsubscribe_quote_ticks(self, command: UnsubscribeQuoteTicks) -> None:
+        """
+        Unsubscribe from quote ticks for an instrument.
+
+        Parameters
+        ----------
+        command : UnsubscribeQuoteTicks
+            The unsubscription command.
+
+        """
+        instrument_id = command.instrument_id
+
+        if instrument_id not in self._subscribed_quotes:
+            self._log.warning(f"Not subscribed to {instrument_id} quotes")
+            return
+
+        self._subscribed_quotes.discard(instrument_id)
+        # Note: MT5 ZeroMQ doesn't have explicit unsubscribe, just stop processing
+        self._log.info(f"Unsubscribed from {instrument_id} quote ticks", LogColor.BLUE)
+
+    async def _unsubscribe_trade_ticks(self, command: UnsubscribeTradeTicks) -> None:
+        """
+        Unsubscribe from trade ticks for an instrument.
+
+        Parameters
+        ----------
+        command : UnsubscribeTradeTicks
+            The unsubscription command.
+
+        """
+        instrument_id = command.instrument_id
+
+        if instrument_id not in self._subscribed_trades:
+            self._log.warning(f"Not subscribed to {instrument_id} trades")
+            return
+
+        self._subscribed_trades.discard(instrument_id)
+        self._log.info(f"Unsubscribed from {instrument_id} trade ticks", LogColor.BLUE)
+
+    async def _unsubscribe_bars(self, command: UnsubscribeBars) -> None:
+        """
+        Unsubscribe from bar data (no-op for MT5).
+
+        """
+        pass
+
+    async def _request_instrument(self, request: RequestInstrument) -> None:
+        """
+        Request a single instrument.
+
+        Parameters
+        ----------
+        request : RequestInstrument
+            The request message.
+
+        """
+        instrument = self._instrument_provider.find(request.instrument_id)
+
+        if instrument is None:
+            self._log.error(
+                f"Cannot find instrument for {request.instrument_id}",
+            )
+            return
+
+        self._handle_instrument(instrument, request.id)
+
+    async def _request_instruments(self, request: RequestInstruments) -> None:
+        """
+        Request all instruments.
+
+        Parameters
+        ----------
+        request : RequestInstruments
+            The request message.
+
+        """
+        instruments = self._instrument_provider.get_all()
+
+        self._handle_instruments(
+            request.venue,
+            instruments,
+            request.id,
+            request.start,
+            request.end,
+            request.params,
+        )
+
+    async def _request_quote_ticks(self, request: RequestQuoteTicks) -> None:
+        """
+        Request historical quote ticks (not supported by MT5).
+
+        """
+        self._log.error(
+            f"Cannot request historical quotes for {request.instrument_id}: "
+            "not supported by MT5 adapter (use bars instead)",
+        )
+
+    async def _request_trade_ticks(self, request: RequestTradeTicks) -> None:
+        """
+        Request historical trade ticks (not supported by MT5).
+
+        """
+        self._log.error(
+            f"Cannot request historical trades for {request.instrument_id}: "
+            "not supported by MT5 adapter (use bars instead)",
+        )
+
+    async def _request_bars(self, request: RequestBars) -> None:
+        """
+        Request historical bar data from MT5.
+
+        Parameters
+        ----------
+        request : RequestBars
+            The request message.
+
+        """
+        if request.bar_type.is_internally_aggregated():
+            self._log.error(
+                f"Cannot request {request.bar_type} bars: "
+                "only external aggregation supported by MT5",
+            )
+            return
+
+        if request.bar_type.spec.price_type != PriceType.LAST:
+            self._log.error(
+                f"Cannot request {request.bar_type} bars: "
+                "only LAST price type supported by MT5",
+            )
+            return
+
+        instrument = self._cache.instrument(request.bar_type.instrument_id)
+        if instrument is None:
+            self._log.error(
+                f"Cannot request bars: no instrument for {request.bar_type.instrument_id}",
+            )
+            return
+
+        self._log.error(
+            f"Cannot request historical bars for {request.bar_type}: "
+            "not yet implemented in this version",
+        )
+
+    def _handle_msg(self, msg: Any) -> None:
+        """
+        Handle incoming messages from MT5 ZeroMQ client.
+
+        Parameters
+        ----------
+        msg : Any
+            The message from the Rust client (PyCapsule or pyo3 type).
+
+        """
+        try:
+            # Handle PyCapsule data (QuoteTick, TradeTick, etc.)
+            if nautilus_pyo3.is_pycapsule(msg):
+                data = capsule_to_data(msg)
+            # Handle pyo3 instrument updates
+            elif isinstance(msg, nautilus_pyo3.CurrencyPair):
+                self._cache_instrument(msg)
+                data = CurrencyPair.from_pyo3(msg)
+            else:
+                self._log.error(f"Cannot handle message type {type(msg)}, not implemented")
+                return
+
+            # Route to data engine
+            self._handle_data(data)
+        except Exception as e:
+            self._log.exception("Error handling MT5 message", e)

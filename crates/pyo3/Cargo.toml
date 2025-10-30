@@ -47,6 +47,7 @@ extension-module = [
   "nautilus-infrastructure/extension-module",
   "nautilus-live/extension-module",
   "nautilus-model/extension-module",
+  "nautilus-mt5/extension-module",
   "nautilus-okx/extension-module",
   "nautilus-polymarket/extension-module",
   "nautilus-sandbox/extension-module",
@@ -118,6 +119,7 @@ nautilus-deribit = { workspace = true, features = ["python"] }
 nautilus-dydx = { workspace = true, features = ["python"] }
 nautilus-hyperliquid = { workspace = true, features = ["python"] }
 nautilus-kraken = { workspace = true, features = ["python"] }
+nautilus-mt5 = { workspace = true, features = ["python"] }
 nautilus-okx = { workspace = true, features = ["python"] }
 nautilus-polymarket = { workspace = true, features = ["python"] }
 nautilus-sandbox = { workspace = true, features = ["python"] }
