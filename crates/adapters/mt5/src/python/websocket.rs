@@ -182,7 +182,7 @@ impl Mt5Client {
                 .await
                 .map_err(to_pyruntime_err)?;
 
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 // Convert instruments to PyObjects
                 let py_instruments: PyResult<Vec<Py<PyAny>>> = instruments
                     .into_iter()
@@ -206,7 +206,7 @@ impl Mt5Client {
                 .await
                 .map_err(to_pyruntime_err)?;
 
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 // Convert to Python dict
                 let dict = PyDict::new(py);
                 dict.set_item("login", account.login)?;
@@ -233,7 +233,7 @@ impl Mt5Client {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let orders = client.request_orders().await.map_err(to_pyruntime_err)?;
 
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let py_orders: PyResult<Vec<Py<PyAny>>> = orders
                     .into_iter()
                     .map(|order| {
@@ -269,7 +269,7 @@ impl Mt5Client {
                 .await
                 .map_err(to_pyruntime_err)?;
 
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let py_positions: PyResult<Vec<Py<PyAny>>> = positions
                     .into_iter()
                     .map(|pos| {
@@ -343,7 +343,7 @@ impl Mt5Client {
 
             let response = client.submit_order(request).await.map_err(to_pyruntime_err)?;
 
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("error", response.error)?;
                 dict.set_item("retcode", response.retcode)?;
@@ -369,7 +369,7 @@ impl Mt5Client {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let response = client.cancel_order(ticket).await.map_err(to_pyruntime_err)?;
 
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("error", response.error)?;
                 dict.set_item("retcode", response.retcode)?;

@@ -17,6 +17,7 @@
    databento.md
    dydx.md
    interactive_brokers.md
+   mt5.md
    okx.md
    polymarket.md
    tardis.md
