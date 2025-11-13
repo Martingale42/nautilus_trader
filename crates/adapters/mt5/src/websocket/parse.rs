@@ -260,19 +260,22 @@ mod tests {
     };
 
     fn create_test_instrument() -> InstrumentAny {
-        let instrument_id = InstrumentId::new(Symbol::new("EURUSD"), Venue::new("MT5"));
+        let raw_symbol = Symbol::new("EURUSD");
+        let instrument_id = InstrumentId::new(raw_symbol, Venue::new("MT5"));
         let base_currency = Currency::USD();
         let quote_currency = Currency::USD();
 
         InstrumentAny::CurrencyPair(
             CurrencyPair::new(
                 instrument_id,
+                raw_symbol,     // raw_symbol
                 base_currency,
                 quote_currency,
                 5,              // price_precision
                 2,              // size_precision
                 Price::new(0.00001, 5), // price_increment
                 Quantity::new(0.01, 2), // size_increment
+                None, // multiplier
                 None, // lot_size
                 None, // max_quantity
                 None, // min_quantity
@@ -284,8 +287,8 @@ mod tests {
                 None, // margin_maint
                 None, // maker_fee
                 None, // taker_fee
-                0,    // ts_event
-                0,    // ts_init
+                UnixNanos::default(),  // ts_event
+                UnixNanos::default(),  // ts_init
             )
         )
     }
@@ -303,7 +306,7 @@ mod tests {
         };
 
         let instrument = create_test_instrument();
-        let trade = parse_mt5_tick_to_trade(&msg, &instrument, 0).unwrap();
+        let trade = parse_mt5_tick_to_trade(&msg, &instrument, UnixNanos::default()).unwrap();
 
         assert_eq!(trade.price.as_f64(), 1.08505);
         assert_eq!(trade.size.as_f64(), 100.0);
@@ -323,7 +326,7 @@ mod tests {
         };
 
         let instrument = create_test_instrument();
-        let quote = parse_mt5_tick_to_quote(&msg, &instrument, 0).unwrap();
+        let quote = parse_mt5_tick_to_quote(&msg, &instrument, UnixNanos::default()).unwrap();
 
         assert_eq!(quote.bid_price.as_f64(), 1.08500);
         assert_eq!(quote.ask_price.as_f64(), 1.08510);
