@@ -207,6 +207,138 @@ pub struct Mt5ErrorMsg {
     pub function: Ustr,
 }
 
+/// MT5 symbol information response
+///
+/// Response to SYMBOL_INFO action
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5SymbolInfoResponse {
+    /// Whether the response contains an error
+    pub error: bool,
+    /// List of symbol specifications
+    pub symbols: Vec<Mt5SymbolInfo>,
+}
+
+/// MT5 symbol information
+///
+/// Complete symbol specifications from MT5's SymbolInfo* functions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5SymbolInfo {
+    /// Symbol name (e.g., "EURAUD")
+    pub symbol: Ustr,
+    /// Symbol description
+    pub description: Ustr,
+    /// Base currency
+    pub base_currency: Ustr,
+    /// Quote/profit currency
+    pub quote_currency: Ustr,
+    /// Profit currency (same as quote)
+    pub profit_currency: Ustr,
+    /// Margin currency
+    pub margin_currency: Ustr,
+
+    // Precision
+    /// Price decimal digits
+    pub digits: String,
+    /// Minimum price change
+    pub point: String,
+    /// Current spread in points
+    pub spread: String,
+    /// Minimum distance of SL/TP from price
+    pub stops_level: String,
+
+    // Contract specifications
+    /// Standard lot size
+    pub contract_size: String,
+    /// Tick value in account currency
+    pub tick_value: String,
+    /// Minimum price change
+    pub tick_size: String,
+
+    // Volume limits
+    /// Minimum lot size
+    pub volume_min: String,
+    /// Maximum lot size
+    pub volume_max: String,
+    /// Lot size increment
+    pub volume_step: String,
+    /// Maximum aggregate volume
+    pub volume_limit: String,
+
+    // Swap
+    /// Long position swap
+    pub swap_long: String,
+    /// Short position swap
+    pub swap_short: String,
+    /// Swap calculation mode
+    pub swap_mode: String,
+
+    // Trade modes
+    /// Trade allowed mode
+    pub trade_mode: String,
+    /// Order execution mode
+    pub trade_execution: String,
+    /// Margin calculation mode
+    pub trade_calc_mode: String,
+
+    // Order/execution modes
+    /// Order expiration modes
+    pub expiration_mode: String,
+    /// Order filling modes
+    pub filling_mode: String,
+    /// Allowed order types
+    pub order_mode: String,
+
+    // Margin
+    /// Initial margin
+    pub margin_initial: String,
+    /// Maintenance margin
+    pub margin_maintenance: String,
+    /// Hedged margin
+    pub margin_hedged: String,
+
+    // Status
+    /// Whether symbol is selected in MarketWatch
+    pub select: String,
+    /// Whether symbol is visible
+    pub visible: String,
+
+    // Session statistics
+    /// Number of deals in current session
+    pub session_deals: String,
+    /// Number of buy orders
+    pub session_buy_orders: String,
+    /// Number of sell orders
+    pub session_sell_orders: String,
+
+    // Current prices
+    /// Last quote time
+    pub time: String,
+    /// Current bid price
+    pub bid: String,
+    /// Session low bid
+    pub bidlow: String,
+    /// Session high bid
+    pub bidhigh: String,
+    /// Current ask price
+    pub ask: String,
+    /// Session low ask
+    pub asklow: String,
+    /// Session high ask
+    pub askhigh: String,
+    /// Last deal price
+    pub last: String,
+
+    // Trade-specific values
+    /// Tick value for profit calculation
+    pub trade_tick_value_profit: String,
+    /// Tick value for loss calculation
+    pub trade_tick_value_loss: String,
+
+    // Freeze/stops levels
+    /// Freeze level for orders
+    pub trade_freeze_level: String,
+}
+
 /// MT5 action request (for sending to MT5)
 ///
 /// This is what we send to MT5-ZeroMQ via sysSocket

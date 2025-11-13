@@ -30,12 +30,14 @@ class MT5DataClientConfig(LiveDataClientConfig, frozen=True):
         The venue for the client.
     host : str, default "localhost"
         The ZeroMQ host address for MT5-ZeroMQ connection.
+    data_port : PositiveInt, default 2202
+        The data port (command responses).
     live_port : PositiveInt, default 2203
         The live data port (tick data streaming).
     stream_port : PositiveInt, default 2204
         The stream port (orders/positions updates).
     sys_port : PositiveInt, default 2201
-        The system port (command/response).
+        The system port (command requests).
     account_id : str
         The MT5 account identifier.
         If ``None`` then will source the `MT5_ACCOUNT_ID` environment variable.
@@ -47,6 +49,7 @@ class MT5DataClientConfig(LiveDataClientConfig, frozen=True):
 
     venue: Venue = MT5_VENUE
     host: str = "localhost"
+    data_port: PositiveInt = 2202
     live_port: PositiveInt = 2203
     stream_port: PositiveInt = 2204
     sys_port: PositiveInt = 2201
@@ -64,10 +67,12 @@ class MT5ExecClientConfig(LiveExecClientConfig, frozen=True):
         The venue for the client.
     host : str, default "localhost"
         The ZeroMQ host address for MT5-ZeroMQ connection.
+    data_port : PositiveInt, default 2202
+        The data port (command responses).
     stream_port : PositiveInt, default 2204
         The stream port (orders/positions updates).
     sys_port : PositiveInt, default 2201
-        The system port (command/response).
+        The system port (command requests).
     account_id : str
         The MT5 account identifier.
         If ``None`` then will source the `MT5_ACCOUNT_ID` environment variable.
@@ -81,6 +86,7 @@ class MT5ExecClientConfig(LiveExecClientConfig, frozen=True):
 
     venue: Venue = MT5_VENUE
     host: str = "localhost"
+    data_port: PositiveInt = 2202
     stream_port: PositiveInt = 2204
     sys_port: PositiveInt = 2201
     account_id: str | None = None

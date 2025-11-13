@@ -33,6 +33,7 @@ from nautilus_trader.live.factories import LiveExecClientFactory
 @lru_cache(1)
 def get_mt5_client(
     host: str = "localhost",
+    data_port: int = 2202,
     live_port: int = 2203,
     stream_port: int = 2204,
     sys_port: int = 2201,
@@ -48,12 +49,14 @@ def get_mt5_client(
     ----------
     host : str, default "localhost"
         The ZeroMQ host address.
+    data_port : int, default 2202
+        The data port (command responses).
     live_port : int, default 2203
         The live data port (tick streaming).
     stream_port : int, default 2204
         The stream port (orders/positions).
     sys_port : int, default 2201
-        The system port (commands).
+        The system port (command requests).
     account_id : str, optional
         The MT5 account identifier.
 
@@ -65,6 +68,7 @@ def get_mt5_client(
     """
     return nautilus_pyo3.Mt5Client(
         host=host,
+        data_port=data_port,
         live_port=live_port,
         stream_port=stream_port,
         sys_port=sys_port,
@@ -141,6 +145,7 @@ class MT5LiveDataClientFactory(LiveDataClientFactory):
         """
         client: nautilus_pyo3.Mt5Client = get_mt5_client(
             host=config.host,
+            data_port=config.data_port,
             live_port=config.live_port,
             stream_port=config.stream_port,
             sys_port=config.sys_port,
@@ -203,6 +208,7 @@ class MT5LiveExecClientFactory(LiveExecClientFactory):
         """
         client: nautilus_pyo3.Mt5Client = get_mt5_client(
             host=config.host,
+            data_port=config.data_port,
             live_port=2203,  # Not needed for execution, but required param
             stream_port=config.stream_port,
             sys_port=config.sys_port,

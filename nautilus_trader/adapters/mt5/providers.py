@@ -15,12 +15,19 @@
 
 from typing import Any
 
+from nautilus_trader.adapters.mt5.constants import MT5_VENUE
 from nautilus_trader.common.providers import InstrumentProvider
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.correctness import PyCondition
 from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.identifiers import Symbol
+from nautilus_trader.model.instruments import CurrencyPair
 from nautilus_trader.model.instruments import instruments_from_pyo3
+from nautilus_trader.model.objects import Currency
+from nautilus_trader.model.objects import Money
+from nautilus_trader.model.objects import Price
+from nautilus_trader.model.objects import Quantity
 
 
 class MT5InstrumentProvider(InstrumentProvider):

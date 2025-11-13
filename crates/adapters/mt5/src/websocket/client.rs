@@ -67,6 +67,7 @@ pub enum NautilusMessage {
 #[derive(Debug, Clone)]
 pub struct Mt5ClientConfig {
     pub host: String,
+    pub data_port: u16,
     pub live_port: u16,
     pub stream_port: u16,
     pub sys_port: u16,
@@ -76,6 +77,7 @@ impl Default for Mt5ClientConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
+            data_port: 2202,
             live_port: 2203,
             stream_port: 2204,
             sys_port: 2201,
@@ -208,21 +210,43 @@ impl Mt5Client {
         // Create ZMQ context and sockets (they live in this thread only!)
         let context = zmq::Context::new();
 
+        // Data socket (PULL) - receives command responses from data_port (2202)
+        let data_socket = context.socket(zmq::PULL)?;
+        data_socket.connect(&format!("tcp://{}:{}", config.host, config.data_port))?;
+
+        // Live socket (PULL) - receives tick/bar streaming data from live_port (2203)
         let live_socket = context.socket(zmq::PULL)?;
         live_socket.connect(&format!("tcp://{}:{}", config.host, config.live_port))?;
 
+        // Stream socket (PULL) - receives trade confirmations from stream_port (2204)
         let stream_socket = context.socket(zmq::PULL)?;
         stream_socket.connect(&format!("tcp://{}:{}", config.host, config.stream_port))?;
 
         tracing::info!(
-            "ZMQ thread connected to MT5-ZeroMQ at {}:{},{}",
+            "ZMQ thread connected to MT5-ZeroMQ at {}:{},{},{}",
             config.host,
+            config.data_port,
             config.live_port,
             config.stream_port
         );
 
         // Main polling loop
         while is_running.load(Ordering::Relaxed) {
+            // Poll data socket (non-blocking)
+            // This receives responses to commands sent via sys_port
+            if let Ok(msg_bytes) = data_socket.recv_bytes(zmq::DONTWAIT) {
+                match Self::handle_data_message(&msg_bytes, &instruments, account_id) {
+                    Ok(Some(nautilus_msg)) => {
+                        if tx.send(nautilus_msg).is_err() {
+                            tracing::warn!("Channel closed, stopping ZMQ thread");
+                            break;
+                        }
+                    }
+                    Err(e) => tracing::error!("Error handling data message: {}", e),
+                    _ => {}
+                }
+            }
+
             // Poll live socket (non-blocking)
             if let Ok(msg_bytes) = live_socket.recv_bytes(zmq::DONTWAIT) {
                 match Self::handle_live_message(&msg_bytes, &instruments, account_id) {
@@ -285,6 +309,19 @@ impl Mt5Client {
         Ok(Some(NautilusMessage::Data(Data::Quote(quote))))
     }
 
+    /// Handle message from dataSocket (command responses)
+    fn handle_data_message(
+        msg_bytes: &[u8],
+        _instruments: &Arc<Mutex<HashMap<String, InstrumentAny>>>,
+        _account_id: Option<AccountId>,
+    ) -> Mt5Result<Option<NautilusMessage>> {
+        let json_str = String::from_utf8_lossy(msg_bytes);
+
+        // For now, just return raw message
+        // TODO: Parse specific responses (ACCOUNT, POSITIONS, ORDERS, etc.)
+        Ok(Some(NautilusMessage::Raw(json_str.to_string())))
+    }
+
     /// Handle message from streamSocket (orders/positions)
     fn handle_stream_message(
         msg_bytes: &[u8],
@@ -337,13 +374,31 @@ impl Mt5Client {
         Ok(response)
     }
 
+    /// Receive response from MT5 dataSocket
+    ///
+    /// This receives a PULL message from data_port (async responses)
+    fn receive_data_response(&self) -> Mt5Result<String> {
+        let context = zmq::Context::new();
+        let socket = context.socket(zmq::PULL)?;
+        socket.connect(&format!("tcp://{}:{}", self.config.host, self.config.data_port))?;
+
+        // Set timeout for receiving
+        socket.set_rcvtimeo(10000)?; // 10 seconds for large responses
+
+        let response = socket.recv_string(0)?.map_err(|e| {
+            Mt5Error::Connection(format!("Invalid UTF-8 in data response: {:?}", e))
+        })?;
+
+        Ok(response)
+    }
+
     /// Request available instruments from MT5
     ///
-    /// Sends INSTRUMENTS action to query symbol list
+    /// Sends SYMBOL_INFO action to query symbol specifications
     pub async fn request_instruments(&self) -> Mt5Result<Vec<InstrumentAny>> {
-        // Build INSTRUMENTS request
+        // Build SYMBOL_INFO request (no symbol specified = get all symbols)
         let request = serde_json::json!({
-            "action": "INSTRUMENTS"
+            "action": "SYMBOL_INFO"
         });
 
         let request_str = serde_json::to_string(&request)?;
@@ -352,35 +407,51 @@ impl Mt5Client {
         let client = self.clone();
 
         // Send via blocking sysSocket
-        let response = tokio::task::spawn_blocking(move || client.send_sys_request(&request_str))
+        let ack_response = tokio::task::spawn_blocking(move || client.send_sys_request(&request_str))
             .await
             .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??;
 
-        // Parse response
-        // Expected format: {"symbols": ["EURUSD", "GBPUSD", ...]}
-        let response_json: serde_json::Value = serde_json::from_str(&response)?;
+        tracing::debug!("SYMBOL_INFO ACK: {}", ack_response);
 
-        let symbols = response_json["symbols"]
-            .as_array()
-            .ok_or_else(|| Mt5Error::Parse("Missing 'symbols' array in response".to_string()))?;
+        // Receive actual response on data_socket
+        let client_clone = self.clone();
+        let response = tokio::task::spawn_blocking(move || client_clone.receive_data_response())
+            .await
+            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??;
 
-        // Convert symbol strings to InstrumentAny (CurrencyPair for now)
-        let instruments = Vec::new();
-        for symbol_val in symbols {
-            let symbol_str = symbol_val
-                .as_str()
-                .ok_or_else(|| Mt5Error::Parse("Invalid symbol in array".to_string()))?;
+        tracing::debug!("SYMBOL_INFO response received: {} bytes", response.len());
 
-            // For now, create basic CurrencyPair instruments
-            // In production, you'd query detailed symbol info from MT5
-            let instrument_id = parse_instrument_id(symbol_str)?;
+        // Parse response as Mt5SymbolInfoResponse
+        let symbol_info_response: Mt5SymbolInfoResponse = serde_json::from_str(&response)
+            .map_err(|e| Mt5Error::Parse(format!("Failed to parse SYMBOL_INFO response: {}", e)))?;
 
-            // Create a basic instrument (this is a placeholder)
-            // TODO: Query full instrument details from MT5
-            tracing::debug!("Found instrument: {}", symbol_str);
-            // For now, we'll skip adding them here and let the provider handle it
-            // This method is primarily for querying available symbols
+        if symbol_info_response.error {
+            return Err(Mt5Error::Parse("SYMBOL_INFO returned error=true".to_string()));
         }
+
+        // Convert each Mt5SymbolInfo to InstrumentAny
+        use nautilus_core::UnixNanos;
+        use nautilus_model::identifiers::Venue;
+
+        let ts_init = UnixNanos::default();
+        let ts_event = UnixNanos::default();
+        let venue = Venue::new("MT5");
+
+        let mut instruments = Vec::new();
+        for symbol_info in symbol_info_response.symbols {
+            match super::parse::parse_mt5_symbol_info_to_instrument(&symbol_info, &venue, ts_event, ts_init) {
+                Ok(instrument) => {
+                    tracing::info!("Loaded instrument: {}", symbol_info.symbol);
+                    instruments.push(instrument);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse instrument {}: {}", symbol_info.symbol, e);
+                    // Continue with other instruments
+                }
+            }
+        }
+
+        tracing::info!("Successfully loaded {} instruments from MT5", instruments.len());
 
         Ok(instruments)
     }

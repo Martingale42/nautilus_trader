@@ -57,6 +57,7 @@ config_node = TradingNodeConfig(
     data_clients={
         MT5: MT5DataClientConfig(
             host="localhost",  # ZeroMQ host (use Docker container IP if remote)
+            data_port=2202,  # Command responses port
             live_port=2203,  # Tick data streaming port
             stream_port=2204,  # Order/position updates port
             sys_port=2201,  # Commands/queries port

@@ -5,12 +5,13 @@ use crate::common::{parse_timestamp_ms, Mt5TickFlags};
 use nautilus_model::{
     data::{QuoteTick, TradeTick},
     enums::{AggressorSide, OrderSide, OrderStatus, OrderType, TimeInForce},
-    identifiers::{AccountId, ClientOrderId, TradeId, VenueOrderId},
-    instruments::{Instrument, InstrumentAny},
+    identifiers::{AccountId, ClientOrderId, InstrumentId, Symbol, TradeId, Venue, VenueOrderId},
+    instruments::{CurrencyPair, Instrument, InstrumentAny},
     reports::OrderStatusReport,
-    types::{Price, Quantity},
+    types::{Currency, Price, Quantity},
 };
 use nautilus_core::{uuid::UUID4, UnixNanos};
+use std::str::FromStr;
 
 /// Parse MT5 tick message to Nautilus TradeTick
 ///
@@ -183,6 +184,70 @@ pub fn parse_mt5_order_status(
     }
 
     Ok(report)
+}
+
+/// Parse MT5 symbol info to Nautilus InstrumentAny
+///
+/// Converts MT5 SymbolInfo response into a proper Nautilus instrument
+pub fn parse_mt5_symbol_info_to_instrument(
+    symbol_info: &Mt5SymbolInfo,
+    venue: &Venue,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+) -> anyhow::Result<InstrumentAny> {
+    // Parse numeric fields from strings
+    let digits = symbol_info.digits.parse::<u8>()?;
+    let tick_size = symbol_info.tick_size.parse::<f64>()?;
+    let volume_step = symbol_info.volume_step.parse::<f64>()?;
+
+    // Create instrument ID and symbol
+    let raw_symbol = Symbol::new(&symbol_info.symbol);
+    let instrument_id = InstrumentId::new(raw_symbol, *venue);
+
+    // Parse currencies
+    let base_currency = Currency::from_str(&symbol_info.base_currency)?;
+    let quote_currency = Currency::from_str(&symbol_info.quote_currency)?;
+
+    // Calculate size precision from volume_step
+    let size_precision = if volume_step > 0.0 {
+        let decimal_str = format!("{:.10}", volume_step);
+        if let Some(dot_pos) = decimal_str.find('.') {
+            let after_dot = &decimal_str[dot_pos + 1..];
+            after_dot.trim_end_matches('0').len() as u8
+        } else {
+            0
+        }
+    } else {
+        2 // default
+    };
+
+    // Create CurrencyPair instrument
+    let instrument = CurrencyPair::new(
+        instrument_id,
+        raw_symbol,                       // raw_symbol
+        base_currency,
+        quote_currency,
+        digits,                          // price_precision
+        size_precision,
+        Price::new(tick_size, digits),    // price_increment
+        Quantity::new(volume_step, size_precision), // size_increment
+        None, // multiplier
+        None, // lot_size
+        None, // max_quantity
+        None, // min_quantity
+        None, // max_notional
+        None, // min_notional
+        None, // max_price
+        None, // min_price
+        None, // margin_init
+        None, // margin_maint
+        None, // maker_fee
+        None, // taker_fee
+        ts_event,
+        ts_init,
+    );
+
+    Ok(InstrumentAny::CurrencyPair(instrument))
 }
 
 #[cfg(test)]

@@ -37,9 +37,10 @@ use crate::websocket::client::{Mt5Client, Mt5ClientConfig, NautilusMessage};
 #[pymethods]
 impl Mt5Client {
     #[new]
-    #[pyo3(signature = (host=None, live_port=None, stream_port=None, sys_port=None, account_id=None))]
+    #[pyo3(signature = (host=None, data_port=None, live_port=None, stream_port=None, sys_port=None, account_id=None))]
     fn py_new(
         host: Option<String>,
+        data_port: Option<u16>,
         live_port: Option<u16>,
         stream_port: Option<u16>,
         sys_port: Option<u16>,
@@ -48,6 +49,7 @@ impl Mt5Client {
         let config = if let Some(host) = host {
             Mt5ClientConfig {
                 host,
+                data_port: data_port.unwrap_or(2202),
                 live_port: live_port.unwrap_or(2203),
                 stream_port: stream_port.unwrap_or(2204),
                 sys_port: sys_port.unwrap_or(2201),
@@ -66,6 +68,13 @@ impl Mt5Client {
     #[must_use]
     pub fn py_host(&self) -> String {
         self.config.host.clone()
+    }
+
+    #[getter]
+    #[pyo3(name = "data_port")]
+    #[must_use]
+    pub const fn py_data_port(&self) -> u16 {
+        self.config.data_port
     }
 
     #[getter]
