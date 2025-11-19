@@ -19,10 +19,27 @@ pub enum Mt5Message {
     Error(Mt5ErrorMsg),
 }
 
-/// MT5 tick message (from liveSocket)
+/// MT5 live tick message (from liveSocket)
 ///
-/// Sent when market data updates occur
+/// Actual format sent by MT5-ZeroMQ for live tick data
+/// Format: {"status": "CONNECTED", "symbol": "BTCUSD", "timeframe": "TICK", "data": [timestamp_ms, bid, ask]}
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5LiveTickMsg {
+    /// Connection status (e.g., "CONNECTED")
+    pub status: Ustr,
+    /// Symbol name (e.g., "BTCUSD")
+    pub symbol: Ustr,
+    /// Timeframe (always "TICK" for tick data)
+    pub timeframe: Ustr,
+    /// Tick data: [timestamp_ms, bid, ask]
+    pub data: Vec<f64>,
+}
+
+/// Legacy MT5 tick message format (not actually used by MT5-ZeroMQ)
+///
+/// Kept for compatibility with old code/tests
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Mt5TickMsg {
     /// Symbol name (e.g., "EURUSD")
     pub symbol: Ustr,

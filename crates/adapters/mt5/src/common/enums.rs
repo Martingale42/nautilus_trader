@@ -59,6 +59,8 @@ pub enum Mt5PositionType {
 /// MT5 timeframes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mt5TimeFrame {
+    #[serde(rename = "TICK")]
+    Tick,
     #[serde(rename = "M1")]
     M1,
     #[serde(rename = "M5")]
@@ -80,9 +82,10 @@ pub enum Mt5TimeFrame {
 }
 
 impl Mt5TimeFrame {
-    /// Returns the timeframe in minutes
+    /// Returns the timeframe in minutes (0 for tick data)
     pub const fn as_minutes(&self) -> i64 {
         match self {
+            Self::Tick => 0,  // Tick data has no fixed timeframe
             Self::M1 => 1,
             Self::M5 => 5,
             Self::M15 => 15,

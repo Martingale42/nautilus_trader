@@ -143,9 +143,9 @@ class MT5DataClient(LiveMarketDataClient):
 
         # Close ZeroMQ connection
         if self._client.is_active():
-            self._log.info("Disconnecting from MT5")
-            self._client.disconnect()
-            self._log.info(f"Disconnected from MT5-ZeroMQ at {self._config.host}", LogColor.BLUE)
+            self._log.info("Closing MT5 connection")
+            self._client.close()
+            self._log.info(f"Closed MT5-ZeroMQ connection at {self._config.host}", LogColor.BLUE)
 
         # Cancel pending futures
         await cancel_tasks_with_timeout(
@@ -224,8 +224,8 @@ class MT5DataClient(LiveMarketDataClient):
 
         self._subscribed_quotes.add(instrument_id)
 
-        # Subscribe via MT5 ZeroMQ client (sends CONFIG message)
-        self._client.subscribe([symbol])
+        # Subscribe via MT5 ZeroMQ client (sends CONFIG message with TICK timeframe)
+        self._client.subscribe_quotes([str(instrument_id)])
         self._log.info(f"Subscribed to {instrument_id} quote ticks", LogColor.BLUE)
 
     async def _subscribe_trade_ticks(self, command: SubscribeTradeTicks) -> None:

@@ -114,8 +114,22 @@ impl Mt5Client {
         Ok(())
     }
 
+    #[pyo3(name = "subscribe_quotes")]
+    fn py_subscribe_quotes(&self, py: Python, instrument_ids: Vec<Py<PyAny>>) -> PyResult<()> {
+        let ids: PyResult<Vec<nautilus_model::identifiers::InstrumentId>> = instrument_ids
+            .into_iter()
+            .map(|id| {
+                let id_str: String = id.extract(py)?;
+                nautilus_model::identifiers::InstrumentId::from_as_ref(&id_str)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+            })
+            .collect();
+        self.subscribe_quotes(ids?).map_err(to_pyruntime_err)
+    }
+
     #[pyo3(name = "subscribe")]
     fn py_subscribe(&self, symbols: Vec<String>) -> PyResult<()> {
+        #[allow(deprecated)]
         self.subscribe(symbols).map_err(to_pyruntime_err)
     }
 
@@ -133,17 +147,31 @@ impl Mt5Client {
             self.instruments.lock().unwrap().insert(symbol, inst_any);
         }
 
+        // Clone client to keep it alive during async operation
+        // This prevents Drop from being called and disconnecting the ZMQ thread
         let client = self.clone();
 
+        // Start streaming BEFORE creating the async future
+        // This ensures is_running is set to true immediately (fixes race condition)
+        let stream = client.stream();
+
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            // Start streaming
-            let stream = client.stream();
+            tracing::info!("py_connect: async block executing");
 
             // Spawn background task to process messages
-            tokio::spawn(async move {
+            let task_handle = tokio::spawn(async move {
+                // CRITICAL: Capture client first to keep it alive for the entire task
+                // This prevents Drop from being called while the stream is active
+                let _client_guard = client;
+
+                tracing::info!("Tokio task started - processing messages");
                 tokio::pin!(stream);
 
+                let mut msg_count = 0;
                 while let Some(msg) = stream.next().await {
+                    msg_count += 1;
+                    tracing::debug!("Received message #{} from stream", msg_count);
+
                     match msg {
                         NautilusMessage::Data(data) => Python::attach(|py| {
                             let py_obj = data_to_pycapsule(py, data);
@@ -155,15 +183,25 @@ impl Mt5Client {
                         }
                     }
                 }
+
+                tracing::warn!("Tokio task: stream ended after {} messages", msg_count);
+                // _client_guard is dropped here, calling disconnect() and cleaning up
             });
 
+            tracing::info!("py_connect: tokio task spawned, returning Ok");
             Ok(())
         })
     }
 
+    #[pyo3(name = "close")]
+    fn py_close(&self) {
+        self.close();
+    }
+
     #[pyo3(name = "disconnect")]
     fn py_disconnect(&self) {
-        self.disconnect();
+        // Deprecated: Use close() instead
+        self.close();
     }
 
     #[pyo3(name = "wait_until_active")]

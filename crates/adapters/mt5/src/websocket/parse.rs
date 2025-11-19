@@ -93,6 +93,47 @@ pub fn parse_mt5_tick_to_quote(
     ))
 }
 
+/// Parse MT5 live tick message to Nautilus QuoteTick
+///
+/// Parses the actual MT5-ZeroMQ live tick format: {"status": "CONNECTED", "symbol": "...", "timeframe": "TICK", "data": [timestamp_ms, bid, ask]}
+///
+/// # Arguments
+/// * `msg` - MT5 live tick message
+/// * `instrument` - Instrument definition
+/// * `ts_init` - Timestamp when message was received
+pub fn parse_mt5_live_tick_to_quote(
+    msg: &Mt5LiveTickMsg,
+    instrument: &InstrumentAny,
+    ts_init: UnixNanos,
+) -> anyhow::Result<QuoteTick> {
+    let instrument_id = instrument.id();
+
+    // Extract data: [timestamp_ms, bid, ask]
+    let timestamp_ms = msg.data[0] as i64;
+    let bid = msg.data[1];
+    let ask = msg.data[2];
+
+    let bid_price = Price::new(bid, instrument.price_precision());
+    let ask_price = Price::new(ask, instrument.price_precision());
+
+    // MT5 doesn't provide bid/ask sizes in tick data, use minimum size as default
+    let default_size = instrument.size_increment();
+    let bid_size = Quantity::new(default_size.as_f64(), instrument.size_precision());
+    let ask_size = Quantity::new(default_size.as_f64(), instrument.size_precision());
+
+    let ts_event = UnixNanos::from(parse_timestamp_ms(timestamp_ms));
+
+    Ok(QuoteTick::new(
+        instrument_id,
+        bid_price,
+        ask_price,
+        bid_size,
+        ask_size,
+        ts_event,
+        ts_init,
+    ))
+}
+
 /// Parse MT5 order message to Nautilus OrderStatusReport
 ///
 /// # Arguments

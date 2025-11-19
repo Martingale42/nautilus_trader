@@ -127,35 +127,66 @@ impl Mt5Client {
 
     /// Check if client is connected and running
     pub fn is_active(&self) -> bool {
-        self.is_running.load(Ordering::Relaxed)
+        self.is_running.load(Ordering::Acquire)
     }
 
-    /// Subscribe to symbols via MT5 CONFIG action
+    /// Subscribe to quote tick data for the given instrument IDs
     ///
-    /// This sends CONFIG messages to MT5 to start streaming data
-    pub fn subscribe(&self, symbols: Vec<String>) -> Mt5Result<()> {
+    /// Sends CONFIG messages to MT5 to start streaming tick data (bid/ask)
+    pub fn subscribe_quotes(&self, instrument_ids: Vec<InstrumentId>) -> Mt5Result<()> {
         if !self.is_active() {
             return Err(Mt5Error::NotConnected);
         }
 
+        let symbols: Vec<String> = instrument_ids
+            .iter()
+            .map(|id| id.symbol.as_str().to_string())
+            .collect();
+
+        self.send_config_requests(&symbols, crate::common::Mt5TimeFrame::Tick)
+    }
+
+    /// Subscribe to bar data for the given bar type
+    ///
+    /// Sends CONFIG messages to MT5 to start streaming bar data
+    pub fn subscribe_bars(&self, bar_type: &str, timeframe: crate::common::Mt5TimeFrame) -> Mt5Result<()> {
+        if !self.is_active() {
+            return Err(Mt5Error::NotConnected);
+        }
+
+        // Extract symbol from bar type (e.g., "EURUSD.MT5-1-MINUTE-LAST")
+        let symbol = bar_type.split('.').next()
+            .ok_or_else(|| Mt5Error::Parse(format!("Invalid bar type: {}", bar_type)))?
+            .to_string();
+
+        self.send_config_requests(&[symbol], timeframe)
+    }
+
+    /// Internal method to send CONFIG requests to MT5
+    fn send_config_requests(&self, symbols: &[String], timeframe: crate::common::Mt5TimeFrame) -> Mt5Result<()> {
         // Create a temporary socket for subscription
-        // In production, you'd want to keep sys_socket in the struct
         let context = zmq::Context::new();
         let socket = context.socket(zmq::REQ)?;
         socket.connect(&format!("tcp://{}:{}", self.config.host, self.config.sys_port))?;
 
         for symbol in symbols {
-            let config = Mt5ConfigRequest::new(&symbol, crate::common::Mt5TimeFrame::M1);
+            let config = Mt5ConfigRequest::new(symbol, timeframe);
             let json = serde_json::to_string(&config)?;
 
             socket.send(&json, 0)?;
             let response = socket.recv_string(0)?.map_err(|e| {
                 Mt5Error::Connection(format!("Invalid UTF-8 in response: {:?}", e))
             })?;
-            tracing::debug!("MT5 CONFIG response for {}: {}", symbol, response);
+            tracing::debug!("MT5 CONFIG response for {} ({:?}): {}", symbol, timeframe, response);
         }
 
         Ok(())
+    }
+
+    /// Legacy subscribe method (deprecated - use subscribe_quotes or subscribe_bars)
+    #[deprecated(note = "Use subscribe_quotes() or subscribe_bars() instead")]
+    pub fn subscribe(&self, symbols: Vec<String>) -> Mt5Result<()> {
+        self.send_config_requests(&symbols, crate::common::Mt5TimeFrame::Tick)
     }
 
     /// Start streaming messages
@@ -164,8 +195,8 @@ impl Mt5Client {
     pub fn stream(&self) -> UnboundedReceiverStream<NautilusMessage> {
         let (tx, rx) = mpsc::unbounded_channel();
 
-        // Mark as running
-        self.is_running.store(true, Ordering::Relaxed);
+        // Mark as running (use Release ordering for synchronization)
+        self.is_running.store(true, Ordering::Release);
 
         // Clone everything we need for the thread
         let config = self.config.clone();
@@ -185,16 +216,19 @@ impl Mt5Client {
         UnboundedReceiverStream::new(rx)
     }
 
-    /// Stop streaming and disconnect
-    pub fn disconnect(&self) {
-        self.is_running.store(false, Ordering::Relaxed);
+    /// Close the connection and stop streaming
+    ///
+    /// This must be called explicitly to clean up resources.
+    /// Note: This affects all clones since they share the same is_running flag.
+    pub fn close(&self) {
+        self.is_running.store(false, Ordering::Release);
 
         // Wait for thread to finish
         if let Some(handle) = self.thread_handle.lock().unwrap().take() {
             let _ = handle.join();
         }
 
-        tracing::info!("Disconnected from MT5-ZeroMQ");
+        tracing::info!("Closed MT5-ZeroMQ connection");
     }
 
     /// ZMQ thread loop (runs in dedicated OS thread)
@@ -230,15 +264,23 @@ impl Mt5Client {
             config.stream_port
         );
 
-        // Main polling loop
-        while is_running.load(Ordering::Relaxed) {
+        // Check initial state (use Acquire ordering for synchronization)
+        let initial_running = is_running.load(Ordering::Acquire);
+        tracing::info!("ZMQ thread: is_running={}", initial_running);
+
+        // Main polling loop (use Acquire ordering to see updates from other threads)
+        let mut loop_count = 0;
+        while is_running.load(Ordering::Acquire) {
+            loop_count += 1;
+
             // Poll data socket (non-blocking)
             // This receives responses to commands sent via sys_port
             if let Ok(msg_bytes) = data_socket.recv_bytes(zmq::DONTWAIT) {
+                tracing::debug!("Received data message: {} bytes", msg_bytes.len());
                 match Self::handle_data_message(&msg_bytes, &instruments, account_id) {
                     Ok(Some(nautilus_msg)) => {
                         if tx.send(nautilus_msg).is_err() {
-                            tracing::warn!("Channel closed, stopping ZMQ thread");
+                            tracing::warn!("Data channel closed after {} loops, stopping ZMQ thread", loop_count);
                             break;
                         }
                     }
@@ -249,10 +291,11 @@ impl Mt5Client {
 
             // Poll live socket (non-blocking)
             if let Ok(msg_bytes) = live_socket.recv_bytes(zmq::DONTWAIT) {
+                tracing::debug!("Received live message: {} bytes", msg_bytes.len());
                 match Self::handle_live_message(&msg_bytes, &instruments, account_id) {
                     Ok(Some(nautilus_msg)) => {
                         if tx.send(nautilus_msg).is_err() {
-                            tracing::warn!("Channel closed, stopping ZMQ thread");
+                            tracing::warn!("Live channel closed after {} loops, stopping ZMQ thread", loop_count);
                             break;
                         }
                     }
@@ -263,10 +306,11 @@ impl Mt5Client {
 
             // Poll stream socket (non-blocking)
             if let Ok(msg_bytes) = stream_socket.recv_bytes(zmq::DONTWAIT) {
+                tracing::debug!("Received stream message: {} bytes", msg_bytes.len());
                 match Self::handle_stream_message(&msg_bytes, &instruments, account_id) {
                     Ok(Some(nautilus_msg)) => {
                         if tx.send(nautilus_msg).is_err() {
-                            tracing::warn!("Channel closed, stopping ZMQ thread");
+                            tracing::warn!("Stream channel closed after {} loops, stopping ZMQ thread", loop_count);
                             break;
                         }
                     }
@@ -277,7 +321,14 @@ impl Mt5Client {
 
             // Small sleep to prevent busy-waiting (1ms)
             std::thread::sleep(std::time::Duration::from_millis(1));
+
+            // Debug: Log periodically
+            if loop_count % 1000 == 0 {
+                tracing::debug!("ZMQ thread alive: {} loops", loop_count);
+            }
         }
+
+        tracing::info!("ZMQ thread exited after {} loops, is_running={}", loop_count, is_running.load(Ordering::Acquire));
 
         tracing::info!("ZMQ thread stopped");
         Ok(())
@@ -290,7 +341,15 @@ impl Mt5Client {
         account_id: Option<AccountId>,
     ) -> Mt5Result<Option<NautilusMessage>> {
         let json_str = String::from_utf8_lossy(msg_bytes);
-        let msg: Mt5TickMsg = serde_json::from_str(&json_str)?;
+        let msg: Mt5LiveTickMsg = serde_json::from_str(&json_str)?;
+
+        // Validate data array format [timestamp_ms, bid, ask]
+        if msg.data.len() < 3 {
+            return Err(Mt5Error::Parse(format!(
+                "Invalid tick data array length: expected 3, got {}",
+                msg.data.len()
+            )));
+        }
 
         // Get instrument from cache
         let instruments = instruments.lock().unwrap();
@@ -302,8 +361,8 @@ impl Mt5Client {
 
         let ts_init = get_atomic_clock_realtime().get_time_ns();
 
-        // Parse to QuoteTick (better for forex)
-        let quote = parse_mt5_tick_to_quote(&msg, instrument, ts_init)
+        // Parse to QuoteTick
+        let quote = parse_mt5_live_tick_to_quote(&msg, instrument, ts_init)
             .map_err(|e| Mt5Error::Parse(e.to_string()))?;
 
         Ok(Some(NautilusMessage::Data(Data::Quote(quote))))
@@ -371,6 +430,13 @@ impl Mt5Client {
             Mt5Error::Connection(format!("Invalid UTF-8 in response: {:?}", e))
         })?;
 
+        // Check for ERROR response from MT5
+        if response == "ERROR" {
+            return Err(Mt5Error::Parse(
+                "MT5 returned ERROR - deserialization failed on MT5 side".to_string()
+            ));
+        }
+
         Ok(response)
     }
 
@@ -388,6 +454,17 @@ impl Mt5Client {
         let response = socket.recv_string(0)?.map_err(|e| {
             Mt5Error::Connection(format!("Invalid UTF-8 in data response: {:?}", e))
         })?;
+
+        // Check if response is an error message
+        if response.contains("\"error\":true") || response.contains("\"error\": true") {
+            // Try to parse error details
+            if let Ok(error_json) = serde_json::from_str::<serde_json::Value>(&response) {
+                if let Some(desc) = error_json.get("error_description").and_then(|v| v.as_str()) {
+                    return Err(Mt5Error::Parse(format!("MT5 error: {}", desc)));
+                }
+            }
+            return Err(Mt5Error::Parse(format!("MT5 returned error: {}", response)));
+        }
 
         Ok(response)
     }
@@ -571,11 +648,9 @@ impl Mt5Client {
     }
 }
 
-impl Drop for Mt5Client {
-    fn drop(&mut self) {
-        self.disconnect();
-    }
-}
+// Drop implementation removed - use explicit close() instead
+// This prevents premature shutdown when temporary clones are dropped
+// (matches pattern used by CoinbaseIntx and Bybit adapters)
 
 #[cfg(test)]
 mod tests {

@@ -78,9 +78,9 @@ node = TradingNode(config=config_node)
 # Configure instruments to test
 # Replace with symbols available in your MT5 Market Watch
 instrument_ids = [
-    InstrumentId.from_str("EURUSD.MT5"),
-    InstrumentId.from_str("GBPUSD.MT5"),
-    InstrumentId.from_str("USDJPY.MT5"),
+    InstrumentId.from_str("BTCUSD.MT5"),
+    InstrumentId.from_str("ADAUSD.MT5"),
+    InstrumentId.from_str("DOGEUSD.MT5"),
 ]
 
 # Configure your actor
