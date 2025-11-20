@@ -35,6 +35,22 @@ pub struct Mt5LiveTickMsg {
     pub data: Vec<f64>,
 }
 
+/// MT5 live bar message (from liveSocket)
+///
+/// Actual format sent by MT5-ZeroMQ for live bar data
+/// Format: {"status": "CONNECTED", "symbol": "BTCUSD", "timeframe": "M1", "data": [timestamp_sec, open, high, low, close, volume]}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5LiveBarMsg {
+    /// Connection status (e.g., "CONNECTED")
+    pub status: Ustr,
+    /// Symbol name (e.g., "BTCUSD")
+    pub symbol: Ustr,
+    /// Timeframe (e.g., "M1", "H1", "D1")
+    pub timeframe: Ustr,
+    /// Bar data: [timestamp_sec, open, high, low, close, volume]
+    pub data: Vec<f64>,
+}
+
 /// Legacy MT5 tick message format (not actually used by MT5-ZeroMQ)
 ///
 /// Kept for compatibility with old code/tests

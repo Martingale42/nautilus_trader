@@ -127,6 +127,11 @@ impl Mt5Client {
         self.subscribe_quotes(ids?).map_err(to_pyruntime_err)
     }
 
+    #[pyo3(name = "subscribe_bars")]
+    fn py_subscribe_bars(&self, symbol: String, timeframe: String, bar_type_str: String) -> PyResult<()> {
+        self.subscribe_bars(&symbol, &timeframe, &bar_type_str).map_err(to_pyruntime_err)
+    }
+
     #[pyo3(name = "subscribe")]
     fn py_subscribe(&self, symbols: Vec<String>) -> PyResult<()> {
         #[allow(deprecated)]

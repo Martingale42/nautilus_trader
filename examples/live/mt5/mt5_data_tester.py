@@ -23,6 +23,7 @@ from nautilus_trader.config import LiveExecEngineConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.config import TradingNodeConfig
 from nautilus_trader.live.node import TradingNode
+from nautilus_trader.model.data import BarType
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
 from nautilus_trader.test_kit.strategies.tester_data import DataTester
@@ -86,12 +87,19 @@ instrument_ids = [
 # Configure your actor
 config_tester = DataTesterConfig(
     instrument_ids=instrument_ids,
+    bar_types=[BarType.from_str("BTCUSD.MT5-1-MINUTE-LAST-EXTERNAL"), BarType.from_str("ADAUSD.MT5-1-MINUTE-LAST-EXTERNAL"), BarType.from_str("DOGEUSD.MT5-1-MINUTE-LAST-EXTERNAL")],
     subscribe_quotes=True,  # Subscribe to QuoteTicks (bid/ask)
     subscribe_trades=False,  # TradeTicks not commonly used for MT5
+    subscribe_bars=True,  # Subscribe to BarTicks (M1)
+    subscribe_instrument=True,
+    subscribe_instrument_close=True,
+    subscribe_instrument_status=True,
     # subscribe_book_deltas=False,  # Not supported by MT5
     # manage_book=False,  # Not supported by MT5
     # subscribe_book_at_interval=False,  # Not supported by MT5
     log_data=True,  # Log received data for verification
+    log_events=True,
+    log_commands=True
 )
 
 # Instantiate your actor

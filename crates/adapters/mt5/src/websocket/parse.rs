@@ -3,7 +3,7 @@
 use super::messages::*;
 use crate::common::{parse_timestamp_ms, Mt5TickFlags};
 use nautilus_model::{
-    data::{QuoteTick, TradeTick},
+    data::{Bar, BarType, QuoteTick, TradeTick},
     enums::{AggressorSide, OrderSide, OrderStatus, OrderType, TimeInForce},
     identifiers::{AccountId, ClientOrderId, InstrumentId, Symbol, TradeId, Venue, VenueOrderId},
     instruments::{CurrencyPair, Instrument, InstrumentAny},
@@ -129,6 +129,58 @@ pub fn parse_mt5_live_tick_to_quote(
         ask_price,
         bid_size,
         ask_size,
+        ts_event,
+        ts_init,
+    ))
+}
+
+/// Parse MT5 live bar message to Nautilus Bar
+///
+/// Parses the actual MT5-ZeroMQ live bar format
+///
+/// # Arguments
+/// * `msg` - MT5 live bar message
+/// * `bar_type` - The bar type specification
+/// * `instrument` - Instrument definition
+/// * `ts_init` - Timestamp when message was received
+pub fn parse_mt5_live_bar(
+    msg: &Mt5LiveBarMsg,
+    bar_type: &BarType,
+    instrument: &InstrumentAny,
+    ts_init: UnixNanos,
+) -> anyhow::Result<Bar> {
+    // Validate data array format [timestamp_sec, open, high, low, close, volume]
+    if msg.data.len() < 6 {
+        anyhow::bail!(
+            "Invalid bar data array length: expected 6, got {}",
+            msg.data.len()
+        );
+    }
+
+    // Extract data: [timestamp_sec, open, high, low, close, volume]
+    let timestamp_sec = msg.data[0] as i64;
+    let open = msg.data[1];
+    let high = msg.data[2];
+    let low = msg.data[3];
+    let close = msg.data[4];
+    let volume = msg.data[5];
+
+    let open_price = Price::new(open, instrument.price_precision());
+    let high_price = Price::new(high, instrument.price_precision());
+    let low_price = Price::new(low, instrument.price_precision());
+    let close_price = Price::new(close, instrument.price_precision());
+    let volume_qty = Quantity::new(volume, instrument.size_precision());
+
+    // MT5 sends timestamp in SECONDS, not milliseconds
+    let ts_event = UnixNanos::from((timestamp_sec * 1_000_000_000) as u64);
+
+    Ok(Bar::new(
+        *bar_type,
+        open_price,
+        high_price,
+        low_price,
+        close_price,
+        volume_qty,
         ts_event,
         ts_init,
     ))

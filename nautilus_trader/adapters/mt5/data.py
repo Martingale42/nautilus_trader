@@ -42,12 +42,78 @@ from nautilus_trader.data.messages import UnsubscribeTradeTicks
 from nautilus_trader.live.cancellation import DEFAULT_FUTURE_CANCELLATION_TIMEOUT
 from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
 from nautilus_trader.live.data_client import LiveMarketDataClient
+from nautilus_trader.model.data import BarType
 from nautilus_trader.model.data import capsule_to_data
+from nautilus_trader.model.enums import BarAggregation
 from nautilus_trader.model.enums import PriceType
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import CurrencyPair
 from nautilus_trader.model.instruments import Instrument
+
+# MT5 supported timeframes (in minutes)
+MT5_TIMEFRAMES = {
+    1: "M1",
+    5: "M5",
+    15: "M15",
+    30: "M30",
+    60: "H1",
+    240: "H4",
+    1440: "D1",
+    10080: "W1",
+    43200: "MN1",
+}
+
+
+def get_mt5_timeframe_from_bar_type(bar_type: BarType) -> str:
+    """
+    Convert a Nautilus BarType to MT5 timeframe string.
+
+    Parameters
+    ----------
+    bar_type : BarType
+        The bar type to convert.
+
+    Returns
+    -------
+    str
+        The MT5 timeframe string (e.g., "M1", "H1", "D1").
+
+    Raises
+    ------
+    ValueError
+        If the bar aggregation or step is not supported by MT5.
+
+    """
+    aggregation: BarAggregation = bar_type.spec.aggregation
+    step: int = bar_type.spec.step
+
+    # Convert to minutes based on aggregation type
+    match aggregation:
+        case BarAggregation.MINUTE:
+            minutes = step
+        case BarAggregation.HOUR:
+            minutes = step * 60
+        case BarAggregation.DAY:
+            minutes = step * 1440
+        case BarAggregation.WEEK:
+            minutes = step * 10080
+        case BarAggregation.MONTH:
+            minutes = step * 43200
+        case _:
+            raise ValueError(
+                f"MT5 does not support {aggregation} bar aggregation. "
+                "Supported: MINUTE, HOUR, DAY, WEEK, MONTH"
+            )
+
+    # Map to MT5 timeframe
+    if minutes not in MT5_TIMEFRAMES:
+        raise ValueError(
+            f"MT5 does not support {minutes}-minute bars. "
+            f"Supported timeframes (in minutes): {list(MT5_TIMEFRAMES.keys())}"
+        )
+
+    return MT5_TIMEFRAMES[minutes]
 
 
 class MT5DataClient(LiveMarketDataClient):
@@ -256,7 +322,7 @@ class MT5DataClient(LiveMarketDataClient):
 
     async def _subscribe_bars(self, command: SubscribeBars) -> None:
         """
-        Subscribe to bar data (not yet implemented for MT5).
+        Subscribe to bar data from MT5.
 
         Parameters
         ----------
@@ -264,8 +330,65 @@ class MT5DataClient(LiveMarketDataClient):
             The subscription command.
 
         """
-        self._log.error(
-            f"Cannot subscribe to bars for {command.bar_type}: not yet implemented for MT5",
+        bar_type = command.bar_type
+
+        # Validate bar type - MT5 only supports externally aggregated time bars
+        if bar_type.is_internally_aggregated():
+            self._log.error(
+                f"Cannot subscribe to {bar_type} bars: "
+                "only EXTERNAL aggregation supported by MT5"
+            )
+            return
+
+        if not bar_type.spec.is_time_aggregated():
+            self._log.error(
+                f"Cannot subscribe to {bar_type} bars: "
+                "only time-based bars supported by MT5"
+            )
+            return
+
+        if bar_type.spec.price_type != PriceType.LAST:
+            self._log.error(
+                f"Cannot subscribe to {bar_type} bars: "
+                "only LAST price type supported by MT5"
+            )
+            return
+
+        # Convert BarType to MT5 timeframe string
+        try:
+            timeframe_str = get_mt5_timeframe_from_bar_type(bar_type)
+        except ValueError as e:
+            self._log.error(f"Cannot subscribe to {bar_type} bars: {e}")
+            return
+
+        # Subscribe via MT5 ZeroMQ client (pass both symbol, timeframe, and bar_type string)
+        symbol = bar_type.instrument_id.symbol.value
+        bar_type_str = str(bar_type)
+        self._client.subscribe_bars(symbol, timeframe_str, bar_type_str)
+        self._log.info(f"Subscribed to {bar_type} bars", LogColor.BLUE)
+
+    async def _subscribe_instrument_status(self, command) -> None:
+        """
+        Subscribe to instrument status updates (not supported by MT5).
+
+        MT5 does not provide real-time instrument status updates.
+        This is a no-op to prevent NotImplementedError.
+
+        """
+        self._log.warning(
+            f"Instrument status updates not supported by MT5 for {command.instrument_id}"
+        )
+
+    async def _subscribe_instrument_close(self, command) -> None:
+        """
+        Subscribe to instrument close updates (not supported by MT5).
+
+        MT5 does not provide instrument close notifications.
+        This is a no-op to prevent NotImplementedError.
+
+        """
+        self._log.warning(
+            f"Instrument close updates not supported by MT5 for {command.instrument_id}"
         )
 
     async def _unsubscribe_instruments(self, command: UnsubscribeInstruments) -> None:

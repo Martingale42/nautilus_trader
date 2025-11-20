@@ -14,12 +14,13 @@ use super::{messages::*, parse::*};
 use crate::common::parse_instrument_id;
 use nautilus_core::time::get_atomic_clock_realtime;
 use nautilus_model::{
-    data::Data,
+    data::{BarType, Data},
     identifiers::{AccountId, InstrumentId},
     instruments::{Instrument, InstrumentAny},
 };
 use std::{
     collections::HashMap,
+    str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -94,6 +95,7 @@ pub struct Mt5Client {
     pub(crate) config: Mt5ClientConfig,
     account_id: Option<AccountId>,
     pub(crate) instruments: Arc<Mutex<HashMap<String, InstrumentAny>>>,
+    pub(crate) bar_types: Arc<Mutex<HashMap<(String, String), String>>>, // (symbol, timeframe) -> bar_type_str
     is_running: Arc<AtomicBool>,
     thread_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
@@ -109,6 +111,7 @@ impl Mt5Client {
             config,
             account_id,
             instruments: Arc::new(Mutex::new(HashMap::new())),
+            bar_types: Arc::new(Mutex::new(HashMap::new())),
             is_running: Arc::new(AtomicBool::new(false)),
             thread_handle: Arc::new(Mutex::new(None)),
         }
@@ -146,20 +149,44 @@ impl Mt5Client {
         self.send_config_requests(&symbols, crate::common::Mt5TimeFrame::Tick)
     }
 
-    /// Subscribe to bar data for the given bar type
+    /// Subscribe to bar data for the given symbol and timeframe
     ///
-    /// Sends CONFIG messages to MT5 to start streaming bar data
-    pub fn subscribe_bars(&self, bar_type: &str, timeframe: crate::common::Mt5TimeFrame) -> Mt5Result<()> {
+    /// Sends CONFIG messages to MT5 to start streaming bar data.
+    ///
+    /// # Arguments
+    /// * `symbol` - The symbol to subscribe (e.g., "BTCUSD")
+    /// * `timeframe` - MT5 timeframe string (e.g., "M1", "H1", "D1")
+    /// * `bar_type_str` - Full BarType string for reconstruction (e.g., "BTCUSD.MT5-1-MINUTE-LAST-EXTERNAL")
+    pub fn subscribe_bars(&self, symbol: &str, timeframe: &str, bar_type_str: &str) -> Mt5Result<()> {
         if !self.is_active() {
             return Err(Mt5Error::NotConnected);
         }
 
-        // Extract symbol from bar type (e.g., "EURUSD.MT5-1-MINUTE-LAST")
-        let symbol = bar_type.split('.').next()
-            .ok_or_else(|| Mt5Error::Parse(format!("Invalid bar type: {}", bar_type)))?
-            .to_string();
+        // Parse timeframe string to Mt5TimeFrame enum
+        let mt5_timeframe = match timeframe {
+            "M1" => crate::common::Mt5TimeFrame::M1,
+            "M5" => crate::common::Mt5TimeFrame::M5,
+            "M15" => crate::common::Mt5TimeFrame::M15,
+            "M30" => crate::common::Mt5TimeFrame::M30,
+            "H1" => crate::common::Mt5TimeFrame::H1,
+            "H4" => crate::common::Mt5TimeFrame::H4,
+            "D1" => crate::common::Mt5TimeFrame::D1,
+            "W1" => crate::common::Mt5TimeFrame::W1,
+            "MN1" => crate::common::Mt5TimeFrame::MN1,
+            _ => return Err(Mt5Error::Parse(format!(
+                "Invalid MT5 timeframe: {}. Supported: M1, M5, M15, M30, H1, H4, D1, W1, MN1",
+                timeframe
+            ))),
+        };
 
-        self.send_config_requests(&[symbol], timeframe)
+        // Store bar type mapping for later reconstruction
+        self.bar_types.lock().unwrap().insert(
+            (symbol.to_string(), timeframe.to_string()),
+            bar_type_str.to_string(),
+        );
+
+        tracing::info!("Subscribing to {} bars with MT5 timeframe {:?}", symbol, mt5_timeframe);
+        self.send_config_requests(&[symbol.to_string()], mt5_timeframe)
     }
 
     /// Internal method to send CONFIG requests to MT5
@@ -201,12 +228,13 @@ impl Mt5Client {
         // Clone everything we need for the thread
         let config = self.config.clone();
         let instruments = Arc::clone(&self.instruments);
+        let bar_types = Arc::clone(&self.bar_types);
         let is_running = Arc::clone(&self.is_running);
         let account_id = self.account_id;
 
         // Spawn dedicated thread for ZMQ operations
         let handle = std::thread::spawn(move || {
-            if let Err(e) = Self::zmq_thread_loop(config, instruments, is_running, tx, account_id) {
+            if let Err(e) = Self::zmq_thread_loop(config, instruments, bar_types, is_running, tx, account_id) {
                 tracing::error!("ZMQ thread error: {}", e);
             }
         });
@@ -237,6 +265,7 @@ impl Mt5Client {
     fn zmq_thread_loop(
         config: Mt5ClientConfig,
         instruments: Arc<Mutex<HashMap<String, InstrumentAny>>>,
+        bar_types: Arc<Mutex<HashMap<(String, String), String>>>,
         is_running: Arc<AtomicBool>,
         tx: mpsc::UnboundedSender<NautilusMessage>,
         account_id: Option<AccountId>,
@@ -292,7 +321,7 @@ impl Mt5Client {
             // Poll live socket (non-blocking)
             if let Ok(msg_bytes) = live_socket.recv_bytes(zmq::DONTWAIT) {
                 tracing::debug!("Received live message: {} bytes", msg_bytes.len());
-                match Self::handle_live_message(&msg_bytes, &instruments, account_id) {
+                match Self::handle_live_message(&msg_bytes, &instruments, &bar_types, account_id) {
                     Ok(Some(nautilus_msg)) => {
                         if tx.send(nautilus_msg).is_err() {
                             tracing::warn!("Live channel closed after {} loops, stopping ZMQ thread", loop_count);
@@ -334,38 +363,83 @@ impl Mt5Client {
         Ok(())
     }
 
-    /// Handle message from liveSocket (tick data)
+    /// Handle message from liveSocket (tick or bar data)
     fn handle_live_message(
         msg_bytes: &[u8],
         instruments: &Arc<Mutex<HashMap<String, InstrumentAny>>>,
+        bar_types: &Arc<Mutex<HashMap<(String, String), String>>>,
         account_id: Option<AccountId>,
     ) -> Mt5Result<Option<NautilusMessage>> {
         let json_str = String::from_utf8_lossy(msg_bytes);
-        let msg: Mt5LiveTickMsg = serde_json::from_str(&json_str)?;
 
-        // Validate data array format [timestamp_ms, bid, ask]
-        if msg.data.len() < 3 {
-            return Err(Mt5Error::Parse(format!(
-                "Invalid tick data array length: expected 3, got {}",
-                msg.data.len()
-            )));
-        }
-
-        // Get instrument from cache
-        let instruments = instruments.lock().unwrap();
-        let instrument = instruments
-            .get(msg.symbol.as_str())
-            .ok_or_else(|| {
-                Mt5Error::InstrumentNotFound(parse_instrument_id(msg.symbol.as_str()).unwrap())
-            })?;
+        // Peek at the JSON to determine if it's tick or bar data
+        let peek: serde_json::Value = serde_json::from_str(&json_str)?;
+        let timeframe = peek
+            .get("timeframe")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Mt5Error::Parse("Missing 'timeframe' field in live message".to_string()))?;
 
         let ts_init = get_atomic_clock_realtime().get_time_ns();
 
-        // Parse to QuoteTick
-        let quote = parse_mt5_live_tick_to_quote(&msg, instrument, ts_init)
-            .map_err(|e| Mt5Error::Parse(e.to_string()))?;
+        // Route to appropriate parser based on timeframe
+        if timeframe == "TICK" {
+            // Parse as tick message
+            let msg: Mt5LiveTickMsg = serde_json::from_str(&json_str)?;
 
-        Ok(Some(NautilusMessage::Data(Data::Quote(quote))))
+            // Validate data array format [timestamp_ms, bid, ask]
+            if msg.data.len() < 3 {
+                return Err(Mt5Error::Parse(format!(
+                    "Invalid tick data array length: expected 3, got {}",
+                    msg.data.len()
+                )));
+            }
+
+            // Get instrument from cache
+            let instruments = instruments.lock().unwrap();
+            let instrument = instruments
+                .get(msg.symbol.as_str())
+                .ok_or_else(|| {
+                    Mt5Error::InstrumentNotFound(parse_instrument_id(msg.symbol.as_str()).unwrap())
+                })?;
+
+            // Parse to QuoteTick
+            let quote = parse_mt5_live_tick_to_quote(&msg, instrument, ts_init)
+                .map_err(|e| Mt5Error::Parse(e.to_string()))?;
+
+            Ok(Some(NautilusMessage::Data(Data::Quote(quote))))
+        } else {
+            // Parse as bar message
+            let msg: Mt5LiveBarMsg = serde_json::from_str(&json_str)?;
+
+            // Get instrument from cache
+            let instruments_guard = instruments.lock().unwrap();
+            let instrument = instruments_guard
+                .get(msg.symbol.as_str())
+                .ok_or_else(|| {
+                    Mt5Error::InstrumentNotFound(parse_instrument_id(msg.symbol.as_str()).unwrap())
+                })?;
+
+            // Look up bar_type from mapping
+            let bar_types_guard = bar_types.lock().unwrap();
+            let bar_type_str = bar_types_guard
+                .get(&(msg.symbol.to_string(), msg.timeframe.to_string()))
+                .ok_or_else(|| {
+                    Mt5Error::Parse(format!(
+                        "No bar_type mapping found for symbol={}, timeframe={}. Did you call subscribe_bars()?",
+                        msg.symbol, msg.timeframe
+                    ))
+                })?;
+
+            // Parse bar_type_str to BarType
+            let bar_type = BarType::from_str(bar_type_str)
+                .map_err(|e| Mt5Error::Parse(format!("Failed to parse BarType from '{}': {}", bar_type_str, e)))?;
+
+            // Parse to Bar
+            let bar = parse_mt5_live_bar(&msg, &bar_type, instrument, ts_init)
+                .map_err(|e| Mt5Error::Parse(e.to_string()))?;
+
+            Ok(Some(NautilusMessage::Data(Data::Bar(bar))))
+        }
     }
 
     /// Handle message from dataSocket (command responses)

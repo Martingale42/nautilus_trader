@@ -97,6 +97,24 @@ impl Mt5TimeFrame {
             Self::MN1 => 43200,
         }
     }
+
+    /// Create Mt5TimeFrame from minutes
+    ///
+    /// Returns None if the minutes don't match a valid MT5 timeframe
+    pub fn from_minutes(minutes: i64) -> Option<Self> {
+        match minutes {
+            1 => Some(Self::M1),
+            5 => Some(Self::M5),
+            15 => Some(Self::M15),
+            30 => Some(Self::M30),
+            60 => Some(Self::H1),
+            240 => Some(Self::H4),
+            1440 => Some(Self::D1),
+            10080 => Some(Self::W1),
+            43200 => Some(Self::MN1),
+            _ => None,
+        }
+    }
 }
 
 /// MT5 tick flags
