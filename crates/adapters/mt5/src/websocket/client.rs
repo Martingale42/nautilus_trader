@@ -93,7 +93,7 @@ impl Default for Mt5ClientConfig {
 #[derive(Clone)]
 pub struct Mt5Client {
     pub(crate) config: Mt5ClientConfig,
-    account_id: Option<AccountId>,
+    account_id_str: Option<String>,  // Store as string, construct AccountId when needed
     pub(crate) instruments: Arc<Mutex<HashMap<String, InstrumentAny>>>,
     pub(crate) bar_types: Arc<Mutex<HashMap<(String, String), String>>>, // (symbol, timeframe) -> bar_type_str
     is_running: Arc<AtomicBool>,
@@ -105,11 +105,11 @@ impl Mt5Client {
     ///
     /// # Arguments
     /// * `config` - Client configuration
-    /// * `account_id` - Optional account ID
-    pub fn new(config: Mt5ClientConfig, account_id: Option<AccountId>) -> Self {
+    /// * `account_id` - Optional account ID (just the account number without venue prefix)
+    pub fn new(config: Mt5ClientConfig, account_id: Option<String>) -> Self {
         Self {
             config,
-            account_id,
+            account_id_str: account_id,
             instruments: Arc::new(Mutex::new(HashMap::new())),
             bar_types: Arc::new(Mutex::new(HashMap::new())),
             is_running: Arc::new(AtomicBool::new(false)),
@@ -118,8 +118,17 @@ impl Mt5Client {
     }
 
     /// Create client with default configuration
-    pub fn with_defaults(account_id: Option<AccountId>) -> Self {
+    pub fn with_defaults(account_id: Option<String>) -> Self {
         Self::new(Mt5ClientConfig::default(), account_id)
+    }
+
+    /// Get the account ID with venue prefix
+    ///
+    /// Constructs the full AccountId from the stored account number
+    pub fn account_id(&self) -> Option<AccountId> {
+        self.account_id_str.as_ref().map(|id| {
+            AccountId::new(&format!("MT5-{}", id))
+        })
     }
 
     /// Add instrument to cache
@@ -131,6 +140,11 @@ impl Mt5Client {
     /// Check if client is connected and running
     pub fn is_active(&self) -> bool {
         self.is_running.load(Ordering::Acquire)
+    }
+
+    /// Check if instruments have been initialized/cached
+    pub fn is_initialized(&self) -> bool {
+        !self.instruments.lock().unwrap().is_empty()
     }
 
     /// Subscribe to quote tick data for the given instrument IDs
@@ -230,7 +244,7 @@ impl Mt5Client {
         let instruments = Arc::clone(&self.instruments);
         let bar_types = Arc::clone(&self.bar_types);
         let is_running = Arc::clone(&self.is_running);
-        let account_id = self.account_id;
+        let account_id = self.account_id();
 
         // Spawn dedicated thread for ZMQ operations
         let handle = std::thread::spawn(move || {
@@ -616,13 +630,29 @@ impl Mt5Client {
         });
 
         let request_str = serde_json::to_string(&request)?;
+
+        // Clone self to move into spawn_blocking
         let client = self.clone();
 
-        let response = tokio::task::spawn_blocking(move || client.send_sys_request(&request_str))
+        // Send via blocking sysSocket (REQ/REP pattern)
+        let ack_response = tokio::task::spawn_blocking(move || client.send_sys_request(&request_str))
             .await
             .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??;
 
-        let account_msg: Mt5AccountMsg = serde_json::from_str(&response)?;
+        tracing::debug!("ACCOUNT ACK: {}", ack_response);
+
+        // Receive actual response on data_socket
+        let client_clone = self.clone();
+        let response = tokio::task::spawn_blocking(move || client_clone.receive_data_response())
+            .await
+            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??;
+
+        tracing::debug!("ACCOUNT response received: {} bytes", response.len());
+
+        // Parse response as Mt5AccountMsg
+        let account_msg: Mt5AccountMsg = serde_json::from_str(&response)
+            .map_err(|e| Mt5Error::Parse(format!("Failed to parse ACCOUNT response: {}", e)))?;
+
         Ok(account_msg)
     }
 

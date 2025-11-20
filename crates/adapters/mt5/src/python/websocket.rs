@@ -23,7 +23,6 @@
 use futures_util::StreamExt;
 use nautilus_core::python::to_pyruntime_err;
 use nautilus_model::{
-    identifiers::AccountId,
     instruments::Instrument,
     python::{
         data::data_to_pycapsule,
@@ -58,8 +57,7 @@ impl Mt5Client {
             Mt5ClientConfig::default()
         };
 
-        let account_id = account_id.map(|id| AccountId::new(&id));
-
+        // Account ID is now stored as a string, the client will add the venue prefix
         Ok(Self::new(config, account_id))
     }
 
@@ -101,6 +99,11 @@ impl Mt5Client {
     #[pyo3(name = "is_active")]
     fn py_is_active(&self) -> bool {
         self.is_active()
+    }
+
+    #[pyo3(name = "is_initialized")]
+    fn py_is_initialized(&self) -> bool {
+        self.is_initialized()
     }
 
     #[pyo3(name = "add_instrument")]

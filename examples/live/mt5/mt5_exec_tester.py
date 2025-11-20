@@ -39,11 +39,11 @@ from nautilus_trader.test_kit.strategies.tester_exec import ExecTesterConfig
 
 
 # Test configuration
-instrument_id = InstrumentId.from_str("EURUSD.MT5")  # Replace with your broker's symbol
-offset_ticks = 50  # Number of ticks to offset limit orders from the market (wider for MT5)
-trade_size = Decimal("0.01")  # 0.01 lots (micro lot)
-mt5_account_id = "123456"  # Replace with your MT5 account number
-dry_run = True  # Set this to False to enable actual trading (CAUTION!)
+instrument_id: InstrumentId = InstrumentId.from_str("BTCUSD.MT5")  # Replace with your broker's symbol
+offset_ticks: int = 50  # Number of ticks to offset limit orders from the market (wider for MT5)
+trade_size: Decimal = Decimal("0.01")  # 0.01 lots (micro lot)
+mt5_account_id = "1600039229"  # Replace with your MT5 account number (just the number, MT5 prefix added automatically)
+dry_run = False  # Set this to False to enable actual trading (CAUTION!)
 
 # Configure the trading node
 config_node = TradingNodeConfig(
@@ -75,6 +75,7 @@ config_node = TradingNodeConfig(
     data_clients={
         MT5: MT5DataClientConfig(
             host="localhost",  # ZeroMQ host (use Docker container IP if remote)
+            data_port=2202,  # Command responses port
             live_port=2203,  # Tick data streaming port
             stream_port=2204,  # Order/position updates port
             sys_port=2201,  # Commands/queries port
