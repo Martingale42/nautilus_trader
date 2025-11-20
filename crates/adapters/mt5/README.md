@@ -14,9 +14,10 @@ NautilusTrader (Python/Async Rust)
 MT5 Adapter (Rust)
     ├─ Main Thread: PyO3 Bindings + Async API
     └─ ZMQ Thread: Dedicated OS thread for ZMQ sockets
-        ├─ liveSocket (PULL) - tick data
+        ├─ liveSocket (PULL) - tick/bar data (routes by timeframe field)
         ├─ streamSocket (PULL) - orders/positions
-        └─ sysSocket (REQ) - commands
+        ├─ dataSocket (PULL) - async responses (instruments, etc.)
+        └─ sysSocket (REQ) - commands (subscribe, trade, query)
         ↓ (channel)
         MT5-ZeroMQ (JsonAPI.mq5)
             ↓
@@ -30,11 +31,13 @@ MT5 Adapter (Rust)
 
 ## Features
 
-- ✅ Real-time market data (ticks, quotes)
+- ✅ Real-time market data (quotes, bars)
+- ✅ Quote tick streaming (bid/ask prices)
+- ✅ Bar data streaming (OHLCV with multiple timeframes: M1, M5, M15, M30, H1, H4, D1, W1, MN1)
 - ✅ Order execution (market, limit, stop orders)
 - ✅ Position management
-- ✅ Historical data retrieval
-- ✅ Native MT5 JSON format (no Bybit emulation)
+- ✅ Account state queries
+- ✅ Native MT5 JSON format (no protocol emulation)
 
 ## Project Structure
 
@@ -59,18 +62,36 @@ mt5/
 
 The adapter connects to three ZeroMQ sockets:
 
-- **liveSocket** (port 2203): Tick data streaming
-- **streamSocket** (port 2204): Order/position updates
-- **sysSocket** (port 2201): Command/response (REQ/REP)
+- **liveSocket** (PULL, port 2203): Live market data streaming (ticks and bars)
+- **streamSocket** (PULL, port 2204): Order/position updates
+- **sysSocket** (REQ, port 2201): Command/response (subscription, account queries, trade execution)
+- **dataSocket** (PULL, port 2202): Async responses to commands (instruments, large datasets)
 
 ## Message Flow
 
-### Market Data
-1. Client subscribes to symbol via `subscribe(["EURUSD"])`
-2. Adapter sends CONFIG message to MT5 sysSocket
-3. MT5 starts streaming ticks via liveSocket
-4. Adapter parses MT5 ticks → NautilusTrader QuoteTick/TradeTick
-5. Python receives parsed Nautilus objects
+### Quote Tick Data
+1. Client subscribes via `subscribe_quotes([instrument_id])`
+2. Adapter sends CONFIG message with `timeframe=TICK` to MT5 sysSocket
+3. MT5 starts streaming tick data via liveSocket
+4. Messages have format: `{"status": "CONNECTED", "symbol": "...", "timeframe": "TICK", "data": [timestamp_ms, bid, ask]}`
+5. Adapter parses MT5 ticks → Nautilus QuoteTick
+6. Python receives parsed Nautilus objects via callback
+
+### Bar Data
+1. Client subscribes via `subscribe_bars(bar_type)` (e.g., EURUSD-1-MINUTE-LAST)
+2. Adapter sends CONFIG message with appropriate timeframe (M1, H1, etc.) to MT5 sysSocket
+3. MT5 starts streaming bar data via liveSocket
+4. Messages have format: `{"status": "CONNECTED", "symbol": "...", "timeframe": "M1", "data": [timestamp_sec, open, high, low, close, volume]}`
+5. Adapter parses MT5 bars → Nautilus Bar objects
+6. Python receives parsed Nautilus objects via callback
+
+**Key Implementation Details**:
+- The adapter stores a `(symbol, timeframe) -> bar_type_str` mapping when subscribing to bars
+- This allows it to reconstruct the full BarType when parsing incoming bar messages (which only contain symbol and timeframe)
+- Timestamps: Tick data uses **milliseconds**, bar data uses **seconds**
+- The `handle_live_message()` function peeks at the `timeframe` field to route to the appropriate parser:
+  - `timeframe == "TICK"` → `parse_mt5_live_tick_to_quote()`
+  - `timeframe == "M1"|"H1"|etc.` → `parse_mt5_live_bar()`
 
 ### Order Execution
 1. Client submits order via ExecutionClient
@@ -93,11 +114,13 @@ The adapter connects to three ZeroMQ sockets:
 
 ### ✅ Completed (Stage 1 - Rust Core & Python Bindings)
 - [x] Project structure (14 files, ~2,800 LOC)
-- [x] MT5 message structs (messages.rs) - All MT5 JSON types
+- [x] MT5 message structs (messages.rs) - All MT5 JSON types including Mt5LiveTickMsg and Mt5LiveBarMsg
 - [x] MT5 enums and constants - Error codes, OrderType, TimeFrame, etc.
-- [x] MT5 → Nautilus parsers - TradeTick, QuoteTick, OrderStatusReport
+- [x] MT5 → Nautilus parsers - QuoteTick, Bar, OrderStatusReport
 - [x] ZeroMQ client implementation - **Dedicated thread + channel pattern**
-- [x] Tick parsing (QuoteTick, TradeTick)
+- [x] Quote tick parsing (QuoteTick from TICK timeframe messages)
+- [x] Bar data parsing (Bar from M1/H1/etc. timeframe messages)
+- [x] Dynamic routing based on timeframe field (TICK → QuoteTick, M1/H1/etc. → Bar)
 - [x] Order status parsing
 - [x] **PyO3 bindings** - Full Python integration with async support
 - [x] ✨ **Clean compilation** (no errors, no warnings)
@@ -109,7 +132,8 @@ The adapter connects to three ZeroMQ sockets:
 - [x] **providers.py** - MT5InstrumentProvider for instrument loading
 - [x] **data.py** - MT5DataClient (LiveMarketDataClient)
   - Connection lifecycle (connect, disconnect)
-  - Subscription management (quotes, trades)
+  - Subscription management (quotes via `subscribe_quotes()`, bars via `subscribe_bars()`)
+  - Timeframe mapping (Nautilus BarType → MT5 timeframes)
   - Message handling from Rust ZeroMQ client
 - [x] **execution.py** - MT5ExecutionClient (LiveExecutionClient)
   - Order submission (market, limit, stop)
@@ -168,41 +192,67 @@ cargo test
 ## Usage
 
 ```python
-from nautilus_trader.adapters.mt5 import Mt5Client
-from nautilus_trader.model.instruments import CurrencyPair
+from nautilus_trader.adapters.mt5.data import MT5DataClient
+from nautilus_trader.adapters.mt5.config import MT5DataClientConfig
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.data import BarType
 
-# Create client
-client = Mt5Client(
+# Create data client
+config = MT5DataClientConfig(
     host="localhost",
+    data_port=2202,
     live_port=2203,
     stream_port=2204,
     sys_port=2201,
-    account_id="MT5-001",
 )
 
-# Define instruments
-instruments = [
-    # Your instrument definitions here
-    eurusd,
-    gbpusd,
-]
+client = MT5DataClient(
+    loop=loop,
+    msgbus=msgbus,
+    cache=cache,
+    clock=clock,
+    config=config,
+)
 
 # Connect and start streaming
-async def handle_data(data):
-    print(f"Received: {data}")
+await client.connect()
 
-await client.connect(instruments, handle_data)
+# Subscribe to quote ticks
+eurusd = InstrumentId.from_str("EURUSD.MT5")
+await client.subscribe_quote_ticks(eurusd)
 
-# Subscribe to specific symbols
-client.subscribe(["EURUSD", "GBPUSD"])
+# Subscribe to bars (1-minute bars)
+bar_type = BarType.from_str("EURUSD.MT5-1-MINUTE-LAST-EXTERNAL")
+await client.subscribe_bars(bar_type)
+
+# Subscribe to bars (1-hour bars)
+bar_type_h1 = BarType.from_str("EURUSD.MT5-1-HOUR-LAST-EXTERNAL")
+await client.subscribe_bars(bar_type_h1)
 
 # Check status
-if client.is_active():
+if client.is_connected:
     print("Connected and streaming")
 
+# Data will be published to the message bus automatically
+# Subscribe to the message bus to receive QuoteTick and Bar objects
+
 # Disconnect when done
-client.disconnect()
+await client.disconnect()
 ```
+
+### Supported Timeframes
+
+The adapter supports the following MT5 timeframes for bar subscriptions:
+
+- **M1** - 1 minute bars (BarAggregation.MINUTE with step=1)
+- **M5** - 5 minute bars (BarAggregation.MINUTE with step=5)
+- **M15** - 15 minute bars (BarAggregation.MINUTE with step=15)
+- **M30** - 30 minute bars (BarAggregation.MINUTE with step=30)
+- **H1** - 1 hour bars (BarAggregation.HOUR with step=1)
+- **H4** - 4 hour bars (BarAggregation.HOUR with step=4)
+- **D1** - Daily bars (BarAggregation.DAY)
+- **W1** - Weekly bars (BarAggregation.WEEK)
+- **MN1** - Monthly bars (BarAggregation.MONTH)
 
 ## Testing
 
