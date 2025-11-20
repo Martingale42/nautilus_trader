@@ -3,8 +3,25 @@
 //! These structs represent the native JSON format sent by MT5-ZeroMQ (JsonAPI.mq5).
 
 use crate::common::{Mt5OrderType, Mt5TimeFrame};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use ustr::Ustr;
+
+/// Deserialize integer (0/1) as boolean
+///
+/// MT5 sends boolean fields as integers (0 = false, 1 = true)
+fn deserialize_int_as_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match u8::deserialize(deserializer)? {
+        0 => Ok(false),
+        1 => Ok(true),
+        other => Err(serde::de::Error::custom(format!(
+            "Expected 0 or 1 for boolean, got {}",
+            other
+        ))),
+    }
+}
 
 /// Top-level MT5 message enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,9 +217,11 @@ pub struct Mt5BarData {
 /// Response to ACCOUNT or BALANCE action
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mt5AccountMsg {
-    /// Account login
+    /// Account login (optional, may not be in all responses)
+    #[serde(default)]
     pub login: i64,
-    /// Account name
+    /// Account name (optional, may not be in all responses)
+    #[serde(default)]
     pub name: Ustr,
     /// Broker name
     pub broker: Ustr,
@@ -210,9 +229,11 @@ pub struct Mt5AccountMsg {
     pub currency: Ustr,
     /// Server name
     pub server: Ustr,
-    /// Whether trading is allowed
+    /// Whether trading is allowed (MT5 sends as integer 0/1)
+    #[serde(deserialize_with = "deserialize_int_as_bool")]
     pub trading_allowed: bool,
-    /// Whether bot trading is enabled
+    /// Whether bot trading is enabled (MT5 sends as integer 0/1)
+    #[serde(deserialize_with = "deserialize_int_as_bool")]
     pub bot_trading: bool,
     /// Account balance
     pub balance: f64,
@@ -224,7 +245,8 @@ pub struct Mt5AccountMsg {
     pub margin_free: f64,
     /// Margin level (percentage)
     pub margin_level: f64,
-    /// Profit
+    /// Profit (optional, may not be in all responses)
+    #[serde(default)]
     pub profit: f64,
 }
 

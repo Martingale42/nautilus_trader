@@ -27,7 +27,7 @@ use std::{
     },
     thread::JoinHandle,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 /// Error types for MT5 client
@@ -64,6 +64,21 @@ pub enum NautilusMessage {
     Raw(String),
 }
 
+/// Commands sent to ZMQ thread for request-response operations
+///
+/// This ensures all socket I/O happens in a single thread,
+/// preventing conflicts between the polling loop and request-response operations
+pub enum ZmqCommand {
+    /// Request account state (balance, margin, etc.)
+    RequestAccountState {
+        response_tx: oneshot::Sender<Mt5Result<String>>,
+    },
+    /// Request instruments (symbol specifications)
+    RequestInstruments {
+        response_tx: oneshot::Sender<Mt5Result<String>>,
+    },
+}
+
 /// Configuration for MT5 client
 #[derive(Debug, Clone)]
 pub struct Mt5ClientConfig {
@@ -98,6 +113,13 @@ pub struct Mt5Client {
     pub(crate) bar_types: Arc<Mutex<HashMap<(String, String), String>>>, // (symbol, timeframe) -> bar_type_str
     is_running: Arc<AtomicBool>,
     thread_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// Mutex to serialize request-response cycles on shared sysSocket/dataSocket
+    /// Prevents race condition when multiple clients use the same Mt5Client instance
+    request_response_lock: Arc<TokioMutex<()>>,
+    /// Channel for sending commands to ZMQ thread (request-response operations)
+    command_tx: mpsc::UnboundedSender<ZmqCommand>,
+    /// Channel for receiving commands in ZMQ thread (created but stored for cleanup)
+    command_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<ZmqCommand>>>>,
 }
 
 impl Mt5Client {
@@ -107,6 +129,8 @@ impl Mt5Client {
     /// * `config` - Client configuration
     /// * `account_id` - Optional account ID (just the account number without venue prefix)
     pub fn new(config: Mt5ClientConfig, account_id: Option<String>) -> Self {
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+
         Self {
             config,
             account_id_str: account_id,
@@ -114,6 +138,9 @@ impl Mt5Client {
             bar_types: Arc::new(Mutex::new(HashMap::new())),
             is_running: Arc::new(AtomicBool::new(false)),
             thread_handle: Arc::new(Mutex::new(None)),
+            request_response_lock: Arc::new(TokioMutex::new(())),
+            command_tx,
+            command_rx: Arc::new(Mutex::new(Some(command_rx))),
         }
     }
 
@@ -230,10 +257,15 @@ impl Mt5Client {
         self.send_config_requests(&symbols, crate::common::Mt5TimeFrame::Tick)
     }
 
-    /// Start streaming messages
+    /// Ensure ZMQ thread is running (starts it if not already started)
     ///
-    /// Spawns a dedicated thread for ZMQ operations and returns an async stream
-    pub fn stream(&self) -> UnboundedReceiverStream<NautilusMessage> {
+    /// Returns a receiver for messages if this is the first call
+    fn ensure_thread_running(&self) -> Option<UnboundedReceiverStream<NautilusMessage>> {
+        // Check if already running
+        if self.is_running.load(Ordering::Acquire) {
+            return None;
+        }
+
         let (tx, rx) = mpsc::unbounded_channel();
 
         // Mark as running (use Release ordering for synchronization)
@@ -246,16 +278,28 @@ impl Mt5Client {
         let is_running = Arc::clone(&self.is_running);
         let account_id = self.account_id();
 
+        // Take command receiver (can only be done once)
+        let command_rx = self.command_rx.lock().unwrap().take()
+            .expect("ZMQ thread can only be started once");
+
         // Spawn dedicated thread for ZMQ operations
         let handle = std::thread::spawn(move || {
-            if let Err(e) = Self::zmq_thread_loop(config, instruments, bar_types, is_running, tx, account_id) {
+            if let Err(e) = Self::zmq_thread_loop(config, instruments, bar_types, is_running, tx, account_id, command_rx) {
                 tracing::error!("ZMQ thread error: {}", e);
             }
         });
 
         *self.thread_handle.lock().unwrap() = Some(handle);
 
-        UnboundedReceiverStream::new(rx)
+        Some(UnboundedReceiverStream::new(rx))
+    }
+
+    /// Start streaming messages
+    ///
+    /// Spawns a dedicated thread for ZMQ operations and returns an async stream
+    pub fn stream(&self) -> UnboundedReceiverStream<NautilusMessage> {
+        self.ensure_thread_running()
+            .expect("stream() can only be called once")
     }
 
     /// Close the connection and stop streaming
@@ -273,6 +317,102 @@ impl Mt5Client {
         tracing::info!("Closed MT5-ZeroMQ connection");
     }
 
+    /// Handle ACCOUNT request-response in ZMQ thread
+    ///
+    /// Sends ACCOUNT request, waits for ACK, then receives response from dataSocket
+    fn handle_account_request(sys_socket: &zmq::Socket, data_socket: &zmq::Socket) -> Mt5Result<String> {
+        let request = serde_json::json!({"action": "ACCOUNT"});
+        let request_str = serde_json::to_string(&request)?;
+
+        // Send request via REQ socket
+        sys_socket.send(&request_str, 0)?;
+
+        // Wait for ACK (blocking, should be fast)
+        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        tracing::debug!("ACCOUNT ACK: {}", ack);
+
+        // Receive actual response from PULL socket (blocking with timeout)
+        data_socket.set_rcvtimeo(10000)?; // 10 second timeout
+        let response = data_socket.recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("Data recv error: {:?}", e)))?;
+
+        tracing::debug!("ACCOUNT response received: {} bytes", response.len());
+        Ok(response)
+    }
+
+    /// Handle SYMBOL_INFO request-response in ZMQ thread
+    ///
+    /// Sends SYMBOL_INFO request, waits for ACK, then receives response from dataSocket
+    fn handle_instruments_request(sys_socket: &zmq::Socket, data_socket: &zmq::Socket) -> Mt5Result<String> {
+        let request = serde_json::json!({"action": "SYMBOL_INFO"});
+        let request_str = serde_json::to_string(&request)?;
+
+        // Send request via REQ socket
+        sys_socket.send(&request_str, 0)?;
+
+        // Wait for ACK (blocking, should be fast)
+        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        tracing::debug!("SYMBOL_INFO ACK: {}", ack);
+
+        // Receive actual response from PULL socket (blocking with timeout)
+        data_socket.set_rcvtimeo(10000)?; // 10 second timeout
+        let response = data_socket.recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("Data recv error: {:?}", e)))?;
+
+        tracing::debug!("SYMBOL_INFO response received: {} bytes", response.len());
+        Ok(response)
+    }
+
+    /// Fallback method for requesting instruments when ZMQ thread is not running
+    ///
+    /// Creates temporary sockets, makes blocking request, and cleans up
+    fn fallback_instruments_request(config: &Mt5ClientConfig) -> Mt5Result<String> {
+        tracing::debug!("Creating temporary sockets for SYMBOL_INFO fallback request");
+
+        let context = zmq::Context::new();
+
+        // Create temporary REQ socket for sys_port
+        let sys_socket = context.socket(zmq::REQ)?;
+        sys_socket.connect(&format!("tcp://{}:{}", config.host, config.sys_port))?;
+
+        // Create temporary PULL socket for data_port
+        let data_socket = context.socket(zmq::PULL)?;
+        data_socket.connect(&format!("tcp://{}:{}", config.host, config.data_port))?;
+
+        // Use the same logic as handle_instruments_request
+        let result = Self::handle_instruments_request(&sys_socket, &data_socket);
+
+        // Sockets are automatically closed when dropped
+        tracing::debug!("Temporary sockets closed");
+
+        result
+    }
+
+    /// Fallback method for requesting account state when ZMQ thread is not running
+    ///
+    /// Creates temporary sockets, makes blocking request, and cleans up
+    fn fallback_account_request(config: &Mt5ClientConfig) -> Mt5Result<String> {
+        tracing::debug!("Creating temporary sockets for ACCOUNT fallback request");
+
+        let context = zmq::Context::new();
+
+        // Create temporary REQ socket for sys_port
+        let sys_socket = context.socket(zmq::REQ)?;
+        sys_socket.connect(&format!("tcp://{}:{}", config.host, config.sys_port))?;
+
+        // Create temporary PULL socket for data_port
+        let data_socket = context.socket(zmq::PULL)?;
+        data_socket.connect(&format!("tcp://{}:{}", config.host, config.data_port))?;
+
+        // Use the same logic as handle_account_request
+        let result = Self::handle_account_request(&sys_socket, &data_socket);
+
+        // Sockets are automatically closed when dropped
+        tracing::debug!("Temporary sockets closed");
+
+        result
+    }
+
     /// ZMQ thread loop (runs in dedicated OS thread)
     ///
     /// This is where ZMQ sockets live - they never leave this thread!
@@ -283,9 +423,14 @@ impl Mt5Client {
         is_running: Arc<AtomicBool>,
         tx: mpsc::UnboundedSender<NautilusMessage>,
         account_id: Option<AccountId>,
+        mut command_rx: mpsc::UnboundedReceiver<ZmqCommand>,
     ) -> Mt5Result<()> {
         // Create ZMQ context and sockets (they live in this thread only!)
         let context = zmq::Context::new();
+
+        // System socket (REQ) - for sending commands and receiving ACKs
+        let sys_socket = context.socket(zmq::REQ)?;
+        sys_socket.connect(&format!("tcp://{}:{}", config.host, config.sys_port))?;
 
         // Data socket (PULL) - receives command responses from data_port (2202)
         let data_socket = context.socket(zmq::PULL)?;
@@ -300,8 +445,9 @@ impl Mt5Client {
         stream_socket.connect(&format!("tcp://{}:{}", config.host, config.stream_port))?;
 
         tracing::info!(
-            "ZMQ thread connected to MT5-ZeroMQ at {}:{},{},{}",
+            "ZMQ thread connected to MT5-ZeroMQ at {}:{},{},{},{}",
             config.host,
+            config.sys_port,
             config.data_port,
             config.live_port,
             config.stream_port
@@ -315,6 +461,20 @@ impl Mt5Client {
         let mut loop_count = 0;
         while is_running.load(Ordering::Acquire) {
             loop_count += 1;
+
+            // PRIORITY 1: Handle commands first (request-response operations)
+            while let Ok(command) = command_rx.try_recv() {
+                match command {
+                    ZmqCommand::RequestAccountState { response_tx } => {
+                        let result = Self::handle_account_request(&sys_socket, &data_socket);
+                        let _ = response_tx.send(result);
+                    }
+                    ZmqCommand::RequestInstruments { response_tx } => {
+                        let result = Self::handle_instruments_request(&sys_socket, &data_socket);
+                        let _ = response_tx.send(result);
+                    }
+                }
+            }
 
             // Poll data socket (non-blocking)
             // This receives responses to commands sent via sys_port
@@ -561,28 +721,38 @@ impl Mt5Client {
     ///
     /// Sends SYMBOL_INFO action to query symbol specifications
     pub async fn request_instruments(&self) -> Mt5Result<Vec<InstrumentAny>> {
-        // Build SYMBOL_INFO request (no symbol specified = get all symbols)
-        let request = serde_json::json!({
-            "action": "SYMBOL_INFO"
-        });
+        // Acquire lock to serialize this request-response cycle
+        // This prevents race conditions when multiple clients share the same Mt5Client
+        let _lock = self.request_response_lock.lock().await;
 
-        let request_str = serde_json::to_string(&request)?;
+        // Get response either via command channel (if thread running) or direct call (fallback)
+        let response = if self.is_running.load(Ordering::Acquire) {
+            // ZMQ thread is running - use command channel
+            tracing::debug!("Using command channel for SYMBOL_INFO request");
 
-        // Clone self to move into spawn_blocking
-        let client = self.clone();
+            // Create oneshot channel for response
+            let (response_tx, response_rx) = oneshot::channel();
 
-        // Send via blocking sysSocket
-        let ack_response = tokio::task::spawn_blocking(move || client.send_sys_request(&request_str))
+            // Send command to ZMQ thread
+            self.command_tx
+                .send(ZmqCommand::RequestInstruments { response_tx })
+                .map_err(|_| Mt5Error::Connection("Command channel closed".to_string()))?;
+
+            // Wait for response from ZMQ thread
+            response_rx
+                .await
+                .map_err(|_| Mt5Error::Connection("Response channel closed".to_string()))??
+        } else {
+            // ZMQ thread not running yet - use fallback with temporary sockets
+            tracing::debug!("Using fallback blocking call for SYMBOL_INFO request");
+
+            let config = self.config.clone();
+            tokio::task::spawn_blocking(move || {
+                Self::fallback_instruments_request(&config)
+            })
             .await
-            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??;
-
-        tracing::debug!("SYMBOL_INFO ACK: {}", ack_response);
-
-        // Receive actual response on data_socket
-        let client_clone = self.clone();
-        let response = tokio::task::spawn_blocking(move || client_clone.receive_data_response())
-            .await
-            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??;
+            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??
+        };
 
         tracing::debug!("SYMBOL_INFO response received: {} bytes", response.len());
 
@@ -625,27 +795,38 @@ impl Mt5Client {
     ///
     /// Sends ACCOUNT action to query balance, margin, etc.
     pub async fn request_account_state(&self) -> Mt5Result<Mt5AccountMsg> {
-        let request = serde_json::json!({
-            "action": "ACCOUNT"
-        });
+        // Acquire lock to serialize this request-response cycle
+        // This prevents race conditions when multiple clients share the same Mt5Client
+        let _lock = self.request_response_lock.lock().await;
 
-        let request_str = serde_json::to_string(&request)?;
+        // Get response either via command channel (if thread running) or direct call (fallback)
+        let response = if self.is_running.load(Ordering::Acquire) {
+            // ZMQ thread is running - use command channel
+            tracing::debug!("Using command channel for ACCOUNT request");
 
-        // Clone self to move into spawn_blocking
-        let client = self.clone();
+            // Create oneshot channel for response
+            let (response_tx, response_rx) = oneshot::channel();
 
-        // Send via blocking sysSocket (REQ/REP pattern)
-        let ack_response = tokio::task::spawn_blocking(move || client.send_sys_request(&request_str))
+            // Send command to ZMQ thread
+            self.command_tx
+                .send(ZmqCommand::RequestAccountState { response_tx })
+                .map_err(|_| Mt5Error::Connection("Command channel closed".to_string()))?;
+
+            // Wait for response from ZMQ thread
+            response_rx
+                .await
+                .map_err(|_| Mt5Error::Connection("Response channel closed".to_string()))??
+        } else {
+            // ZMQ thread not running yet - use fallback with temporary sockets
+            tracing::debug!("Using fallback blocking call for ACCOUNT request");
+
+            let config = self.config.clone();
+            tokio::task::spawn_blocking(move || {
+                Self::fallback_account_request(&config)
+            })
             .await
-            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??;
-
-        tracing::debug!("ACCOUNT ACK: {}", ack_response);
-
-        // Receive actual response on data_socket
-        let client_clone = self.clone();
-        let response = tokio::task::spawn_blocking(move || client_clone.receive_data_response())
-            .await
-            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??;
+            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??
+        };
 
         tracing::debug!("ACCOUNT response received: {} bytes", response.len());
 
