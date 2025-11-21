@@ -15,8 +15,10 @@ use crate::common::parse_instrument_id;
 use nautilus_core::time::get_atomic_clock_realtime;
 use nautilus_model::{
     data::{BarType, Data},
-    identifiers::{AccountId, InstrumentId},
+    enums::{OrderSide, OrderType},
+    identifiers::{AccountId, ClientOrderId, InstrumentId, VenueOrderId},
     instruments::{Instrument, InstrumentAny},
+    types::{Price, Quantity},
 };
 use std::{
     collections::HashMap,
@@ -75,6 +77,33 @@ pub enum ZmqCommand {
     },
     /// Request instruments (symbol specifications)
     RequestInstruments {
+        response_tx: oneshot::Sender<Mt5Result<String>>,
+    },
+    /// Submit a new order to MT5
+    SubmitOrder {
+        instrument_id: InstrumentId,
+        client_order_id: ClientOrderId,
+        order_side: OrderSide,
+        order_type: OrderType,
+        quantity: Quantity,
+        price: Option<Price>,
+        sl: Option<Price>,
+        tp: Option<Price>,
+        comment: String,
+        response_tx: oneshot::Sender<Mt5Result<String>>,
+    },
+    /// Cancel an existing order
+    CancelOrder {
+        venue_order_id: VenueOrderId,
+        response_tx: oneshot::Sender<Mt5Result<String>>,
+    },
+    /// Modify an existing order
+    ModifyOrder {
+        venue_order_id: VenueOrderId,
+        price: Option<Price>,
+        quantity: Option<Quantity>,
+        sl: Option<Price>,
+        tp: Option<Price>,
         response_tx: oneshot::Sender<Mt5Result<String>>,
     },
 }
@@ -413,6 +442,142 @@ impl Mt5Client {
         result
     }
 
+    /// Handle order submission in ZMQ thread
+    ///
+    /// Sends TRADE request, waits for ACK, then receives response from dataSocket
+    fn handle_submit_order(
+        sys_socket: &zmq::Socket,
+        data_socket: &zmq::Socket,
+        symbol: &str,
+        order_side: OrderSide,
+        order_type: OrderType,
+        volume: f64,
+        price: Option<f64>,
+        sl: Option<f64>,
+        tp: Option<f64>,
+        comment: &str,
+    ) -> Mt5Result<String> {
+        // Map OrderSide to MT5 action type
+        let action_type = match order_side {
+            OrderSide::Buy => match order_type {
+                OrderType::Market => "ORDER_TYPE_BUY",
+                OrderType::Limit => "ORDER_TYPE_BUY_LIMIT",
+                OrderType::StopMarket => "ORDER_TYPE_BUY_STOP",
+                OrderType::StopLimit => "ORDER_TYPE_BUY_STOP_LIMIT",
+                _ => return Err(Mt5Error::Parse(format!("Unsupported order type: {:?}", order_type))),
+            },
+            OrderSide::Sell => match order_type {
+                OrderType::Market => "ORDER_TYPE_SELL",
+                OrderType::Limit => "ORDER_TYPE_SELL_LIMIT",
+                OrderType::StopMarket => "ORDER_TYPE_SELL_STOP",
+                OrderType::StopLimit => "ORDER_TYPE_SELL_STOP_LIMIT",
+                _ => return Err(Mt5Error::Parse(format!("Unsupported order type: {:?}", order_type))),
+            },
+            _ => return Err(Mt5Error::Parse(format!("Invalid order side: {:?}", order_side))),
+        };
+
+        // For GTC orders, set expiration to far future (90 days from now)
+        // MT5 rejects 0 as it represents January 1, 1970 (past date)
+        let expiration_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() + (90 * 24 * 60 * 60); // 90 days from now
+
+        let request = serde_json::json!({
+            "action": "TRADE",
+            "actionType": action_type,
+            "symbol": symbol,
+            "volume": volume,
+            "price": price.unwrap_or(0.0),
+            "stoploss": sl.unwrap_or(0.0),
+            "takeprofit": tp.unwrap_or(0.0),
+            "expiration": expiration_timestamp,
+            "comment": comment
+        });
+
+        let request_str = serde_json::to_string(&request)?;
+        tracing::info!("=== MT5 ORDER SUBMISSION ===");
+        tracing::info!("Request: {}", request_str);
+
+        // Send request via REQ socket
+        sys_socket.send(&request_str, 0)?;
+
+        // Wait for ACK (blocking, should be fast)
+        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        tracing::info!("TRADE ACK: {}", ack);
+
+        // Receive actual response from PULL socket (blocking with timeout)
+        data_socket.set_rcvtimeo(10000)?; // 10 second timeout
+        let response = data_socket.recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("Data recv error: {:?}", e)))?;
+
+        tracing::info!("TRADE response: {}", response);
+        tracing::info!("=== END MT5 ORDER SUBMISSION ===");
+        Ok(response)
+    }
+
+    /// Handle order cancellation in ZMQ thread
+    ///
+    /// Sends TRADE_CLOSE request to cancel an order by ticket
+    fn handle_cancel_order(
+        sys_socket: &zmq::Socket,
+        data_socket: &zmq::Socket,
+        ticket: u64,
+    ) -> Mt5Result<String> {
+        let request = serde_json::json!({
+            "action": "TRADE_CLOSE",
+            "ticket": ticket
+        });
+
+        let request_str = serde_json::to_string(&request)?;
+        tracing::debug!("Canceling order: {}", request_str);
+
+        sys_socket.send(&request_str, 0)?;
+        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        tracing::debug!("TRADE_CLOSE ACK: {}", ack);
+
+        data_socket.set_rcvtimeo(10000)?;
+        let response = data_socket.recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("Data recv error: {:?}", e)))?;
+
+        tracing::debug!("TRADE_CLOSE response received: {} bytes", response.len());
+        Ok(response)
+    }
+
+    /// Handle order modification in ZMQ thread
+    ///
+    /// Sends TRADE_MODIFY request to modify order parameters
+    fn handle_modify_order(
+        sys_socket: &zmq::Socket,
+        data_socket: &zmq::Socket,
+        ticket: u64,
+        price: Option<f64>,
+        sl: Option<f64>,
+        tp: Option<f64>,
+    ) -> Mt5Result<String> {
+        let request = serde_json::json!({
+            "action": "TRADE_MODIFY",
+            "ticket": ticket,
+            "price": price.unwrap_or(0.0),
+            "stoploss": sl.unwrap_or(0.0),
+            "takeprofit": tp.unwrap_or(0.0)
+        });
+
+        let request_str = serde_json::to_string(&request)?;
+        tracing::debug!("Modifying order: {}", request_str);
+
+        sys_socket.send(&request_str, 0)?;
+        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        tracing::debug!("TRADE_MODIFY ACK: {}", ack);
+
+        data_socket.set_rcvtimeo(10000)?;
+        let response = data_socket.recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("Data recv error: {:?}", e)))?;
+
+        tracing::debug!("TRADE_MODIFY response received: {} bytes", response.len());
+        Ok(response)
+    }
+
     /// ZMQ thread loop (runs in dedicated OS thread)
     ///
     /// This is where ZMQ sockets live - they never leave this thread!
@@ -471,6 +636,78 @@ impl Mt5Client {
                     }
                     ZmqCommand::RequestInstruments { response_tx } => {
                         let result = Self::handle_instruments_request(&sys_socket, &data_socket);
+                        let _ = response_tx.send(result);
+                    }
+                    ZmqCommand::SubmitOrder {
+                        instrument_id,
+                        client_order_id: _,
+                        order_side,
+                        order_type,
+                        quantity,
+                        price,
+                        sl,
+                        tp,
+                        comment,
+                        response_tx,
+                    } => {
+                        let symbol = instrument_id.symbol.as_str();
+                        let volume = quantity.as_f64();
+                        let price_val = price.map(|p| p.as_f64());
+                        let sl_val = sl.map(|s| s.as_f64());
+                        let tp_val = tp.map(|t| t.as_f64());
+
+                        let result = Self::handle_submit_order(
+                            &sys_socket,
+                            &data_socket,
+                            symbol,
+                            order_side,
+                            order_type,
+                            volume,
+                            price_val,
+                            sl_val,
+                            tp_val,
+                            &comment,
+                        );
+
+                        let _ = response_tx.send(result);
+                    }
+                    ZmqCommand::CancelOrder { venue_order_id, response_tx } => {
+                        // Parse venue_order_id (MT5 ticket) as u64
+                        let ticket = venue_order_id.as_str().parse::<u64>()
+                            .unwrap_or_else(|e| {
+                                tracing::error!("Failed to parse venue_order_id as u64: {}", e);
+                                0
+                            });
+
+                        let result = Self::handle_cancel_order(&sys_socket, &data_socket, ticket);
+                        let _ = response_tx.send(result);
+                    }
+                    ZmqCommand::ModifyOrder {
+                        venue_order_id,
+                        price,
+                        quantity: _,  // MT5 doesn't support volume modification
+                        sl,
+                        tp,
+                        response_tx,
+                    } => {
+                        let ticket = venue_order_id.as_str().parse::<u64>()
+                            .unwrap_or_else(|e| {
+                                tracing::error!("Failed to parse venue_order_id as u64: {}", e);
+                                0
+                            });
+
+                        let price_val = price.map(|p| p.as_f64());
+                        let sl_val = sl.map(|s| s.as_f64());
+                        let tp_val = tp.map(|t| t.as_f64());
+
+                        let result = Self::handle_modify_order(
+                            &sys_socket,
+                            &data_socket,
+                            ticket,
+                            price_val,
+                            sl_val,
+                            tp_val,
+                        );
                         let _ = response_tx.send(result);
                     }
                 }
@@ -899,36 +1136,125 @@ impl Mt5Client {
 
     /// Submit a trade order to MT5
     ///
-    /// Sends TRADE action with order parameters
-    pub async fn submit_order(&self, request: Mt5TradeRequest) -> Mt5Result<Mt5TradeResponseMsg> {
-        let request_str = serde_json::to_string(&request)?;
-        let client = self.clone();
+    /// Sends TRADE action with order parameters via command channel
+    pub async fn submit_order(
+        &self,
+        instrument_id: InstrumentId,
+        client_order_id: ClientOrderId,
+        order_side: OrderSide,
+        order_type: OrderType,
+        quantity: Quantity,
+        price: Option<Price>,
+        sl: Option<Price>,
+        tp: Option<Price>,
+        comment: String,
+    ) -> Mt5Result<Mt5TradeResponse> {
+        // Acquire lock to serialize this request-response cycle
+        let _lock = self.request_response_lock.lock().await;
 
-        let response = tokio::task::spawn_blocking(move || client.send_sys_request(&request_str))
+        // Create oneshot channel for response
+        let (response_tx, response_rx) = oneshot::channel();
+
+        // Send command to ZMQ thread
+        self.command_tx
+            .send(ZmqCommand::SubmitOrder {
+                instrument_id,
+                client_order_id,
+                order_side,
+                order_type,
+                quantity,
+                price,
+                sl,
+                tp,
+                comment,
+                response_tx,
+            })
+            .map_err(|_| Mt5Error::Connection("Command channel closed".to_string()))?;
+
+        // Wait for response from ZMQ thread
+        let response = response_rx
             .await
-            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??;
+            .map_err(|_| Mt5Error::Connection("Response channel closed".to_string()))??;
 
-        let trade_response: Mt5TradeResponseMsg = serde_json::from_str(&response)?;
+        // Parse response as Mt5TradeResponse
+        let trade_response: Mt5TradeResponse = serde_json::from_str(&response)
+            .map_err(|e| Mt5Error::Parse(format!("Failed to parse TRADE response: {}", e)))?;
+
         Ok(trade_response)
     }
 
     /// Cancel an order in MT5
     ///
-    /// Sends DELETE action with order ticket
-    pub async fn cancel_order(&self, ticket: i64) -> Mt5Result<Mt5TradeResponseMsg> {
-        let request = serde_json::json!({
-            "action": "DELETE",
-            "order": ticket
-        });
+    /// Sends TRADE_CLOSE action with order ticket via command channel
+    pub async fn cancel_order(&self, venue_order_id: VenueOrderId) -> Mt5Result<Mt5TradeResponse> {
+        // Acquire lock to serialize this request-response cycle
+        let _lock = self.request_response_lock.lock().await;
 
-        let request_str = serde_json::to_string(&request)?;
-        let client = self.clone();
+        // Create oneshot channel for response
+        let (response_tx, response_rx) = oneshot::channel();
 
-        let response = tokio::task::spawn_blocking(move || client.send_sys_request(&request_str))
+        // Send command to ZMQ thread
+        self.command_tx
+            .send(ZmqCommand::CancelOrder {
+                venue_order_id,
+                response_tx,
+            })
+            .map_err(|_| Mt5Error::Connection("Command channel closed".to_string()))?;
+
+        // Wait for response from ZMQ thread
+        let response = response_rx
             .await
-            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??;
+            .map_err(|_| Mt5Error::Connection("Response channel closed".to_string()))??;
 
-        let trade_response: Mt5TradeResponseMsg = serde_json::from_str(&response)?;
+        tracing::debug!("TRADE_CLOSE response received: {} bytes", response.len());
+
+        // Parse response as Mt5TradeResponse
+        let trade_response: Mt5TradeResponse = serde_json::from_str(&response)
+            .map_err(|e| Mt5Error::Parse(format!("Failed to parse TRADE_CLOSE response: {}", e)))?;
+
+        Ok(trade_response)
+    }
+
+    /// Modify an order in MT5
+    ///
+    /// Sends TRADE_MODIFY action to update order parameters via command channel
+    pub async fn modify_order(
+        &self,
+        venue_order_id: VenueOrderId,
+        price: Option<Price>,
+        quantity: Option<Quantity>,
+        sl: Option<Price>,
+        tp: Option<Price>,
+    ) -> Mt5Result<Mt5TradeResponse> {
+        // Acquire lock to serialize this request-response cycle
+        let _lock = self.request_response_lock.lock().await;
+
+        // Create oneshot channel for response
+        let (response_tx, response_rx) = oneshot::channel();
+
+        // Send command to ZMQ thread
+        self.command_tx
+            .send(ZmqCommand::ModifyOrder {
+                venue_order_id,
+                price,
+                quantity,
+                sl,
+                tp,
+                response_tx,
+            })
+            .map_err(|_| Mt5Error::Connection("Command channel closed".to_string()))?;
+
+        // Wait for response from ZMQ thread
+        let response = response_rx
+            .await
+            .map_err(|_| Mt5Error::Connection("Response channel closed".to_string()))??;
+
+        tracing::debug!("TRADE_MODIFY response received: {} bytes", response.len());
+
+        // Parse response as Mt5TradeResponse
+        let trade_response: Mt5TradeResponse = serde_json::from_str(&response)
+            .map_err(|e| Mt5Error::Parse(format!("Failed to parse TRADE_MODIFY response: {}", e)))?;
+
         Ok(trade_response)
     }
 }

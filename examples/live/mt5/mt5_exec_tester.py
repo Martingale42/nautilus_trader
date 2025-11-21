@@ -79,6 +79,7 @@ config_node = TradingNodeConfig(
             live_port=2203,  # Tick data streaming port
             stream_port=2204,  # Order/position updates port
             sys_port=2201,  # Commands/queries port
+            account_id=mt5_account_id,  # IMPORTANT: Must match exec client for shared Mt5Client instance
             instrument_provider=InstrumentProviderConfig(load_all=True),
         ),
     },

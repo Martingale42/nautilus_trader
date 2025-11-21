@@ -23,11 +23,14 @@
 use futures_util::StreamExt;
 use nautilus_core::python::to_pyruntime_err;
 use nautilus_model::{
+    enums::{OrderSide, OrderType},
+    identifiers::{ClientOrderId, InstrumentId},
     instruments::Instrument,
     python::{
         data::data_to_pycapsule,
         instruments::{instrument_any_to_pyobject, pyobject_to_instrument_any},
     },
+    types::{Price, Quantity},
 };
 use pyo3::{conversion::IntoPyObjectExt, prelude::*, types::{PyDict, PyList}};
 
@@ -295,12 +298,13 @@ impl Mt5Client {
                         let dict = PyDict::new(py);
                         dict.set_item("ticket", order.ticket)?;
                         dict.set_item("symbol", order.symbol.as_str())?;
-                        dict.set_item("type_order", order.type_order)?;
-                        dict.set_item("state", order.state)?;
-                        dict.set_item("volume", order.volume)?;
+                        dict.set_item("type", order.type_.as_str())?;
+                        dict.set_item("state", order.state.as_str())?;
+                        dict.set_item("volume_initial", order.volume_initial)?;
+                        dict.set_item("volume_current", order.volume_current)?;
                         dict.set_item("price_open", order.price_open)?;
-                        dict.set_item("sl", order.sl)?;
-                        dict.set_item("tp", order.tp)?;
+                        dict.set_item("stoploss", order.stoploss)?;
+                        dict.set_item("takeprofit", order.takeprofit)?;
                         dict.set_item("time_setup", order.time_setup)?;
                         dict.set_item("comment", order.comment.as_str())?;
                         dict.into_py_any(py)
@@ -329,15 +333,16 @@ impl Mt5Client {
                     .into_iter()
                     .map(|pos| {
                         let dict = PyDict::new(py);
-                        dict.set_item("ticket", pos.ticket)?;
+                        dict.set_item("id", pos.id)?;
+                        dict.set_item("magic", pos.magic)?;
                         dict.set_item("symbol", pos.symbol.as_str())?;
-                        dict.set_item("type_position", pos.type_position)?;
+                        dict.set_item("type", pos.type_.as_str())?;
+                        dict.set_item("time_setup", pos.time_setup)?;
+                        dict.set_item("open", pos.open)?;
                         dict.set_item("volume", pos.volume)?;
-                        dict.set_item("price_open", pos.price_open)?;
-                        dict.set_item("sl", pos.sl)?;
-                        dict.set_item("tp", pos.tp)?;
+                        dict.set_item("stoploss", pos.stoploss)?;
+                        dict.set_item("takeprofit", pos.takeprofit)?;
                         dict.set_item("profit", pos.profit)?;
-                        dict.set_item("comment", pos.comment.as_str())?;
                         dict.into_py_any(py)
                     })
                     .collect();
@@ -354,55 +359,39 @@ impl Mt5Client {
     fn py_submit_order<'py>(
         &self,
         py: Python<'py>,
-        symbol: String,
-        order_type: String,
-        volume: f64,
-        price: f64,
-        sl: f64,
-        tp: f64,
+        instrument_id: InstrumentId,
+        client_order_id: ClientOrderId,
+        order_side: OrderSide,
+        order_type: OrderType,
+        quantity: Quantity,
+        price: Option<Price>,
+        sl: Option<Price>,
+        tp: Option<Price>,
         comment: String,
     ) -> PyResult<Bound<'py, PyAny>> {
-        use crate::common::Mt5OrderType;
-        use crate::websocket::messages::Mt5TradeRequest;
-
         let client = self.clone();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            // Convert order type string to enum
-            let mt5_order_type = match order_type.as_str() {
-                "ORDER_TYPE_BUY" => Mt5OrderType::OrderTypeBuy,
-                "ORDER_TYPE_SELL" => Mt5OrderType::OrderTypeSell,
-                "ORDER_TYPE_BUY_LIMIT" => Mt5OrderType::OrderTypeBuyLimit,
-                "ORDER_TYPE_SELL_LIMIT" => Mt5OrderType::OrderTypeSellLimit,
-                "ORDER_TYPE_BUY_STOP" => Mt5OrderType::OrderTypeBuyStop,
-                "ORDER_TYPE_SELL_STOP" => Mt5OrderType::OrderTypeSellStop,
-                _ => {
-                    return Err(to_pyruntime_err(crate::websocket::client::Mt5Error::Parse(
-                        format!("Unknown order type: {}", order_type),
-                    )))
-                }
-            };
-
-            let request = Mt5TradeRequest {
-                action: ustr::Ustr::from("TRADE"),
-                action_type: mt5_order_type,
-                symbol: symbol.into(),
-                volume,
-                price,
-                stoploss: sl,
-                takeprofit: tp,
-                deviation: 0.0,
-                comment: comment.into(),
-                expiration: 0,
-            };
-
-            let response = client.submit_order(request).await.map_err(to_pyruntime_err)?;
+            let response = client
+                .submit_order(
+                    instrument_id,
+                    client_order_id,
+                    order_side,
+                    order_type,
+                    quantity,
+                    price,
+                    sl,
+                    tp,
+                    comment,
+                )
+                .await
+                .map_err(to_pyruntime_err)?;
 
             Python::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("error", response.error)?;
                 dict.set_item("retcode", response.retcode)?;
-                dict.set_item("description", response.description.as_str())?;
+                dict.set_item("description", response.desription.as_str())?; // MT5's typo
                 dict.set_item("order", response.order)?;
                 dict.set_item("volume", response.volume)?;
                 dict.set_item("price", response.price)?;
@@ -420,15 +409,18 @@ impl Mt5Client {
         py: Python<'py>,
         ticket: i64,
     ) -> PyResult<Bound<'py, PyAny>> {
+        use nautilus_model::identifiers::VenueOrderId;
+
         let client = self.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let response = client.cancel_order(ticket).await.map_err(to_pyruntime_err)?;
+            let venue_order_id = VenueOrderId::new(&ticket.to_string());
+            let response = client.cancel_order(venue_order_id).await.map_err(to_pyruntime_err)?;
 
             Python::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("error", response.error)?;
                 dict.set_item("retcode", response.retcode)?;
-                dict.set_item("description", response.description.as_str())?;
+                dict.set_item("description", response.desription.as_str())?; // MT5's typo
                 dict.set_item("order", response.order)?;
                 dict.into_py_any(py)
             })

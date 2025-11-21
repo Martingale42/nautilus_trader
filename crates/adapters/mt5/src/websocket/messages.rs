@@ -117,63 +117,6 @@ pub struct Mt5TradeResponseMsg {
     pub function: Ustr,
 }
 
-/// MT5 order message
-///
-/// Represents a pending or historical order
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Mt5OrderMsg {
-    /// Order ticket
-    pub ticket: i64,
-    /// Symbol
-    pub symbol: Ustr,
-    /// Order type (0=BUY, 1=SELL, etc.)
-    pub type_order: i32,
-    /// Order state
-    pub state: i32,
-    /// Volume
-    pub volume: f64,
-    /// Opening price
-    pub price_open: f64,
-    /// Stop loss
-    #[serde(default)]
-    pub sl: f64,
-    /// Take profit
-    #[serde(default)]
-    pub tp: f64,
-    /// Time when order was set up
-    pub time_setup: i64,
-    /// Order comment (used for client order ID)
-    #[serde(default)]
-    pub comment: Ustr,
-}
-
-/// MT5 position message
-///
-/// Represents an open position
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Mt5PositionMsg {
-    /// Position ticket
-    pub ticket: i64,
-    /// Symbol
-    pub symbol: Ustr,
-    /// Position type (0=BUY, 1=SELL)
-    pub type_position: i32,
-    /// Volume
-    pub volume: f64,
-    /// Opening price
-    pub price_open: f64,
-    /// Stop loss
-    #[serde(default)]
-    pub sl: f64,
-    /// Take profit
-    #[serde(default)]
-    pub tp: f64,
-    /// Current profit
-    pub profit: f64,
-    /// Position comment
-    #[serde(default)]
-    pub comment: Ustr,
-}
 
 /// MT5 historical data message
 ///
@@ -260,6 +203,124 @@ pub struct Mt5ErrorMsg {
     /// Function where error occurred
     #[serde(default)]
     pub function: Ustr,
+}
+
+/// MT5 trade response
+///
+/// Response to TRADE action (order submission)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5TradeResponse {
+    /// Whether the response contains an error
+    pub error: bool,
+    /// Return code (e.g., 10009 = TRADE_RETCODE_DONE)
+    pub retcode: i32,
+    /// Return code description
+    #[serde(default)]
+    pub desription: Ustr,  // Note: MT5 has typo "desription"
+    /// Order ticket number (venue_order_id)
+    pub order: u64,
+    /// Executed volume
+    pub volume: f64,
+    /// Execution price
+    pub price: f64,
+    /// Current bid price
+    pub bid: f64,
+    /// Current ask price
+    pub ask: f64,
+    /// Function name
+    #[serde(default)]
+    pub function: Ustr,
+}
+
+/// MT5 order information
+///
+/// Represents a pending order in MT5
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5OrderMsg {
+    /// Order ticket (unique identifier)
+    pub ticket: u64,
+    /// Symbol name
+    pub symbol: Ustr,
+    /// Order type (e.g., "ORDER_TYPE_BUY_LIMIT")
+    #[serde(rename = "type")]
+    pub type_: Ustr,
+    /// Order state (e.g., "ORDER_STATE_PLACED")
+    #[serde(default)]
+    pub state: Ustr,
+    /// Initial volume
+    pub volume_initial: f64,
+    /// Current volume (unfilled)
+    pub volume_current: f64,
+    /// Order price
+    pub price_open: f64,
+    /// Stop loss price
+    #[serde(default)]
+    pub stoploss: f64,
+    /// Take profit price
+    #[serde(default)]
+    pub takeprofit: f64,
+    /// Order setup time (Unix timestamp)
+    pub time_setup: i64,
+    /// Order comment
+    #[serde(default)]
+    pub comment: Ustr,
+}
+
+/// MT5 position information
+///
+/// Represents an open position in MT5
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5PositionMsg {
+    /// Position identifier (unique ID)
+    pub id: u64,
+    /// Magic number
+    #[serde(default)]
+    pub magic: i64,
+    /// Symbol name
+    pub symbol: Ustr,
+    /// Position type (e.g., "POSITION_TYPE_BUY")
+    #[serde(rename = "type")]
+    pub type_: Ustr,
+    /// Position open time (Unix timestamp)
+    pub time_setup: i64,
+    /// Open price
+    pub open: f64,
+    /// Stop loss price
+    #[serde(default)]
+    pub stoploss: f64,
+    /// Take profit price
+    #[serde(default)]
+    pub takeprofit: f64,
+    /// Position volume
+    pub volume: f64,
+    /// Current profit (optional)
+    #[serde(default)]
+    pub profit: f64,
+}
+
+/// MT5 orders response
+///
+/// Response to ORDERS query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5OrdersResponse {
+    /// Whether the response contains an error
+    pub error: bool,
+    /// List of pending orders
+    pub orders: Vec<Mt5OrderMsg>,
+}
+
+/// MT5 positions response
+///
+/// Response to POSITIONS query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5PositionsResponse {
+    /// Whether the response contains an error
+    pub error: bool,
+    /// List of open positions
+    pub positions: Vec<Mt5PositionMsg>,
+    /// Server time (Unix timestamp)
+    #[serde(default)]
+    pub server_time: i64,
 }
 
 /// MT5 symbol information response

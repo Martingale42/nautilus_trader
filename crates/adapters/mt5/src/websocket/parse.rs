@@ -211,39 +211,50 @@ pub fn parse_mt5_order_status(
         ClientOrderId::new(&format!("mt5-{}", msg.ticket))
     };
 
-    // Map MT5 order type to Nautilus OrderType
-    let order_side = match msg.type_order {
-        0 | 2 | 4 | 6 => OrderSide::Buy,  // BUY, BUY_LIMIT, BUY_STOP, BUY_STOP_LIMIT
-        1 | 3 | 5 | 7 => OrderSide::Sell, // SELL, SELL_LIMIT, SELL_STOP, SELL_STOP_LIMIT
-        _ => OrderSide::NoOrderSide,
+    // Map MT5 order type to Nautilus OrderType (MT5 sends as string)
+    let type_str = msg.type_.as_str();
+    let order_side = if type_str.contains("BUY") {
+        OrderSide::Buy
+    } else if type_str.contains("SELL") {
+        OrderSide::Sell
+    } else {
+        OrderSide::NoOrderSide
     };
 
-    let order_type = match msg.type_order {
-        0 | 1 => OrderType::Market,         // Market orders
-        2 | 3 => OrderType::Limit,          // Limit orders
-        4 | 5 => OrderType::StopMarket,     // Stop orders
-        6 | 7 => OrderType::StopLimit,      // Stop limit orders
-        _ => OrderType::Market,             // Default
+    let order_type = if type_str.contains("LIMIT") && type_str.contains("STOP") {
+        OrderType::StopLimit
+    } else if type_str.contains("STOP") {
+        OrderType::StopMarket
+    } else if type_str.contains("LIMIT") {
+        OrderType::Limit
+    } else {
+        OrderType::Market
     };
 
-    // Map MT5 order state to Nautilus OrderStatus
-    let order_status = match msg.state {
-        0 => OrderStatus::Initialized, // Started
-        1 => OrderStatus::Accepted,     // Placed
-        2 => OrderStatus::Canceled,     // Canceled
-        3 => OrderStatus::PartiallyFilled, // Partial
-        4 => OrderStatus::Filled,       // Filled
-        5 => OrderStatus::Rejected,     // Rejected
-        6 => OrderStatus::Expired,      // Expired
-        _ => OrderStatus::Initialized,
+    // Map MT5 order state to Nautilus OrderStatus (MT5 sends as string)
+    let state_str = msg.state.as_str();
+    let order_status = if state_str.contains("FILLED") || state_str.contains("PLACED") {
+        OrderStatus::Filled
+    } else if state_str.contains("CANCELED") {
+        OrderStatus::Canceled
+    } else if state_str.contains("REJECTED") {
+        OrderStatus::Rejected
+    } else if state_str.contains("EXPIRED") {
+        OrderStatus::Expired
+    } else if state_str.contains("PARTIAL") {
+        OrderStatus::PartiallyFilled
+    } else if state_str.contains("ACCEPTED") || state_str.contains("STARTED") {
+        OrderStatus::Accepted
+    } else {
+        OrderStatus::Initialized
     };
 
     let price = Price::new(msg.price_open, instrument.price_precision());
-    let quantity = Quantity::new(msg.volume, instrument.size_precision());
+    let quantity = Quantity::new(msg.volume_initial, instrument.size_precision());
 
-    // For now, assume filled_qty is 0 for pending orders and volume for filled orders
-    let filled_qty = if msg.state == 4 {
-        quantity
+    // Calculate filled quantity based on current volume
+    let filled_qty = if msg.volume_current < msg.volume_initial {
+        Quantity::new(msg.volume_initial - msg.volume_current, instrument.size_precision())
     } else {
         Quantity::zero(instrument.size_precision())
     };
