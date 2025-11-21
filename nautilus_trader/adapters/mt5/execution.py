@@ -40,6 +40,7 @@ from nautilus_trader.execution.messages import GenerateOrderStatusReports
 from nautilus_trader.execution.messages import GeneratePositionStatusReports
 from nautilus_trader.execution.messages import QueryAccount
 from nautilus_trader.execution.messages import SubmitOrder
+from nautilus_trader.execution.messages import SubmitOrderList
 from nautilus_trader.execution.reports import FillReport
 from nautilus_trader.execution.reports import OrderStatusReport
 from nautilus_trader.execution.reports import PositionStatusReport
@@ -677,6 +678,230 @@ class MT5ExecutionClient(LiveExecutionClient):
                 ts_event=self._clock.timestamp_ns(),
             )
 
+    async def _submit_order_list(self, command: SubmitOrderList) -> None:
+        """
+        Submit an order list (bracket orders) to MT5.
+
+        MT5 Strategy:
+        1. Submit entry order with attached SL/TP (extracted from child orders)
+        2. Generate events for all orders in the bracket
+        3. MT5 manages SL/TP internally, we create virtual venue IDs for them
+
+        Parameters
+        ----------
+        command : SubmitOrderList
+            The submit order list command.
+
+        """
+        order_list = command.order_list
+        orders = list(order_list.orders)
+
+        if not orders:
+            self._log.warning("Received empty order list, ignoring")
+            return
+
+        self._log.info(
+            f"Submitting order list {order_list.id} with {len(orders)} orders",
+            LogColor.BLUE,
+        )
+
+        # Identify entry order (first order in the list)
+        # In NautilusTrader bracket orders, the first order is the entry
+        entry_order = order_list.first
+
+        # Identify child orders (SL/TP) via linked_order_ids
+        child_orders = []
+        if hasattr(entry_order, 'linked_order_ids') and entry_order.linked_order_ids:
+            for linked_id in entry_order.linked_order_ids:
+                child_order = self._cache.order(linked_id)
+                if child_order:
+                    child_orders.append(child_order)
+                    self._log.debug(
+                        f"Found linked child order: {child_order.client_order_id} "
+                        f"with tags {child_order.tags}",
+                    )
+
+        # Validate order types
+        if entry_order.order_type not in MT5_SUPPORTED_ORDER_TYPES:
+            reason = f"Unsupported entry order type: {entry_order.order_type_string()}"
+            self._log.error(reason)
+            self._reject_order_bracket(entry_order, child_orders, reason)
+            return
+
+        # Generate submitted events for all orders in the bracket
+        self.generate_order_submitted(
+            strategy_id=entry_order.strategy_id,
+            instrument_id=entry_order.instrument_id,
+            client_order_id=entry_order.client_order_id,
+            ts_event=self._clock.timestamp_ns(),
+        )
+
+        for child in child_orders:
+            self.generate_order_submitted(
+                strategy_id=child.strategy_id,
+                instrument_id=child.instrument_id,
+                client_order_id=child.client_order_id,
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+        # Submit entry order (SL/TP will be extracted automatically by existing logic)
+        try:
+            if entry_order.order_type == OrderType.MARKET:
+                report = await self._submit_market_order(entry_order)
+            elif entry_order.order_type == OrderType.LIMIT:
+                report = await self._submit_limit_order(entry_order)
+            elif entry_order.order_type == OrderType.STOP_MARKET:
+                report = await self._submit_stop_market_order(entry_order)
+            elif entry_order.order_type == OrderType.STOP_LIMIT:
+                report = await self._submit_stop_limit_order(entry_order)
+            else:
+                raise ValueError(f"Unsupported entry order type: {entry_order.order_type}")
+
+            # Generate accepted event for entry order
+            if report is not None:
+                self.generate_order_accepted(
+                    strategy_id=entry_order.strategy_id,
+                    instrument_id=entry_order.instrument_id,
+                    client_order_id=entry_order.client_order_id,
+                    venue_order_id=VenueOrderId(report.venue_order_id.value),
+                    ts_event=self._clock.timestamp_ns(),
+                )
+
+                # Generate accepted events for child orders (SL/TP)
+                # MT5 manages these internally, so we create virtual venue IDs
+                for child in child_orders:
+                    # Determine child type from tags
+                    child_type = "UNKNOWN"
+                    if child.tags and 'STOP_LOSS' in child.tags:
+                        child_type = "SL"
+                    elif child.tags and 'TAKE_PROFIT' in child.tags:
+                        child_type = "TP"
+
+                    # Create virtual venue order ID: <parent_ticket>-<type>
+                    virtual_venue_id = f"{report.venue_order_id.value}-{child_type}"
+
+                    self.generate_order_accepted(
+                        strategy_id=child.strategy_id,
+                        instrument_id=child.instrument_id,
+                        client_order_id=child.client_order_id,
+                        venue_order_id=VenueOrderId(virtual_venue_id),
+                        ts_event=self._clock.timestamp_ns(),
+                    )
+
+                    self._log.info(
+                        f"Generated virtual acceptance for {child_type} order "
+                        f"{child.client_order_id} -> {virtual_venue_id}",
+                        LogColor.GREEN,
+                    )
+
+                self._log.info(
+                    f"Successfully submitted bracket order: entry {entry_order.client_order_id} "
+                    f"with {len(child_orders)} child orders",
+                    LogColor.GREEN,
+                )
+            else:
+                # Submission returned None, reject all orders
+                reason = "Entry order submission returned no report"
+                self._reject_order_bracket(entry_order, child_orders, reason)
+
+        except Exception as e:
+            self._log.exception(f"Error submitting bracket order: {e}", e)
+            self._reject_order_bracket(entry_order, child_orders, str(e))
+
+    def _reject_order_bracket(
+        self,
+        entry_order: Order,
+        child_orders: list[Order],
+        reason: str,
+    ) -> None:
+        """
+        Reject all orders in a bracket.
+
+        Parameters
+        ----------
+        entry_order : Order
+            The entry order.
+        child_orders : list[Order]
+            The child orders (SL/TP).
+        reason : str
+            The rejection reason.
+
+        """
+        # Reject entry order
+        self.generate_order_rejected(
+            strategy_id=entry_order.strategy_id,
+            instrument_id=entry_order.instrument_id,
+            client_order_id=entry_order.client_order_id,
+            reason=reason,
+            ts_event=self._clock.timestamp_ns(),
+        )
+
+        # Reject all child orders
+        for child in child_orders:
+            self.generate_order_rejected(
+                strategy_id=child.strategy_id,
+                instrument_id=child.instrument_id,
+                client_order_id=child.client_order_id,
+                reason=f"Parent order rejected: {reason}",
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+    def _extract_sl_tp_from_linked_orders(
+        self,
+        order: Order,
+    ) -> tuple[nautilus_pyo3.Price | None, nautilus_pyo3.Price | None]:
+        """
+        Extract stop loss and take profit prices from linked orders.
+
+        This method looks at linked orders (typically in bracket orders) and extracts
+        SL/TP prices to attach to the entry order. This is MT5's native way of handling
+        bracket orders - attach SL/TP directly to the entry order.
+
+        Parameters
+        ----------
+        order : Order
+            The entry order to extract SL/TP for.
+
+        Returns
+        -------
+        tuple[Price | None, Price | None]
+            Stop loss and take profit prices (sl, tp).
+
+        """
+        sl = None
+        tp = None
+
+        # Check if this order has linked orders (bracket order structure)
+        if not hasattr(order, 'linked_order_ids') or not order.linked_order_ids:
+            return (sl, tp)
+
+        # Iterate through linked orders to find SL and TP
+        for linked_id in order.linked_order_ids:
+            linked_order = self._cache.order(linked_id)
+            if not linked_order:
+                continue
+
+            # Check order tags to identify SL/TP
+            tags = linked_order.tags or []
+
+            if 'STOP_LOSS' in tags:
+                # Stop loss is a stop market order - use trigger_price
+                if isinstance(linked_order, StopMarketOrder):
+                    sl = nautilus_pyo3.Price.from_str(str(linked_order.trigger_price))
+                    self._log.debug(f"Extracted SL: {linked_order.trigger_price} from {linked_id}")
+                else:
+                    self._log.warning(f"Stop loss order {linked_id} is not StopMarketOrder, skipping")
+
+            elif 'TAKE_PROFIT' in tags:
+                # Take profit is a limit order - use limit price
+                if isinstance(linked_order, LimitOrder):
+                    tp = nautilus_pyo3.Price.from_str(str(linked_order.price))
+                    self._log.debug(f"Extracted TP: {linked_order.price} from {linked_id}")
+                else:
+                    self._log.warning(f"Take profit order {linked_id} is not LimitOrder, skipping")
+
+        return (sl, tp)
+
     async def _submit_market_order(
         self,
         order: MarketOrder,
@@ -703,16 +928,20 @@ class MT5ExecutionClient(LiveExecutionClient):
         quantity = nautilus_pyo3.Quantity.from_str(str(order.quantity))
         price = None  # Market orders don't have a limit price
 
-        # Extract SL/TP if present
-        sl = None
-        tp = None
+        # Extract SL/TP from linked orders (bracket orders)
+        sl, tp = self._extract_sl_tp_from_linked_orders(order)
 
         # Comment contains client_order_id for tracking
         comment = order.client_order_id.value
 
+        # Build log message with SL/TP info
+        sl_tp_info = ""
+        if sl or tp:
+            sl_tp_info = f" (SL: {sl.as_double() if sl else 'None'}, TP: {tp.as_double() if tp else 'None'})"
+
         self._log.info(
             f"Submitting MARKET order to MT5: {order.side} {order.quantity} "
-            f"{order.instrument_id.symbol}",
+            f"{order.instrument_id.symbol}{sl_tp_info}",
         )
 
         # Call Rust client
@@ -782,16 +1011,20 @@ class MT5ExecutionClient(LiveExecutionClient):
         quantity = nautilus_pyo3.Quantity.from_str(str(order.quantity))
         price = nautilus_pyo3.Price.from_str(str(order.price))
 
-        # Extract SL/TP if present (from trigger_price for stop orders or exec params)
-        sl = None
-        tp = None
+        # Extract SL/TP from linked orders (bracket orders)
+        sl, tp = self._extract_sl_tp_from_linked_orders(order)
 
         # Comment contains client_order_id for tracking
         comment = order.client_order_id.value
 
+        # Build log message with SL/TP info
+        sl_tp_info = ""
+        if sl or tp:
+            sl_tp_info = f" (SL: {sl.as_double() if sl else 'None'}, TP: {tp.as_double() if tp else 'None'})"
+
         self._log.info(
             f"Submitting LIMIT order to MT5: {order.side} {order.quantity} "
-            f"{order.instrument_id.symbol} @ {order.price}",
+            f"{order.instrument_id.symbol} @ {order.price}{sl_tp_info}",
         )
 
         # Call Rust client
@@ -861,16 +1094,20 @@ class MT5ExecutionClient(LiveExecutionClient):
         quantity = nautilus_pyo3.Quantity.from_str(str(order.quantity))
         price = nautilus_pyo3.Price.from_str(str(order.trigger_price))  # Stop price
 
-        # Extract SL/TP if present
-        sl = None
-        tp = None
+        # Extract SL/TP from linked orders (bracket orders)
+        sl, tp = self._extract_sl_tp_from_linked_orders(order)
 
         # Comment contains client_order_id for tracking
         comment = order.client_order_id.value
 
+        # Build log message with SL/TP info
+        sl_tp_info = ""
+        if sl or tp:
+            sl_tp_info = f" (SL: {sl.as_double() if sl else 'None'}, TP: {tp.as_double() if tp else 'None'})"
+
         self._log.info(
             f"Submitting STOP_MARKET order to MT5: {order.side} {order.quantity} "
-            f"{order.instrument_id.symbol} @ stop {order.trigger_price}",
+            f"{order.instrument_id.symbol} @ stop {order.trigger_price}{sl_tp_info}",
         )
 
         # Call Rust client
@@ -941,16 +1178,20 @@ class MT5ExecutionClient(LiveExecutionClient):
         # MT5 typically uses the trigger_price as the main price and limit as a deviation
         price = nautilus_pyo3.Price.from_str(str(order.trigger_price))
 
-        # Extract SL/TP if present
-        sl = None
-        tp = None
+        # Extract SL/TP from linked orders (bracket orders)
+        sl, tp = self._extract_sl_tp_from_linked_orders(order)
 
         # Comment contains client_order_id for tracking
         comment = order.client_order_id.value
 
+        # Build log message with SL/TP info
+        sl_tp_info = ""
+        if sl or tp:
+            sl_tp_info = f" (SL: {sl.as_double() if sl else 'None'}, TP: {tp.as_double() if tp else 'None'})"
+
         self._log.info(
             f"Submitting STOP_LIMIT order to MT5: {order.side} {order.quantity} "
-            f"{order.instrument_id.symbol} @ stop {order.trigger_price} limit {order.price}",
+            f"{order.instrument_id.symbol} @ stop {order.trigger_price} limit {order.price}{sl_tp_info}",
         )
 
         # Call Rust client
