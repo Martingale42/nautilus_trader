@@ -535,14 +535,45 @@ class MT5ExecutionClient(LiveExecutionClient):
             )
             return
 
+        if order.venue_order_id is None:
+            self._log.error(f"Cannot cancel order {command.client_order_id}: no venue_order_id")
+            return
+
         try:
-            # TODO: Implement in Rust client
-            # await self._client.cancel_order(
-            #     account_id=self.pyo3_account_id,
-            #     venue_order_id=nautilus_pyo3.VenueOrderId(order.venue_order_id.value),
-            # )
-            self._log.warning(f"Order cancellation not yet fully implemented for {order.venue_order_id}")
+            # Extract ticket number from venue_order_id
+            # For bracket orders: venue_order_id format is like "31222559-SL" or "31222559-TP"
+            # We need to extract the numeric ticket
+            ticket_str = order.venue_order_id.value.split("-")[0]
+            ticket = int(ticket_str)
+
+            self._log.info(f"Canceling order {order.venue_order_id} (ticket={ticket})")
+
+            # Call Rust client
+            response = await self._client.cancel_order(ticket)
+
+            # Parse response
+            if response.get("error", True):
+                error_msg = (
+                    f"MT5 order cancellation failed: "
+                    f"retcode={response.get('retcode', 'unknown')}, "
+                    f"description={response.get('description', 'no description')}"
+                )
+                self._log.error(error_msg, LogColor.RED)
+                self.generate_order_cancel_rejected(
+                    order.strategy_id,
+                    order.instrument_id,
+                    order.client_order_id,
+                    order.venue_order_id,
+                    error_msg,
+                    self._clock.timestamp_ns(),
+                )
+            else:
+                self._log.info(
+                    f"Order canceled successfully in MT5: ticket={ticket}",
+                    LogColor.GREEN,
+                )
         except Exception as e:
+            self._log.exception(f"Error canceling order {order.venue_order_id}", e)
             self.generate_order_cancel_rejected(
                 order.strategy_id,
                 order.instrument_id,
@@ -566,30 +597,67 @@ class MT5ExecutionClient(LiveExecutionClient):
         if instrument is None:
             raise ValueError(f"Instrument {command.instrument_id} not found")
 
-        try:
-            # TODO: Implement in Rust client
-            # pyo3_order_side: nautilus_pyo3.OrderSide | None = None
-            # if command.order_side == OrderSide.BUY:
-            #     pyo3_order_side = nautilus_pyo3.OrderSide.BUY
-            # elif command.order_side == OrderSide.SELL:
-            #     pyo3_order_side = nautilus_pyo3.OrderSide.SELL
-            #
-            # await self._client.cancel_all_orders(
-            #     account_id=self.pyo3_account_id,
-            #     symbol=nautilus_pyo3.Symbol(command.instrument_id.symbol.value),
-            #     order_side=pyo3_order_side,
-            # )
-            self._log.warning("Cancel all orders not yet fully implemented")
-        except Exception as e:
-            orders_open: list[Order] = self._cache.orders_open(instrument_id=command.instrument_id)
-            for open_order in orders_open:
-                if open_order.is_closed:
-                    continue
+        # Get all open orders for the instrument
+        orders_open: list[Order] = self._cache.orders_open(instrument_id=command.instrument_id)
+
+        # Filter by order side if specified
+        if command.order_side is not None:
+            orders_open = [o for o in orders_open if o.side == command.order_side]
+
+        if not orders_open:
+            self._log.info(f"No open orders to cancel for {command.instrument_id}")
+            return
+
+        self._log.info(f"Canceling {len(orders_open)} open order(s) for {command.instrument_id}")
+
+        # Cancel each order individually
+        # Note: MT5 doesn't have a bulk cancel API, so we cancel one by one
+        for order in orders_open:
+            if order.is_closed:
+                continue
+
+            if order.venue_order_id is None:
+                self._log.warning(f"Skipping order {order.client_order_id}: no venue_order_id")
+                continue
+
+            try:
+                # Extract ticket number from venue_order_id
+                ticket_str = order.venue_order_id.value.split("-")[0]
+                ticket = int(ticket_str)
+
+                self._log.info(f"Canceling order {order.venue_order_id} (ticket={ticket})")
+
+                # Call Rust client
+                response = await self._client.cancel_order(ticket)
+
+                # Parse response
+                if response.get("error", True):
+                    error_msg = (
+                        f"MT5 order cancellation failed: "
+                        f"retcode={response.get('retcode', 'unknown')}, "
+                        f"description={response.get('description', 'no description')}"
+                    )
+                    self._log.error(error_msg, LogColor.RED)
+                    self.generate_order_cancel_rejected(
+                        order.strategy_id,
+                        order.instrument_id,
+                        order.client_order_id,
+                        order.venue_order_id,
+                        error_msg,
+                        self._clock.timestamp_ns(),
+                    )
+                else:
+                    self._log.info(
+                        f"Order canceled successfully in MT5: ticket={ticket}",
+                        LogColor.GREEN,
+                    )
+            except Exception as e:
+                self._log.exception(f"Error canceling order {order.venue_order_id}", e)
                 self.generate_order_cancel_rejected(
-                    open_order.strategy_id,
-                    open_order.instrument_id,
-                    open_order.client_order_id,
-                    open_order.venue_order_id,
+                    order.strategy_id,
+                    order.instrument_id,
+                    order.client_order_id,
+                    order.venue_order_id,
                     str(e),
                     self._clock.timestamp_ns(),
                 )
