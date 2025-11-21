@@ -80,14 +80,14 @@ node = TradingNode(config=config_node)
 # Replace with symbols available in your MT5 Market Watch
 instrument_ids = [
     InstrumentId.from_str("BTCUSD.MT5"),
-    InstrumentId.from_str("ADAUSD.MT5"),
-    InstrumentId.from_str("DOGEUSD.MT5"),
+    # InstrumentId.from_str("ADAUSD.MT5"),
+    # InstrumentId.from_str("DOGEUSD.MT5"),
 ]
 
 # Configure your actor
 config_tester = DataTesterConfig(
     instrument_ids=instrument_ids,
-    bar_types=[BarType.from_str("BTCUSD.MT5-1-MINUTE-LAST-EXTERNAL"), BarType.from_str("ADAUSD.MT5-1-MINUTE-LAST-EXTERNAL"), BarType.from_str("DOGEUSD.MT5-1-MINUTE-LAST-EXTERNAL")],
+    bar_types=[BarType.from_str("BTCUSD.MT5-1-MINUTE-LAST-EXTERNAL")], # , BarType.from_str("ADAUSD.MT5-1-MINUTE-LAST-EXTERNAL"), BarType.from_str("DOGEUSD.MT5-1-MINUTE-LAST-EXTERNAL")],
     subscribe_quotes=True,  # Subscribe to QuoteTicks (bid/ask)
     subscribe_trades=False,  # TradeTicks not commonly used for MT5
     subscribe_bars=True,  # Subscribe to BarTicks (M1)
@@ -97,6 +97,8 @@ config_tester = DataTesterConfig(
     # subscribe_book_deltas=False,  # Not supported by MT5
     # manage_book=False,  # Not supported by MT5
     # subscribe_book_at_interval=False,  # Not supported by MT5
+    request_quotes=True,
+    request_bars=True,
     log_data=True,  # Log received data for verification
     log_events=True,
     log_commands=True

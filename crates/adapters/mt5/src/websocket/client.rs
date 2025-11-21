@@ -106,6 +106,15 @@ pub enum ZmqCommand {
         tp: Option<Price>,
         response_tx: oneshot::Sender<Mt5Result<String>>,
     },
+    /// Request historical data (bars or ticks)
+    RequestHistory {
+        symbol: String,
+        timeframe: String,
+        start: Option<i64>,
+        end: Option<i64>,
+        count: Option<i32>,
+        response_tx: oneshot::Sender<Mt5Result<String>>,
+    },
 }
 
 /// Configuration for MT5 client
@@ -390,6 +399,65 @@ impl Mt5Client {
 
         tracing::debug!("SYMBOL_INFO response received: {} bytes", response.len());
         Ok(response)
+    }
+
+    /// Handle HISTORY request-response in ZMQ thread
+    ///
+    /// Sends HISTORY request, waits for ACK, then receives response from dataSocket
+    fn handle_history_request(
+        sys_socket: &zmq::Socket,
+        data_socket: &zmq::Socket,
+        symbol: &str,
+        timeframe: &str,
+        start: Option<i64>,
+        end: Option<i64>,
+        count: Option<i32>,
+    ) -> Mt5Result<String> {
+        let request = serde_json::json!({
+            "action": "HISTORY",
+            "actionType": "DATA",
+            "symbol": symbol,
+            "chartTF": timeframe,
+            "fromDate": start.unwrap_or(0),
+            "toDate": end.unwrap_or(0),
+            "count": count.unwrap_or(1000)
+        });
+        let request_str = serde_json::to_string(&request)?;
+
+        tracing::debug!("Sending HISTORY request: {}", request_str);
+
+        // Send request via REQ socket
+        sys_socket.send(&request_str, 0)?;
+
+        // Wait for ACK (blocking, should be fast)
+        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        tracing::debug!("HISTORY ACK: {}", ack);
+
+        // Receive actual response from PULL socket (blocking with timeout)
+        // Note: dataSocket may receive multiple messages - loop to find HISTORY response
+        data_socket.set_rcvtimeo(10000)?; // 10 second timeout
+
+        // Try up to 10 times to find a valid HISTORY response
+        for attempt in 1..=10 {
+            let response = data_socket.recv_string(0)?
+                .map_err(|e| Mt5Error::Connection(format!("Data recv error on attempt {}: {:?}", attempt, e)))?;
+
+            tracing::debug!("Received message attempt {}: {} bytes", attempt, response.len());
+
+            // Check if this is a HISTORY response (has "symbol" and "timeframe" fields)
+            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&response) {
+                if json_val.get("symbol").is_some() && json_val.get("timeframe").is_some() {
+                    tracing::debug!("Found valid HISTORY response on attempt {}", attempt);
+                    return Ok(response);
+                } else {
+                    // Log and skip non-HISTORY messages
+                    let preview = &response[..response.len().min(150)];
+                    tracing::debug!("Skipping non-HISTORY message: {}", preview);
+                }
+            }
+        }
+
+        Err(Mt5Error::Parse("No valid HISTORY response received after 10 attempts".to_string()))
     }
 
     /// Fallback method for requesting instruments when ZMQ thread is not running
@@ -707,6 +775,25 @@ impl Mt5Client {
                             price_val,
                             sl_val,
                             tp_val,
+                        );
+                        let _ = response_tx.send(result);
+                    }
+                    ZmqCommand::RequestHistory {
+                        symbol,
+                        timeframe,
+                        start,
+                        end,
+                        count,
+                        response_tx,
+                    } => {
+                        let result = Self::handle_history_request(
+                            &sys_socket,
+                            &data_socket,
+                            &symbol,
+                            &timeframe,
+                            start,
+                            end,
+                            count,
                         );
                         let _ = response_tx.send(result);
                     }
@@ -1132,6 +1219,65 @@ impl Mt5Client {
         }
 
         Ok(positions)
+    }
+
+    /// Request historical bar data from MT5
+    ///
+    /// Sends HISTORY action to retrieve historical OHLCV bars
+    ///
+    /// # Parameters
+    /// - `symbol`: The symbol to request (e.g., "BTCUSD")
+    /// - `timeframe`: The MT5 timeframe (e.g., "M1", "H1", "D1")
+    /// - `start`: Optional start timestamp in seconds (Unix epoch)
+    /// - `end`: Optional end timestamp in seconds (Unix epoch)
+    /// - `count`: Optional number of bars to retrieve (default 1000)
+    pub async fn request_bars(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        start: Option<i64>,
+        end: Option<i64>,
+        count: Option<i32>,
+    ) -> Mt5Result<Mt5HistoryMsg> {
+        // Acquire lock to serialize this request-response cycle
+        let _lock = self.request_response_lock.lock().await;
+
+        // Send command to ZMQ thread
+        tracing::debug!("Sending HISTORY request via command channel: symbol={}, timeframe={}", symbol, timeframe);
+
+        // Create oneshot channel for response
+        let (response_tx, response_rx) = oneshot::channel();
+
+        // Send command to ZMQ thread
+        self.command_tx
+            .send(ZmqCommand::RequestHistory {
+                symbol: symbol.to_string(),
+                timeframe: timeframe.to_string(),
+                start,
+                end,
+                count,
+                response_tx,
+            })
+            .map_err(|_| Mt5Error::Connection("Command channel closed".to_string()))?;
+
+        // Wait for response from ZMQ thread
+        let response = response_rx
+            .await
+            .map_err(|_| Mt5Error::Connection("Response channel closed".to_string()))??;
+
+        tracing::debug!("HISTORY response received: {} bytes", response.len());
+
+        // Parse response as Mt5HistoryMsg
+        // Response format: {"symbol": str, "timeframe": str, "data": [[...], [...]]}
+        let history_msg: Mt5HistoryMsg = serde_json::from_str(&response)
+            .map_err(|e| {
+                tracing::error!("Failed to parse HISTORY response. Response was: {}", &response[..response.len().min(500)]);
+                Mt5Error::Parse(format!("Failed to parse HISTORY response: {}", e))
+            })?;
+
+        tracing::info!("Successfully parsed {} historical data points for {}", history_msg.data.len(), history_msg.symbol);
+
+        Ok(history_msg)
     }
 
     /// Submit a trade order to MT5

@@ -121,18 +121,23 @@ pub struct Mt5TradeResponseMsg {
 /// MT5 historical data message
 ///
 /// Response to HISTORY action
+/// Format: {"data": [[timestamp, open, high, low, close, volume], ...], "symbol": "XAUUSD", "timeframe": "M1"}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mt5HistoryMsg {
     /// Symbol
     pub symbol: Ustr,
-    /// Timeframe
-    #[serde(rename = "chartTF")]
-    pub chart_tf: Mt5TimeFrame,
-    /// Historical data points
-    pub data: Vec<Mt5BarData>,
+    /// Timeframe (e.g., "M1", "H1", "D1" for bars, "TICK" for ticks)
+    pub timeframe: Ustr,
+    /// Historical data points as arrays
+    /// For bars: [timestamp_sec, open, high, low, close, volume]
+    /// For ticks: [timestamp_ms, bid, ask]
+    pub data: Vec<Vec<f64>>,
 }
 
-/// MT5 bar data (OHLCV)
+/// MT5 bar data (OHLCV) - structured version for internal use
+///
+/// Note: This is NOT the wire format. MT5 sends arrays, not objects.
+/// This struct is used internally after parsing the array format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mt5BarData {
     /// Bar timestamp (seconds)
@@ -153,6 +158,19 @@ pub struct Mt5BarData {
     /// Spread
     #[serde(default)]
     pub spread: i32,
+}
+
+/// MT5 tick data - structured version for internal use
+///
+/// Note: This is NOT the wire format. MT5 sends arrays, not objects.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5TickData {
+    /// Tick timestamp (milliseconds)
+    pub time: i64,
+    /// Bid price
+    pub bid: f64,
+    /// Ask price
+    pub ask: f64,
 }
 
 /// MT5 account information message

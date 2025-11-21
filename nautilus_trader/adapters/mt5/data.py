@@ -42,7 +42,9 @@ from nautilus_trader.data.messages import UnsubscribeTradeTicks
 from nautilus_trader.live.cancellation import DEFAULT_FUTURE_CANCELLATION_TIMEOUT
 from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
 from nautilus_trader.live.data_client import LiveMarketDataClient
+from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
+from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import capsule_to_data
 from nautilus_trader.model.enums import BarAggregation
 from nautilus_trader.model.enums import PriceType
@@ -50,6 +52,8 @@ from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import CurrencyPair
 from nautilus_trader.model.instruments import Instrument
+from nautilus_trader.model.objects import Price
+from nautilus_trader.model.objects import Quantity
 
 # MT5 supported timeframes (in minutes)
 MT5_TIMEFRAMES = {
@@ -494,13 +498,87 @@ class MT5DataClient(LiveMarketDataClient):
 
     async def _request_quote_ticks(self, request: RequestQuoteTicks) -> None:
         """
-        Request historical quote ticks (not supported by MT5).
+        Request historical quote ticks from MT5.
+
+        Parameters
+        ----------
+        request : RequestQuoteTicks
+            The request message.
 
         """
-        self._log.error(
-            f"Cannot request historical quotes for {request.instrument_id}: "
-            "not supported by MT5 adapter (use bars instead)",
+        instrument = self._cache.instrument(request.instrument_id)
+        if instrument is None:
+            self._log.error(
+                f"Cannot request quote ticks: no instrument for {request.instrument_id}",
+            )
+            return
+
+        # Get symbol from instrument
+        symbol = request.instrument_id.symbol.value
+
+        # Convert datetime to Unix timestamps (milliseconds for ticks)
+        start_ts = None
+        end_ts = None
+        count = request.limit if request.limit else 1000
+
+        if request.start:
+            start_ts = int(request.start.timestamp())
+        if request.end:
+            end_ts = int(request.end.timestamp())
+
+        self._log.info(
+            f"Requesting {count} quote ticks for {request.instrument_id} "
+            f"(symbol={symbol}, start={start_ts}, end={end_ts})",
         )
+
+        try:
+            # Request ticks from MT5 via Rust client (timeframe="TICK")
+            response = await self._client.request_bars(
+                symbol=symbol,
+                timeframe="TICK",
+                start=start_ts,
+                end=end_ts,
+                count=count,
+            )
+
+            # Parse ticks from response
+            # MT5 format: {"symbol": str, "timeframe": "TICK", "data": [[timestamp_ms, bid, ask], ...]}
+            ticks = []
+            for tick_array in response["data"]:
+                # Array format: [timestamp_ms, bid, ask]
+                if len(tick_array) < 3:
+                    self._log.warning(f"Skipping malformed tick data: {tick_array}")
+                    continue
+
+                timestamp_ms = int(tick_array[0])
+                bid_price_val = float(tick_array[1])
+                ask_price_val = float(tick_array[2])
+
+                # Convert to Nautilus QuoteTick using Python model types (following Bybit pattern)
+                tick = QuoteTick(
+                    instrument_id=request.instrument_id,  # Already correct Python type
+                    bid_price=Price(bid_price_val, instrument.price_precision),
+                    ask_price=Price(ask_price_val, instrument.price_precision),
+                    bid_size=Quantity(0, 0),  # MT5 doesn't provide size in historical ticks
+                    ask_size=Quantity(0, 0),  # MT5 doesn't provide size in historical ticks
+                    ts_event=timestamp_ms * 1_000_000,  # Convert milliseconds to nanoseconds
+                    ts_init=self._clock.timestamp_ns(),
+                )
+                ticks.append(tick)
+
+            self._log.info(f"Received {len(ticks)} quote ticks from MT5", LogColor.GREEN)
+
+            # Publish ticks via parent class method
+            self._handle_quote_ticks(
+                request.instrument_id,
+                ticks,
+                request.id,
+                request.start,
+                request.end,
+                request.params,
+            )
+        except Exception as e:
+            self._log.exception(f"Failed to request quote ticks from MT5", e)
 
     async def _request_trade_ticks(self, request: RequestTradeTicks) -> None:
         """
@@ -536,6 +614,13 @@ class MT5DataClient(LiveMarketDataClient):
             )
             return
 
+        if not request.bar_type.spec.is_time_aggregated():
+            self._log.error(
+                f"Cannot request {request.bar_type} bars: "
+                "only time-aggregated bars supported by MT5",
+            )
+            return
+
         instrument = self._cache.instrument(request.bar_type.instrument_id)
         if instrument is None:
             self._log.error(
@@ -543,10 +628,84 @@ class MT5DataClient(LiveMarketDataClient):
             )
             return
 
-        self._log.error(
-            f"Cannot request historical bars for {request.bar_type}: "
-            "not yet implemented in this version",
+        try:
+            # Get MT5 timeframe
+            mt5_timeframe = get_mt5_timeframe_from_bar_type(request.bar_type)
+        except ValueError as e:
+            self._log.error(f"Cannot request bars: {e}")
+            return
+
+        # Get symbol from instrument
+        symbol = request.bar_type.instrument_id.symbol.value
+
+        # Convert datetime to Unix timestamps (seconds)
+        start_ts = None
+        end_ts = None
+        count = request.limit if request.limit else 1000
+
+        if request.start:
+            start_ts = int(request.start.timestamp())
+        if request.end:
+            end_ts = int(request.end.timestamp())
+
+        self._log.info(
+            f"Requesting {count} bars for {request.bar_type} "
+            f"(symbol={symbol}, timeframe={mt5_timeframe}, "
+            f"start={start_ts}, end={end_ts})",
         )
+
+        try:
+            # Request bars from MT5 via Rust client
+            response = await self._client.request_bars(
+                symbol=symbol,
+                timeframe=mt5_timeframe,
+                start=start_ts,
+                end=end_ts,
+                count=count,
+            )
+
+            # Parse bars from response
+            # MT5 format: {"symbol": str, "timeframe": str, "data": [[timestamp, open, high, low, close, volume], ...]}
+            bars = []
+            for bar_array in response["data"]:
+                # Array format: [timestamp_sec, open, high, low, close, volume]
+                if len(bar_array) < 6:
+                    self._log.warning(f"Skipping malformed bar data: {bar_array}")
+                    continue
+
+                timestamp_sec = int(bar_array[0])
+                open_price_val = float(bar_array[1])
+                high_price_val = float(bar_array[2])
+                low_price_val = float(bar_array[3])
+                close_price_val = float(bar_array[4])
+                volume_val = float(bar_array[5])
+
+                # Convert to Nautilus Bar using Python model types (following Bybit pattern)
+                bar = Bar(
+                    bar_type=request.bar_type,  # Already correct Python type
+                    open=Price(open_price_val, instrument.price_precision),
+                    high=Price(high_price_val, instrument.price_precision),
+                    low=Price(low_price_val, instrument.price_precision),
+                    close=Price(close_price_val, instrument.price_precision),
+                    volume=Quantity(volume_val, instrument.size_precision),
+                    ts_event=timestamp_sec * 1_000_000_000,  # Convert seconds to nanoseconds
+                    ts_init=self._clock.timestamp_ns(),
+                )
+                bars.append(bar)
+
+            self._log.info(f"Received {len(bars)} bars from MT5", LogColor.GREEN)
+
+            # Publish bars via parent class method
+            self._handle_bars(
+                request.bar_type,
+                bars,
+                request.id,
+                request.start,
+                request.end,
+                request.params,
+            )
+        except Exception as e:
+            self._log.exception(f"Failed to request bars from MT5", e)
 
     def _handle_msg(self, msg: Any) -> None:
         """

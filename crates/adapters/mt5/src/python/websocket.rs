@@ -355,6 +355,50 @@ impl Mt5Client {
         })
     }
 
+    #[pyo3(name = "request_bars")]
+    fn py_request_bars<'py>(
+        &self,
+        py: Python<'py>,
+        symbol: String,
+        timeframe: String,
+        start: Option<i64>,
+        end: Option<i64>,
+        count: Option<i32>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let history = client
+                .request_bars(&symbol, &timeframe, start, end, count)
+                .await
+                .map_err(to_pyruntime_err)?;
+
+            Python::attach(|py| {
+                // Convert Mt5HistoryMsg to Python dict
+                // Format matches actual MT5 response: {"symbol": str, "timeframe": str, "data": [[...], [...]]}
+                let dict = PyDict::new(py);
+                dict.set_item("symbol", history.symbol.as_str())?;
+                dict.set_item("timeframe", history.timeframe.as_str())?;
+
+                // Convert data arrays (Vec<Vec<f64>>) to Python list of lists
+                // For bars: [timestamp_sec, open, high, low, close, volume]
+                // For ticks: [timestamp_ms, bid, ask]
+                let py_data: PyResult<Vec<Py<PyAny>>> = history
+                    .data
+                    .into_iter()
+                    .map(|array| {
+                        PyList::new(py, array)
+                            .unwrap()
+                            .into_any()
+                            .into_py_any(py)
+                    })
+                    .collect();
+
+                dict.set_item("data", PyList::new(py, py_data?).unwrap())?;
+                dict.into_py_any(py)
+            })
+        })
+    }
+
     #[pyo3(name = "submit_order")]
     fn py_submit_order<'py>(
         &self,
