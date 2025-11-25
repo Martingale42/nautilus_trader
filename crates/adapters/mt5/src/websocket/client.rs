@@ -10,16 +10,6 @@
 //! ZMQ sockets run in a dedicated OS thread (not tokio), communicating with
 //! async Rust via channels. This avoids Send/Sync issues with raw ZMQ pointers.
 
-use super::{messages::*, parse::*};
-use crate::common::parse_instrument_id;
-use nautilus_core::time::get_atomic_clock_realtime;
-use nautilus_model::{
-    data::{BarType, Data},
-    enums::{OrderSide, OrderType},
-    identifiers::{AccountId, ClientOrderId, InstrumentId, VenueOrderId},
-    instruments::{Instrument, InstrumentAny},
-    types::{Price, Quantity},
-};
 use std::{
     collections::HashMap,
     str::FromStr,
@@ -29,8 +19,20 @@ use std::{
     },
     thread::JoinHandle,
 };
+
+use nautilus_core::time::get_atomic_clock_realtime;
+use nautilus_model::{
+    data::{BarType, Data},
+    enums::{OrderSide, OrderType},
+    identifiers::{AccountId, ClientOrderId, InstrumentId, VenueOrderId},
+    instruments::{Instrument, InstrumentAny},
+    types::{Price, Quantity},
+};
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio_stream::wrappers::UnboundedReceiverStream;
+
+use super::{messages::*, parse::*};
+use crate::common::parse_instrument_id;
 
 /// Error types for MT5 client
 #[derive(Debug, thiserror::Error)]
@@ -146,7 +148,7 @@ impl Default for Mt5ClientConfig {
 #[derive(Clone)]
 pub struct Mt5Client {
     pub(crate) config: Mt5ClientConfig,
-    account_id_str: Option<String>,  // Store as string, construct AccountId when needed
+    account_id_str: Option<String>, // Store as string, construct AccountId when needed
     pub(crate) instruments: Arc<Mutex<HashMap<String, InstrumentAny>>>,
     pub(crate) bar_types: Arc<Mutex<HashMap<(String, String), String>>>, // (symbol, timeframe) -> bar_type_str
     is_running: Arc<AtomicBool>,
@@ -191,9 +193,9 @@ impl Mt5Client {
     ///
     /// Constructs the full AccountId from the stored account number
     pub fn account_id(&self) -> Option<AccountId> {
-        self.account_id_str.as_ref().map(|id| {
-            AccountId::new(&format!("MT5-{}", id))
-        })
+        self.account_id_str
+            .as_ref()
+            .map(|id| AccountId::new(&format!("MT5-{}", id)))
     }
 
     /// Add instrument to cache
@@ -236,7 +238,12 @@ impl Mt5Client {
     /// * `symbol` - The symbol to subscribe (e.g., "BTCUSD")
     /// * `timeframe` - MT5 timeframe string (e.g., "M1", "H1", "D1")
     /// * `bar_type_str` - Full BarType string for reconstruction (e.g., "BTCUSD.MT5-1-MINUTE-LAST-EXTERNAL")
-    pub fn subscribe_bars(&self, symbol: &str, timeframe: &str, bar_type_str: &str) -> Mt5Result<()> {
+    pub fn subscribe_bars(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        bar_type_str: &str,
+    ) -> Mt5Result<()> {
         if !self.is_active() {
             return Err(Mt5Error::NotConnected);
         }
@@ -252,10 +259,12 @@ impl Mt5Client {
             "D1" => crate::common::Mt5TimeFrame::D1,
             "W1" => crate::common::Mt5TimeFrame::W1,
             "MN1" => crate::common::Mt5TimeFrame::MN1,
-            _ => return Err(Mt5Error::Parse(format!(
-                "Invalid MT5 timeframe: {}. Supported: M1, M5, M15, M30, H1, H4, D1, W1, MN1",
-                timeframe
-            ))),
+            _ => {
+                return Err(Mt5Error::Parse(format!(
+                    "Invalid MT5 timeframe: {}. Supported: M1, M5, M15, M30, H1, H4, D1, W1, MN1",
+                    timeframe
+                )))
+            }
         };
 
         // Store bar type mapping for later reconstruction
@@ -264,26 +273,42 @@ impl Mt5Client {
             bar_type_str.to_string(),
         );
 
-        tracing::info!("Subscribing to {} bars with MT5 timeframe {:?}", symbol, mt5_timeframe);
+        tracing::info!(
+            "Subscribing to {} bars with MT5 timeframe {:?}",
+            symbol,
+            mt5_timeframe
+        );
         self.send_config_requests(&[symbol.to_string()], mt5_timeframe)
     }
 
     /// Internal method to send CONFIG requests to MT5
-    fn send_config_requests(&self, symbols: &[String], timeframe: crate::common::Mt5TimeFrame) -> Mt5Result<()> {
+    fn send_config_requests(
+        &self,
+        symbols: &[String],
+        timeframe: crate::common::Mt5TimeFrame,
+    ) -> Mt5Result<()> {
         // Create a temporary socket for subscription
         let context = zmq::Context::new();
         let socket = context.socket(zmq::REQ)?;
-        socket.connect(&format!("tcp://{}:{}", self.config.host, self.config.sys_port))?;
+        socket.connect(&format!(
+            "tcp://{}:{}",
+            self.config.host, self.config.sys_port
+        ))?;
 
         for symbol in symbols {
             let config = Mt5ConfigRequest::new(symbol, timeframe);
             let json = serde_json::to_string(&config)?;
 
             socket.send(&json, 0)?;
-            let response = socket.recv_string(0)?.map_err(|e| {
-                Mt5Error::Connection(format!("Invalid UTF-8 in response: {:?}", e))
-            })?;
-            tracing::debug!("MT5 CONFIG response for {} ({:?}): {}", symbol, timeframe, response);
+            let response = socket
+                .recv_string(0)?
+                .map_err(|e| Mt5Error::Connection(format!("Invalid UTF-8 in response: {:?}", e)))?;
+            tracing::debug!(
+                "MT5 CONFIG response for {} ({:?}): {}",
+                symbol,
+                timeframe,
+                response
+            );
         }
 
         Ok(())
@@ -317,12 +342,24 @@ impl Mt5Client {
         let account_id = self.account_id();
 
         // Take command receiver (can only be done once)
-        let command_rx = self.command_rx.lock().unwrap().take()
+        let command_rx = self
+            .command_rx
+            .lock()
+            .unwrap()
+            .take()
             .expect("ZMQ thread can only be started once");
 
         // Spawn dedicated thread for ZMQ operations
         let handle = std::thread::spawn(move || {
-            if let Err(e) = Self::zmq_thread_loop(config, instruments, bar_types, is_running, tx, account_id, command_rx) {
+            if let Err(e) = Self::zmq_thread_loop(
+                config,
+                instruments,
+                bar_types,
+                is_running,
+                tx,
+                account_id,
+                command_rx,
+            ) {
                 tracing::error!("ZMQ thread error: {}", e);
             }
         });
@@ -358,7 +395,10 @@ impl Mt5Client {
     /// Handle ACCOUNT request-response in ZMQ thread
     ///
     /// Sends ACCOUNT request, waits for ACK, then receives response from dataSocket
-    fn handle_account_request(sys_socket: &zmq::Socket, data_socket: &zmq::Socket) -> Mt5Result<String> {
+    fn handle_account_request(
+        sys_socket: &zmq::Socket,
+        data_socket: &zmq::Socket,
+    ) -> Mt5Result<String> {
         let request = serde_json::json!({"action": "ACCOUNT"});
         let request_str = serde_json::to_string(&request)?;
 
@@ -366,12 +406,15 @@ impl Mt5Client {
         sys_socket.send(&request_str, 0)?;
 
         // Wait for ACK (blocking, should be fast)
-        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        let ack = sys_socket
+            .recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
         tracing::debug!("ACCOUNT ACK: {}", ack);
 
         // Receive actual response from PULL socket (blocking with timeout)
         data_socket.set_rcvtimeo(10000)?; // 10 second timeout
-        let response = data_socket.recv_string(0)?
+        let response = data_socket
+            .recv_string(0)?
             .map_err(|e| Mt5Error::Connection(format!("Data recv error: {:?}", e)))?;
 
         tracing::debug!("ACCOUNT response received: {} bytes", response.len());
@@ -381,7 +424,10 @@ impl Mt5Client {
     /// Handle SYMBOL_INFO request-response in ZMQ thread
     ///
     /// Sends SYMBOL_INFO request, waits for ACK, then receives response from dataSocket
-    fn handle_instruments_request(sys_socket: &zmq::Socket, data_socket: &zmq::Socket) -> Mt5Result<String> {
+    fn handle_instruments_request(
+        sys_socket: &zmq::Socket,
+        data_socket: &zmq::Socket,
+    ) -> Mt5Result<String> {
         let request = serde_json::json!({"action": "SYMBOL_INFO"});
         let request_str = serde_json::to_string(&request)?;
 
@@ -389,12 +435,15 @@ impl Mt5Client {
         sys_socket.send(&request_str, 0)?;
 
         // Wait for ACK (blocking, should be fast)
-        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        let ack = sys_socket
+            .recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
         tracing::debug!("SYMBOL_INFO ACK: {}", ack);
 
         // Receive actual response from PULL socket (blocking with timeout)
         data_socket.set_rcvtimeo(10000)?; // 10 second timeout
-        let response = data_socket.recv_string(0)?
+        let response = data_socket
+            .recv_string(0)?
             .map_err(|e| Mt5Error::Connection(format!("Data recv error: {:?}", e)))?;
 
         tracing::debug!("SYMBOL_INFO response received: {} bytes", response.len());
@@ -430,7 +479,9 @@ impl Mt5Client {
         sys_socket.send(&request_str, 0)?;
 
         // Wait for ACK (blocking, should be fast)
-        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        let ack = sys_socket
+            .recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
         tracing::debug!("HISTORY ACK: {}", ack);
 
         // Receive actual response from PULL socket (blocking with timeout)
@@ -439,10 +490,15 @@ impl Mt5Client {
 
         // Try up to 10 times to find a valid HISTORY response
         for attempt in 1..=10 {
-            let response = data_socket.recv_string(0)?
-                .map_err(|e| Mt5Error::Connection(format!("Data recv error on attempt {}: {:?}", attempt, e)))?;
+            let response = data_socket.recv_string(0)?.map_err(|e| {
+                Mt5Error::Connection(format!("Data recv error on attempt {}: {:?}", attempt, e))
+            })?;
 
-            tracing::debug!("Received message attempt {}: {} bytes", attempt, response.len());
+            tracing::debug!(
+                "Received message attempt {}: {} bytes",
+                attempt,
+                response.len()
+            );
 
             // Check if this is a HISTORY response (has "symbol" and "timeframe" fields)
             if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&response) {
@@ -457,7 +513,9 @@ impl Mt5Client {
             }
         }
 
-        Err(Mt5Error::Parse("No valid HISTORY response received after 10 attempts".to_string()))
+        Err(Mt5Error::Parse(
+            "No valid HISTORY response received after 10 attempts".to_string(),
+        ))
     }
 
     /// Fallback method for requesting instruments when ZMQ thread is not running
@@ -532,16 +590,31 @@ impl Mt5Client {
                 OrderType::Limit => "ORDER_TYPE_BUY_LIMIT",
                 OrderType::StopMarket => "ORDER_TYPE_BUY_STOP",
                 OrderType::StopLimit => "ORDER_TYPE_BUY_STOP_LIMIT",
-                _ => return Err(Mt5Error::Parse(format!("Unsupported order type: {:?}", order_type))),
+                _ => {
+                    return Err(Mt5Error::Parse(format!(
+                        "Unsupported order type: {:?}",
+                        order_type
+                    )))
+                }
             },
             OrderSide::Sell => match order_type {
                 OrderType::Market => "ORDER_TYPE_SELL",
                 OrderType::Limit => "ORDER_TYPE_SELL_LIMIT",
                 OrderType::StopMarket => "ORDER_TYPE_SELL_STOP",
                 OrderType::StopLimit => "ORDER_TYPE_SELL_STOP_LIMIT",
-                _ => return Err(Mt5Error::Parse(format!("Unsupported order type: {:?}", order_type))),
+                _ => {
+                    return Err(Mt5Error::Parse(format!(
+                        "Unsupported order type: {:?}",
+                        order_type
+                    )))
+                }
             },
-            _ => return Err(Mt5Error::Parse(format!("Invalid order side: {:?}", order_side))),
+            _ => {
+                return Err(Mt5Error::Parse(format!(
+                    "Invalid order side: {:?}",
+                    order_side
+                )))
+            }
         };
 
         // For GTC orders, set expiration to far future (90 days from now)
@@ -549,7 +622,8 @@ impl Mt5Client {
         let expiration_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs() + (90 * 24 * 60 * 60); // 90 days from now
+            .as_secs()
+            + (90 * 24 * 60 * 60); // 90 days from now
 
         let request = serde_json::json!({
             "action": "TRADE",
@@ -571,12 +645,15 @@ impl Mt5Client {
         sys_socket.send(&request_str, 0)?;
 
         // Wait for ACK (blocking, should be fast)
-        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        let ack = sys_socket
+            .recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
         tracing::info!("TRADE ACK: {}", ack);
 
         // Receive actual response from PULL socket (blocking with timeout)
         data_socket.set_rcvtimeo(10000)?; // 10 second timeout
-        let response = data_socket.recv_string(0)?
+        let response = data_socket
+            .recv_string(0)?
             .map_err(|e| Mt5Error::Connection(format!("Data recv error: {:?}", e)))?;
 
         tracing::info!("TRADE response: {}", response);
@@ -601,11 +678,14 @@ impl Mt5Client {
         tracing::debug!("Canceling order: {}", request_str);
 
         sys_socket.send(&request_str, 0)?;
-        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        let ack = sys_socket
+            .recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
         tracing::debug!("TRADE_CLOSE ACK: {}", ack);
 
         data_socket.set_rcvtimeo(10000)?;
-        let response = data_socket.recv_string(0)?
+        let response = data_socket
+            .recv_string(0)?
             .map_err(|e| Mt5Error::Connection(format!("Data recv error: {:?}", e)))?;
 
         tracing::debug!("TRADE_CLOSE response received: {} bytes", response.len());
@@ -635,11 +715,14 @@ impl Mt5Client {
         tracing::debug!("Modifying order: {}", request_str);
 
         sys_socket.send(&request_str, 0)?;
-        let ack = sys_socket.recv_string(0)?.map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        let ack = sys_socket
+            .recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
         tracing::debug!("TRADE_MODIFY ACK: {}", ack);
 
         data_socket.set_rcvtimeo(10000)?;
-        let response = data_socket.recv_string(0)?
+        let response = data_socket
+            .recv_string(0)?
             .map_err(|e| Mt5Error::Connection(format!("Data recv error: {:?}", e)))?;
 
         tracing::debug!("TRADE_MODIFY response received: {} bytes", response.len());
@@ -739,13 +822,15 @@ impl Mt5Client {
 
                         let _ = response_tx.send(result);
                     }
-                    ZmqCommand::CancelOrder { venue_order_id, response_tx } => {
+                    ZmqCommand::CancelOrder {
+                        venue_order_id,
+                        response_tx,
+                    } => {
                         // Parse venue_order_id (MT5 ticket) as u64
-                        let ticket = venue_order_id.as_str().parse::<u64>()
-                            .unwrap_or_else(|e| {
-                                tracing::error!("Failed to parse venue_order_id as u64: {}", e);
-                                0
-                            });
+                        let ticket = venue_order_id.as_str().parse::<u64>().unwrap_or_else(|e| {
+                            tracing::error!("Failed to parse venue_order_id as u64: {}", e);
+                            0
+                        });
 
                         let result = Self::handle_cancel_order(&sys_socket, &data_socket, ticket);
                         let _ = response_tx.send(result);
@@ -753,16 +838,15 @@ impl Mt5Client {
                     ZmqCommand::ModifyOrder {
                         venue_order_id,
                         price,
-                        quantity: _,  // MT5 doesn't support volume modification
+                        quantity: _, // MT5 doesn't support volume modification
                         sl,
                         tp,
                         response_tx,
                     } => {
-                        let ticket = venue_order_id.as_str().parse::<u64>()
-                            .unwrap_or_else(|e| {
-                                tracing::error!("Failed to parse venue_order_id as u64: {}", e);
-                                0
-                            });
+                        let ticket = venue_order_id.as_str().parse::<u64>().unwrap_or_else(|e| {
+                            tracing::error!("Failed to parse venue_order_id as u64: {}", e);
+                            0
+                        });
 
                         let price_val = price.map(|p| p.as_f64());
                         let sl_val = sl.map(|s| s.as_f64());
@@ -807,7 +891,10 @@ impl Mt5Client {
                 match Self::handle_data_message(&msg_bytes, &instruments, account_id) {
                     Ok(Some(nautilus_msg)) => {
                         if tx.send(nautilus_msg).is_err() {
-                            tracing::warn!("Data channel closed after {} loops, stopping ZMQ thread", loop_count);
+                            tracing::warn!(
+                                "Data channel closed after {} loops, stopping ZMQ thread",
+                                loop_count
+                            );
                             break;
                         }
                     }
@@ -822,7 +909,10 @@ impl Mt5Client {
                 match Self::handle_live_message(&msg_bytes, &instruments, &bar_types, account_id) {
                     Ok(Some(nautilus_msg)) => {
                         if tx.send(nautilus_msg).is_err() {
-                            tracing::warn!("Live channel closed after {} loops, stopping ZMQ thread", loop_count);
+                            tracing::warn!(
+                                "Live channel closed after {} loops, stopping ZMQ thread",
+                                loop_count
+                            );
                             break;
                         }
                     }
@@ -837,7 +927,10 @@ impl Mt5Client {
                 match Self::handle_stream_message(&msg_bytes, &instruments, account_id) {
                     Ok(Some(nautilus_msg)) => {
                         if tx.send(nautilus_msg).is_err() {
-                            tracing::warn!("Stream channel closed after {} loops, stopping ZMQ thread", loop_count);
+                            tracing::warn!(
+                                "Stream channel closed after {} loops, stopping ZMQ thread",
+                                loop_count
+                            );
                             break;
                         }
                     }
@@ -855,7 +948,11 @@ impl Mt5Client {
             }
         }
 
-        tracing::info!("ZMQ thread exited after {} loops, is_running={}", loop_count, is_running.load(Ordering::Acquire));
+        tracing::info!(
+            "ZMQ thread exited after {} loops, is_running={}",
+            loop_count,
+            is_running.load(Ordering::Acquire)
+        );
 
         tracing::info!("ZMQ thread stopped");
         Ok(())
@@ -875,7 +972,9 @@ impl Mt5Client {
         let timeframe = peek
             .get("timeframe")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| Mt5Error::Parse("Missing 'timeframe' field in live message".to_string()))?;
+            .ok_or_else(|| {
+                Mt5Error::Parse("Missing 'timeframe' field in live message".to_string())
+            })?;
 
         let ts_init = get_atomic_clock_realtime().get_time_ns();
 
@@ -894,11 +993,9 @@ impl Mt5Client {
 
             // Get instrument from cache
             let instruments = instruments.lock().unwrap();
-            let instrument = instruments
-                .get(msg.symbol.as_str())
-                .ok_or_else(|| {
-                    Mt5Error::InstrumentNotFound(parse_instrument_id(msg.symbol.as_str()).unwrap())
-                })?;
+            let instrument = instruments.get(msg.symbol.as_str()).ok_or_else(|| {
+                Mt5Error::InstrumentNotFound(parse_instrument_id(msg.symbol.as_str()).unwrap())
+            })?;
 
             // Parse to QuoteTick
             let quote = parse_mt5_live_tick_to_quote(&msg, instrument, ts_init)
@@ -911,11 +1008,9 @@ impl Mt5Client {
 
             // Get instrument from cache
             let instruments_guard = instruments.lock().unwrap();
-            let instrument = instruments_guard
-                .get(msg.symbol.as_str())
-                .ok_or_else(|| {
-                    Mt5Error::InstrumentNotFound(parse_instrument_id(msg.symbol.as_str()).unwrap())
-                })?;
+            let instrument = instruments_guard.get(msg.symbol.as_str()).ok_or_else(|| {
+                Mt5Error::InstrumentNotFound(parse_instrument_id(msg.symbol.as_str()).unwrap())
+            })?;
 
             // Look up bar_type from mapping
             let bar_types_guard = bar_types.lock().unwrap();
@@ -929,8 +1024,12 @@ impl Mt5Client {
                 })?;
 
             // Parse bar_type_str to BarType
-            let bar_type = BarType::from_str(bar_type_str)
-                .map_err(|e| Mt5Error::Parse(format!("Failed to parse BarType from '{}': {}", bar_type_str, e)))?;
+            let bar_type = BarType::from_str(bar_type_str).map_err(|e| {
+                Mt5Error::Parse(format!(
+                    "Failed to parse BarType from '{}': {}",
+                    bar_type_str, e
+                ))
+            })?;
 
             // Parse to Bar
             let bar = parse_mt5_live_bar(&msg, &bar_type, instrument, ts_init)
@@ -991,21 +1090,24 @@ impl Mt5Client {
     fn send_sys_request(&self, request: &str) -> Mt5Result<String> {
         let context = zmq::Context::new();
         let socket = context.socket(zmq::REQ)?;
-        socket.connect(&format!("tcp://{}:{}", self.config.host, self.config.sys_port))?;
+        socket.connect(&format!(
+            "tcp://{}:{}",
+            self.config.host, self.config.sys_port
+        ))?;
 
         // Set timeout to prevent hanging
         socket.set_rcvtimeo(5000)?; // 5 seconds
         socket.set_sndtimeo(5000)?;
 
         socket.send(request, 0)?;
-        let response = socket.recv_string(0)?.map_err(|e| {
-            Mt5Error::Connection(format!("Invalid UTF-8 in response: {:?}", e))
-        })?;
+        let response = socket
+            .recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("Invalid UTF-8 in response: {:?}", e)))?;
 
         // Check for ERROR response from MT5
         if response == "ERROR" {
             return Err(Mt5Error::Parse(
-                "MT5 returned ERROR - deserialization failed on MT5 side".to_string()
+                "MT5 returned ERROR - deserialization failed on MT5 side".to_string(),
             ));
         }
 
@@ -1018,7 +1120,10 @@ impl Mt5Client {
     fn receive_data_response(&self) -> Mt5Result<String> {
         let context = zmq::Context::new();
         let socket = context.socket(zmq::PULL)?;
-        socket.connect(&format!("tcp://{}:{}", self.config.host, self.config.data_port))?;
+        socket.connect(&format!(
+            "tcp://{}:{}",
+            self.config.host, self.config.data_port
+        ))?;
 
         // Set timeout for receiving
         socket.set_rcvtimeo(10000)?; // 10 seconds for large responses
@@ -1071,11 +1176,9 @@ impl Mt5Client {
             tracing::debug!("Using fallback blocking call for SYMBOL_INFO request");
 
             let config = self.config.clone();
-            tokio::task::spawn_blocking(move || {
-                Self::fallback_instruments_request(&config)
-            })
-            .await
-            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??
+            tokio::task::spawn_blocking(move || Self::fallback_instruments_request(&config))
+                .await
+                .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??
         };
 
         tracing::debug!("SYMBOL_INFO response received: {} bytes", response.len());
@@ -1085,7 +1188,9 @@ impl Mt5Client {
             .map_err(|e| Mt5Error::Parse(format!("Failed to parse SYMBOL_INFO response: {}", e)))?;
 
         if symbol_info_response.error {
-            return Err(Mt5Error::Parse("SYMBOL_INFO returned error=true".to_string()));
+            return Err(Mt5Error::Parse(
+                "SYMBOL_INFO returned error=true".to_string(),
+            ));
         }
 
         // Convert each Mt5SymbolInfo to InstrumentAny
@@ -1098,7 +1203,12 @@ impl Mt5Client {
 
         let mut instruments = Vec::new();
         for symbol_info in symbol_info_response.symbols {
-            match super::parse::parse_mt5_symbol_info_to_instrument(&symbol_info, &venue, ts_event, ts_init) {
+            match super::parse::parse_mt5_symbol_info_to_instrument(
+                &symbol_info,
+                &venue,
+                ts_event,
+                ts_init,
+            ) {
                 Ok(instrument) => {
                     tracing::info!("Loaded instrument: {}", symbol_info.symbol);
                     instruments.push(instrument);
@@ -1110,7 +1220,10 @@ impl Mt5Client {
             }
         }
 
-        tracing::info!("Successfully loaded {} instruments from MT5", instruments.len());
+        tracing::info!(
+            "Successfully loaded {} instruments from MT5",
+            instruments.len()
+        );
 
         Ok(instruments)
     }
@@ -1145,11 +1258,9 @@ impl Mt5Client {
             tracing::debug!("Using fallback blocking call for ACCOUNT request");
 
             let config = self.config.clone();
-            tokio::task::spawn_blocking(move || {
-                Self::fallback_account_request(&config)
-            })
-            .await
-            .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??
+            tokio::task::spawn_blocking(move || Self::fallback_account_request(&config))
+                .await
+                .map_err(|e| Mt5Error::Connection(format!("Task join error: {}", e)))??
         };
 
         tracing::debug!("ACCOUNT response received: {} bytes", response.len());
@@ -1243,7 +1354,11 @@ impl Mt5Client {
         let _lock = self.request_response_lock.lock().await;
 
         // Send command to ZMQ thread
-        tracing::debug!("Sending HISTORY request via command channel: symbol={}, timeframe={}", symbol, timeframe);
+        tracing::debug!(
+            "Sending HISTORY request via command channel: symbol={}, timeframe={}",
+            symbol,
+            timeframe
+        );
 
         // Create oneshot channel for response
         let (response_tx, response_rx) = oneshot::channel();
@@ -1269,13 +1384,19 @@ impl Mt5Client {
 
         // Parse response as Mt5HistoryMsg
         // Response format: {"symbol": str, "timeframe": str, "data": [[...], [...]]}
-        let history_msg: Mt5HistoryMsg = serde_json::from_str(&response)
-            .map_err(|e| {
-                tracing::error!("Failed to parse HISTORY response. Response was: {}", &response[..response.len().min(500)]);
-                Mt5Error::Parse(format!("Failed to parse HISTORY response: {}", e))
-            })?;
+        let history_msg: Mt5HistoryMsg = serde_json::from_str(&response).map_err(|e| {
+            tracing::error!(
+                "Failed to parse HISTORY response. Response was: {}",
+                &response[..response.len().min(500)]
+            );
+            Mt5Error::Parse(format!("Failed to parse HISTORY response: {}", e))
+        })?;
 
-        tracing::info!("Successfully parsed {} historical data points for {}", history_msg.data.len(), history_msg.symbol);
+        tracing::info!(
+            "Successfully parsed {} historical data points for {}",
+            history_msg.data.len(),
+            history_msg.symbol
+        );
 
         Ok(history_msg)
     }
@@ -1398,8 +1519,9 @@ impl Mt5Client {
         tracing::debug!("TRADE_MODIFY response received: {} bytes", response.len());
 
         // Parse response as Mt5TradeResponse
-        let trade_response: Mt5TradeResponse = serde_json::from_str(&response)
-            .map_err(|e| Mt5Error::Parse(format!("Failed to parse TRADE_MODIFY response: {}", e)))?;
+        let trade_response: Mt5TradeResponse = serde_json::from_str(&response).map_err(|e| {
+            Mt5Error::Parse(format!("Failed to parse TRADE_MODIFY response: {}", e))
+        })?;
 
         Ok(trade_response)
     }

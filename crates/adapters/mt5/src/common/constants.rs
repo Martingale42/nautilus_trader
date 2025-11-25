@@ -117,7 +117,10 @@ pub fn retcode_description(code: i32) -> &'static str {
 
 /// Check if retcode indicates success
 pub fn is_success(code: i32) -> bool {
-    matches!(code, retcode::DONE | retcode::DONE_PARTIAL | retcode::PLACED)
+    matches!(
+        code,
+        retcode::DONE | retcode::DONE_PARTIAL | retcode::PLACED
+    )
 }
 
 /// Check if retcode indicates rejection/failure

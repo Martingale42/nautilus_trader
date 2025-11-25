@@ -1,7 +1,8 @@
 //! MT5-specific enumerations.
 
-use serde::{Deserialize, Serialize};
 use std::fmt;
+
+use serde::{Deserialize, Serialize};
 
 /// MT5 order types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -85,7 +86,7 @@ impl Mt5TimeFrame {
     /// Returns the timeframe in minutes (0 for tick data)
     pub const fn as_minutes(&self) -> i64 {
         match self {
-            Self::Tick => 0,  // Tick data has no fixed timeframe
+            Self::Tick => 0, // Tick data has no fixed timeframe
             Self::M1 => 1,
             Self::M5 => 5,
             Self::M15 => 15,

@@ -26,5 +26,4 @@ pub mod websocket;
 pub mod python;
 
 // Re-exports
-pub use websocket::client::Mt5Client;
-pub use websocket::messages::*;
+pub use websocket::{client::Mt5Client, messages::*};

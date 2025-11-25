@@ -1,7 +1,8 @@
 //! MT5 message parsers - convert MT5 format to Nautilus domain types.
 
-use super::messages::*;
-use crate::common::{parse_timestamp_ms, Mt5TickFlags};
+use std::str::FromStr;
+
+use nautilus_core::{uuid::UUID4, UnixNanos};
 use nautilus_model::{
     data::{Bar, BarType, QuoteTick, TradeTick},
     enums::{AggressorSide, OrderSide, OrderStatus, OrderType, TimeInForce},
@@ -10,8 +11,9 @@ use nautilus_model::{
     reports::OrderStatusReport,
     types::{Currency, Price, Quantity},
 };
-use nautilus_core::{uuid::UUID4, UnixNanos};
-use std::str::FromStr;
+
+use super::messages::*;
+use crate::common::{parse_timestamp_ms, Mt5TickFlags};
 
 /// Parse MT5 tick message to Nautilus TradeTick
 ///
@@ -254,7 +256,10 @@ pub fn parse_mt5_order_status(
 
     // Calculate filled quantity based on current volume
     let filled_qty = if msg.volume_current < msg.volume_initial {
-        Quantity::new(msg.volume_initial - msg.volume_current, instrument.size_precision())
+        Quantity::new(
+            msg.volume_initial - msg.volume_current,
+            instrument.size_precision(),
+        )
     } else {
         Quantity::zero(instrument.size_precision())
     };
@@ -328,25 +333,25 @@ pub fn parse_mt5_symbol_info_to_instrument(
     // Create CurrencyPair instrument
     let instrument = CurrencyPair::new(
         instrument_id,
-        raw_symbol,                       // raw_symbol
+        raw_symbol, // raw_symbol
         base_currency,
         quote_currency,
-        digits,                          // price_precision
+        digits, // price_precision
         size_precision,
-        Price::new(tick_size, digits),    // price_increment
+        Price::new(tick_size, digits),              // price_increment
         Quantity::new(volume_step, size_precision), // size_increment
-        None, // multiplier
-        None, // lot_size
-        None, // max_quantity
-        None, // min_quantity
-        None, // max_notional
-        None, // min_notional
-        None, // max_price
-        None, // min_price
-        None, // margin_init
-        None, // margin_maint
-        None, // maker_fee
-        None, // taker_fee
+        None,                                       // multiplier
+        None,                                       // lot_size
+        None,                                       // max_quantity
+        None,                                       // min_quantity
+        None,                                       // max_notional
+        None,                                       // min_notional
+        None,                                       // max_price
+        None,                                       // min_price
+        None,                                       // margin_init
+        None,                                       // margin_maint
+        None,                                       // maker_fee
+        None,                                       // taker_fee
         ts_event,
         ts_init,
     );
@@ -356,12 +361,13 @@ pub fn parse_mt5_symbol_info_to_instrument(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use nautilus_model::{
         identifiers::{Symbol, Venue},
         instruments::CurrencyPair,
         types::Currency,
     };
+
+    use super::*;
 
     fn create_test_instrument() -> InstrumentAny {
         let raw_symbol = Symbol::new("EURUSD");
@@ -369,32 +375,30 @@ mod tests {
         let base_currency = Currency::USD();
         let quote_currency = Currency::USD();
 
-        InstrumentAny::CurrencyPair(
-            CurrencyPair::new(
-                instrument_id,
-                raw_symbol,     // raw_symbol
-                base_currency,
-                quote_currency,
-                5,              // price_precision
-                2,              // size_precision
-                Price::new(0.00001, 5), // price_increment
-                Quantity::new(0.01, 2), // size_increment
-                None, // multiplier
-                None, // lot_size
-                None, // max_quantity
-                None, // min_quantity
-                None, // max_notional
-                None, // min_notional
-                None, // max_price
-                None, // min_price
-                None, // margin_init
-                None, // margin_maint
-                None, // maker_fee
-                None, // taker_fee
-                UnixNanos::default(),  // ts_event
-                UnixNanos::default(),  // ts_init
-            )
-        )
+        InstrumentAny::CurrencyPair(CurrencyPair::new(
+            instrument_id,
+            raw_symbol, // raw_symbol
+            base_currency,
+            quote_currency,
+            5,                      // price_precision
+            2,                      // size_precision
+            Price::new(0.00001, 5), // price_increment
+            Quantity::new(0.01, 2), // size_increment
+            None,                   // multiplier
+            None,                   // lot_size
+            None,                   // max_quantity
+            None,                   // min_quantity
+            None,                   // max_notional
+            None,                   // min_notional
+            None,                   // max_price
+            None,                   // min_price
+            None,                   // margin_init
+            None,                   // margin_maint
+            None,                   // maker_fee
+            None,                   // taker_fee
+            UnixNanos::default(),   // ts_event
+            UnixNanos::default(),   // ts_init
+        ))
     }
 
     #[test]

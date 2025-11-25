@@ -32,7 +32,11 @@ use nautilus_model::{
     },
     types::{Price, Quantity},
 };
-use pyo3::{conversion::IntoPyObjectExt, prelude::*, types::{PyDict, PyList}};
+use pyo3::{
+    conversion::IntoPyObjectExt,
+    prelude::*,
+    types::{PyDict, PyList},
+};
 
 use crate::websocket::client::{Mt5Client, Mt5ClientConfig, NautilusMessage};
 
@@ -134,8 +138,14 @@ impl Mt5Client {
     }
 
     #[pyo3(name = "subscribe_bars")]
-    fn py_subscribe_bars(&self, symbol: String, timeframe: String, bar_type_str: String) -> PyResult<()> {
-        self.subscribe_bars(&symbol, &timeframe, &bar_type_str).map_err(to_pyruntime_err)
+    fn py_subscribe_bars(
+        &self,
+        symbol: String,
+        timeframe: String,
+        bar_type_str: String,
+    ) -> PyResult<()> {
+        self.subscribe_bars(&symbol, &timeframe, &bar_type_str)
+            .map_err(to_pyruntime_err)
     }
 
     #[pyo3(name = "subscribe")]
@@ -323,10 +333,7 @@ impl Mt5Client {
     fn py_request_positions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let positions = client
-                .request_positions()
-                .await
-                .map_err(to_pyruntime_err)?;
+            let positions = client.request_positions().await.map_err(to_pyruntime_err)?;
 
             Python::attach(|py| {
                 let py_positions: PyResult<Vec<Py<PyAny>>> = positions
@@ -385,12 +392,7 @@ impl Mt5Client {
                 let py_data: PyResult<Vec<Py<PyAny>>> = history
                     .data
                     .into_iter()
-                    .map(|array| {
-                        PyList::new(py, array)
-                            .unwrap()
-                            .into_any()
-                            .into_py_any(py)
-                    })
+                    .map(|array| PyList::new(py, array).unwrap().into_any().into_py_any(py))
                     .collect();
 
                 dict.set_item("data", PyList::new(py, py_data?).unwrap())?;
@@ -448,17 +450,16 @@ impl Mt5Client {
     }
 
     #[pyo3(name = "cancel_order")]
-    fn py_cancel_order<'py>(
-        &self,
-        py: Python<'py>,
-        ticket: i64,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn py_cancel_order<'py>(&self, py: Python<'py>, ticket: i64) -> PyResult<Bound<'py, PyAny>> {
         use nautilus_model::identifiers::VenueOrderId;
 
         let client = self.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let venue_order_id = VenueOrderId::new(&ticket.to_string());
-            let response = client.cancel_order(venue_order_id).await.map_err(to_pyruntime_err)?;
+            let response = client
+                .cancel_order(venue_order_id)
+                .await
+                .map_err(to_pyruntime_err)?;
 
             Python::attach(|py| {
                 let dict = PyDict::new(py);

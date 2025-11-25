@@ -2,9 +2,10 @@
 //!
 //! These structs represent the native JSON format sent by MT5-ZeroMQ (JsonAPI.mq5).
 
-use crate::common::{Mt5OrderType, Mt5TimeFrame};
 use serde::{Deserialize, Deserializer, Serialize};
 use ustr::Ustr;
+
+use crate::common::{Mt5OrderType, Mt5TimeFrame};
 
 /// Deserialize integer (0/1) as boolean
 ///
@@ -116,7 +117,6 @@ pub struct Mt5TradeResponseMsg {
     /// Function that processed the request
     pub function: Ustr,
 }
-
 
 /// MT5 historical data message
 ///
@@ -234,7 +234,7 @@ pub struct Mt5TradeResponse {
     pub retcode: i32,
     /// Return code description
     #[serde(default)]
-    pub desription: Ustr,  // Note: MT5 has typo "desription"
+    pub desription: Ustr, // Note: MT5 has typo "desription"
     /// Order ticket number (venue_order_id)
     pub order: u64,
     /// Executed volume
