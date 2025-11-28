@@ -359,6 +359,10 @@ pub fn parse_mt5_symbol_info_to_instrument(
     Ok(InstrumentAny::CurrencyPair(instrument))
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// Tests
+////////////////////////////////////////////////////////////////////////////////
+
 #[cfg(test)]
 mod tests {
     use nautilus_model::{
@@ -368,6 +372,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::common::testing::load_test_json;
 
     fn create_test_instrument() -> InstrumentAny {
         let raw_symbol = Symbol::new("EURUSD");
@@ -400,6 +405,8 @@ mod tests {
             UnixNanos::default(),   // ts_init
         ))
     }
+
+    // Legacy format tests (Mt5TickMsg)
 
     #[test]
     fn test_parse_tick_to_trade() {
@@ -438,5 +445,219 @@ mod tests {
 
         assert_eq!(quote.bid_price.as_f64(), 1.08500);
         assert_eq!(quote.ask_price.as_f64(), 1.08510);
+    }
+
+    // Live streaming format tests (Mt5LiveTickMsg, Mt5LiveBarMsg)
+
+    #[test]
+    fn test_parse_live_tick_from_fixture() {
+        // Load real MT5 tick message from fixture
+        let json = load_test_json("ws_tick_single.json");
+        let msg: Mt5LiveTickMsg = serde_json::from_str(&json).unwrap();
+
+        // Verify message structure
+        assert_eq!(msg.status, "CONNECTED");
+        assert_eq!(msg.symbol, "BTCUSD");
+        assert_eq!(msg.timeframe, "TICK");
+        assert_eq!(msg.data.len(), 3);
+
+        // Create test instrument (BTCUSD with 2 decimal precision)
+        let raw_symbol = Symbol::new("BTCUSD");
+        let instrument_id = InstrumentId::new(raw_symbol, Venue::new("MT5"));
+        let base_currency = Currency::BTC();
+        let quote_currency = Currency::USD();
+
+        let instrument = InstrumentAny::CurrencyPair(CurrencyPair::new(
+            instrument_id,
+            raw_symbol,
+            base_currency,
+            quote_currency,
+            2,                      // price_precision
+            2,                      // size_precision
+            Price::new(0.01, 2),    // price_increment
+            Quantity::new(0.01, 2), // size_increment
+            None, None, None, None, None, None, None, None, None, None, None, None,
+            UnixNanos::default(),
+            UnixNanos::default(),
+        ));
+
+        // Parse to QuoteTick
+        let tick = parse_mt5_live_tick_to_quote(&msg, &instrument, UnixNanos::default()).unwrap();
+
+        // Verify parsed fields
+        assert_eq!(tick.instrument_id, instrument_id);
+        assert_eq!(tick.bid_price.as_f64(), 86835.0);
+        assert_eq!(tick.ask_price.as_f64(), 86879.0);
+        assert_eq!(tick.ts_event, 1764162271192000000); // ms -> ns conversion
+    }
+
+    #[test]
+    fn test_parse_live_bar_from_fixture() {
+        // Load real MT5 bar message from fixture
+        let json = load_test_json("ws_bar_m1_single.json");
+        let msg: Mt5LiveBarMsg = serde_json::from_str(&json).unwrap();
+
+        // Verify message structure
+        assert_eq!(msg.status, "CONNECTED");
+        assert_eq!(msg.symbol, "XAUUSD.sml");
+        assert_eq!(msg.timeframe, "M1");
+        assert_eq!(msg.data.len(), 6); // timestamp, OHLCV
+
+        // Create test instrument (XAUUSD with 2 decimal precision)
+        let raw_symbol = Symbol::new("XAUUSD");
+        let instrument_id = InstrumentId::new(raw_symbol, Venue::new("MT5"));
+        let base_currency = Currency::XAU();
+        let quote_currency = Currency::USD();
+
+        let instrument = InstrumentAny::CurrencyPair(CurrencyPair::new(
+            instrument_id,
+            raw_symbol,
+            base_currency,
+            quote_currency,
+            2,                      // price_precision
+            2,                      // size_precision
+            Price::new(0.01, 2),    // price_increment
+            Quantity::new(0.01, 2), // size_increment
+            None, None, None, None, None, None, None, None, None, None, None, None,
+            UnixNanos::default(),
+            UnixNanos::default(),
+        ));
+
+        // Parse to Bar
+        let bar_type = BarType::from_str("XAUUSD.MT5-1-MINUTE-LAST-EXTERNAL").unwrap();
+        let bar = parse_mt5_live_bar(&msg, &bar_type, &instrument, UnixNanos::default()).unwrap();
+
+        // Verify parsed fields (rounded to 2 decimal places due to price_precision)
+        assert_eq!(bar.open.as_f64(), 4160.12);
+        assert_eq!(bar.high.as_f64(), 4160.18); // 4160.175 rounds to 4160.18 with precision=2
+        assert_eq!(bar.low.as_f64(), 4159.72);  // 4159.715 rounds to 4159.72 with precision=2
+        assert_eq!(bar.close.as_f64(), 4160.18); // 4160.175 rounds to 4160.18 with precision=2
+        assert_eq!(bar.volume.as_f64(), 105.0);
+        assert_eq!(bar.ts_event, 1764162180000000000); // seconds -> ns
+    }
+
+    #[test]
+    fn test_parse_multiple_ticks_from_fixture() {
+        // Load fixture with multiple ticks
+        let json = load_test_json("ws_tick.json");
+        let messages: Vec<Mt5LiveTickMsg> = serde_json::from_str(&json).unwrap();
+
+        assert!(!messages.is_empty());
+        assert!(messages.len() > 10); // Should have ~17 ticks
+
+        // Create test instrument
+        let raw_symbol = Symbol::new("BTCUSD");
+        let instrument_id = InstrumentId::new(raw_symbol, Venue::new("MT5"));
+        let base_currency = Currency::BTC();
+        let quote_currency = Currency::USD();
+
+        let instrument = InstrumentAny::CurrencyPair(CurrencyPair::new(
+            instrument_id,
+            raw_symbol,
+            base_currency,
+            quote_currency,
+            2, 2,
+            Price::new(0.01, 2),
+            Quantity::new(0.01, 2),
+            None, None, None, None, None, None, None, None, None, None, None, None,
+            UnixNanos::default(),
+            UnixNanos::default(),
+        ));
+
+        // Verify all messages parse correctly
+        for msg in messages.iter() {
+            let tick = parse_mt5_live_tick_to_quote(msg, &instrument, UnixNanos::default()).unwrap();
+            assert_eq!(tick.instrument_id, instrument_id);
+            assert!(tick.bid_price.as_f64() > 0.0);
+            assert!(tick.ask_price.as_f64() > 0.0);
+            assert!(tick.ask_price.as_f64() >= tick.bid_price.as_f64()); // Spread check
+        }
+    }
+
+    #[test]
+    fn test_parse_instruments_from_fixture() {
+        // Load real MT5 instruments response
+        let json = load_test_json("http_get_instruments_minimal.json");
+        let response: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(response["error"], false);
+
+        let symbols = response["symbols"].as_array().unwrap();
+        assert_eq!(symbols.len(), 2); // EURUSD, BTCUSD
+
+        // Verify EURUSD structure
+        let eurusd = &symbols[0];
+        assert_eq!(eurusd["symbol"], "EURUSD");
+        assert_eq!(eurusd["base_currency"], "EUR");
+        assert_eq!(eurusd["quote_currency"], "USD");
+        assert_eq!(eurusd["digits"], "5");
+
+        // Verify BTCUSD structure
+        let btcusd = &symbols[1];
+        assert_eq!(btcusd["symbol"], "BTCUSD");
+        assert_eq!(btcusd["base_currency"], "BTC");
+        assert_eq!(btcusd["quote_currency"], "USD");
+        assert_eq!(btcusd["digits"], "2");
+    }
+
+    #[test]
+    fn test_parse_account_from_fixture() {
+        // Load real MT5 account response
+        let json = load_test_json("http_get_account.json");
+        let account: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(account["error"], false);
+        assert!(account["balance"].is_number());
+        assert!(account["equity"].is_number());
+        assert!(account["margin"].is_number());
+        assert!(account["margin_free"].is_number());
+        assert!(account["margin_level"].is_number());
+        assert_eq!(account["currency"], "USD");
+        assert_eq!(account["trading_allowed"], 1);
+    }
+
+    #[test]
+    fn test_parse_positions_from_fixture() {
+        // Load real MT5 positions response
+        let json = load_test_json("http_get_positions.json");
+        let response: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(response["error"], false);
+        assert!(response["server_time"].is_number());
+
+        let positions = response["positions"].as_array().unwrap();
+        assert!(!positions.is_empty());
+
+        // Verify first position structure
+        let pos = &positions[0];
+        assert!(pos["id"].is_number());
+        assert_eq!(pos["symbol"], "BTCUSD");
+        assert!(pos["type"].is_string());
+        assert!(pos["volume"].is_number());
+        assert!(pos["open"].is_number());
+        assert!(pos["time_setup"].is_number());
+    }
+
+    #[test]
+    fn test_parse_positions_empty_from_fixture() {
+        // Test empty positions response
+        let json = load_test_json("http_get_positions_empty.json");
+        let response: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(response["error"], false);
+        let positions = response["positions"].as_array().unwrap();
+        assert_eq!(positions.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_error_response_from_fixture() {
+        // Test error response handling
+        let json = load_test_json("http_error_response.json");
+        let error: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(error["error"], true);
+        assert_eq!(error["lastError"], "65538");
+        assert_eq!(error["description"], "ERR_WRONG_ACTION");
+        assert_eq!(error["function"], "RequestHandler");
     }
 }

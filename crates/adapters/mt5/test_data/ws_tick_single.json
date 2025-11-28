@@ -1,0 +1,10 @@
+{
+  "status": "CONNECTED",
+  "symbol": "BTCUSD",
+  "timeframe": "TICK",
+  "data": [
+    1764162271192,
+    86835.0,
+    86879.0
+  ]
+}
