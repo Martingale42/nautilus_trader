@@ -18,22 +18,23 @@ from nautilus_trader.adapters.mt5.config import MT5DataClientConfig
 from nautilus_trader.adapters.mt5.constants import MT5
 from nautilus_trader.adapters.mt5.factories import MT5LiveDataClientFactory
 from nautilus_trader.cache.config import CacheConfig
-from nautilus_trader.config import InstrumentProviderConfig
-from nautilus_trader.config import LiveExecEngineConfig
-from nautilus_trader.config import LoggingConfig
-from nautilus_trader.config import TradingNodeConfig
+from nautilus_trader.config import (
+    InstrumentProviderConfig,
+    LiveExecEngineConfig,
+    LoggingConfig,
+    TradingNodeConfig,
+)
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.data import BarType
-from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.identifiers import TraderId
-from nautilus_trader.test_kit.strategies.tester_data import DataTester
-from nautilus_trader.test_kit.strategies.tester_data import DataTesterConfig
-
+from nautilus_trader.model.identifiers import InstrumentId, TraderId
+from nautilus_trader.test_kit.strategies.tester_data import DataTester, DataTesterConfig
 
 # Configure the trading node
 config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
-    logging=LoggingConfig(log_level="INFO", use_pyo3=True),
+    logging=LoggingConfig(
+        log_level="INFO", log_level_file="DEBUG", log_file_format="JSON", use_pyo3=True
+    ),
     exec_engine=LiveExecEngineConfig(
         reconciliation=False,  # Not applicable for data-only testing
         inflight_check_interval_ms=0,  # Not applicable
@@ -101,7 +102,7 @@ config_tester = DataTesterConfig(
     request_bars=True,
     log_data=True,  # Log received data for verification
     log_events=True,
-    log_commands=True
+    log_commands=True,
 )
 
 # Instantiate your actor
