@@ -455,6 +455,26 @@ class MT5DataClient(LiveMarketDataClient):
         """
         pass
 
+    async def _unsubscribe_instrument_status(self, command) -> None:
+        """
+        Unsubscribe from instrument status updates (not supported by MT5).
+
+        MT5 does not provide real-time instrument status updates.
+        This is a no-op to prevent NotImplementedError.
+
+        """
+        pass  # No-op: MT5 doesn't support instrument status subscriptions
+
+    async def _unsubscribe_instrument_close(self, command) -> None:
+        """
+        Unsubscribe from instrument close updates (not supported by MT5).
+
+        MT5 does not provide instrument close notifications.
+        This is a no-op to prevent NotImplementedError.
+
+        """
+        pass  # No-op: MT5 doesn't support instrument close subscriptions
+
     async def _request_instrument(self, request: RequestInstrument) -> None:
         """
         Request a single instrument.

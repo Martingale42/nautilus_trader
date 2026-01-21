@@ -1034,23 +1034,96 @@ impl Mt5Client {
     }
 
     /// Handle message from dataSocket (command responses)
+    ///
+    /// Note: Most command responses are handled synchronously in handle_*_request functions.
+    /// This handler catches any unsolicited/unexpected messages on the data socket.
+    /// Following Bybit's pattern, we return Raw for unrecognized messages rather than panicking.
     fn handle_data_message(
         msg_bytes: &[u8],
         _instruments: &Arc<Mutex<HashMap<String, InstrumentAny>>>,
         _account_id: Option<AccountId>,
     ) -> Mt5Result<Option<NautilusMessage>> {
-        let _json_str = String::from_utf8_lossy(msg_bytes);
-        todo!("Parse specific responses (ACCOUNT, POSITIONS, ORDERS, etc.)")
+        let json_str = String::from_utf8_lossy(msg_bytes);
+
+        // Parse JSON to inspect the message type
+        let value: serde_json::Value = serde_json::from_str(&json_str)?;
+
+        // Log unexpected data messages for debugging
+        tracing::debug!("Received unsolicited data message: {}", json_str);
+
+        // Return as Raw message - command responses are already handled synchronously
+        // in handle_*_request functions (ACCOUNT, SYMBOL_INFO, HISTORY, TRADE, etc.)
+        Ok(Some(NautilusMessage::Raw(value.to_string())))
     }
 
     /// Handle message from streamSocket (orders/positions)
+    ///
+    /// This handles streaming updates for orders and positions from MT5.
+    /// Following Bybit's pattern, we return Raw for unrecognized messages rather than panicking.
     fn handle_stream_message(
         msg_bytes: &[u8],
         _instruments: &Arc<Mutex<HashMap<String, InstrumentAny>>>,
         _account_id: Option<AccountId>,
     ) -> Mt5Result<Option<NautilusMessage>> {
-        let _json_str = String::from_utf8_lossy(msg_bytes);
-        todo!("Parse order/position updates")
+        let json_str = String::from_utf8_lossy(msg_bytes);
+
+        // Parse JSON to inspect the message type
+        let value: serde_json::Value = serde_json::from_str(&json_str)?;
+
+        // Log stream messages for debugging
+        tracing::debug!("Received stream message: {}", json_str);
+
+        // Attempt to classify the message based on its structure
+        // MT5 order/position updates can be identified by specific fields
+
+        // Check for trade response (has retcode field)
+        if value.get("retcode").is_some() {
+            if let Ok(trade_resp) = serde_json::from_value::<Mt5TradeResponseMsg>(value.clone()) {
+                tracing::info!(
+                    "Trade response: retcode={}, order={}, price={}",
+                    trade_resp.retcode,
+                    trade_resp.order,
+                    trade_resp.price
+                );
+                // Return as Raw for now - full OrderStatusReport conversion requires more context
+                return Ok(Some(NautilusMessage::Raw(
+                    serde_json::to_string(&trade_resp)?,
+                )));
+            }
+        }
+
+        // Check for order update (has ticket and volume_initial fields)
+        if value.get("ticket").is_some() && value.get("volume_initial").is_some() {
+            if let Ok(order_msg) = serde_json::from_value::<Mt5OrderMsg>(value.clone()) {
+                tracing::info!(
+                    "Order update: ticket={}, symbol={}, type={}",
+                    order_msg.ticket,
+                    order_msg.symbol,
+                    order_msg.type_
+                );
+                return Ok(Some(NautilusMessage::Raw(
+                    serde_json::to_string(&order_msg)?,
+                )));
+            }
+        }
+
+        // Check for position update (has id and open fields)
+        if value.get("id").is_some() && value.get("open").is_some() {
+            if let Ok(pos_msg) = serde_json::from_value::<Mt5PositionMsg>(value.clone()) {
+                tracing::info!(
+                    "Position update: id={}, symbol={}, type={}",
+                    pos_msg.id,
+                    pos_msg.symbol,
+                    pos_msg.type_
+                );
+                return Ok(Some(NautilusMessage::Raw(
+                    serde_json::to_string(&pos_msg)?,
+                )));
+            }
+        }
+
+        // Return as Raw message for unrecognized stream messages
+        Ok(Some(NautilusMessage::Raw(value.to_string())))
     }
 
     /// Wait until client is active or timeout
