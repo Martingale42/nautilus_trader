@@ -467,13 +467,21 @@ impl Mt5Client {
         end: Option<i64>,
         count: Option<i32>,
     ) -> Mt5Result<String> {
+        // Use current time if end is not specified (to get bars up to "now")
+        let end_timestamp = end.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0)
+        });
+
         let request = serde_json::json!({
             "action": "HISTORY",
             "actionType": "DATA",
             "symbol": symbol,
             "chartTF": timeframe,
             "fromDate": start.unwrap_or(0),
-            "toDate": end.unwrap_or(0),
+            "toDate": end_timestamp,
             "count": count.unwrap_or(1000)
         });
         let request_str = serde_json::to_string(&request)?;
