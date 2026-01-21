@@ -314,12 +314,6 @@ impl Mt5Client {
         Ok(())
     }
 
-    /// Legacy subscribe method (deprecated - use subscribe_quotes or subscribe_bars)
-    #[deprecated(note = "Use subscribe_quotes() or subscribe_bars() instead")]
-    pub fn subscribe(&self, symbols: Vec<String>) -> Mt5Result<()> {
-        self.send_config_requests(&symbols, crate::common::Mt5TimeFrame::Tick)
-    }
-
     /// Ensure ZMQ thread is running (starts it if not already started)
     ///
     /// Returns a receiver for messages if this is the first call
@@ -963,7 +957,7 @@ impl Mt5Client {
         msg_bytes: &[u8],
         instruments: &Arc<Mutex<HashMap<String, InstrumentAny>>>,
         bar_types: &Arc<Mutex<HashMap<(String, String), String>>>,
-        account_id: Option<AccountId>,
+        _account_id: Option<AccountId>,
     ) -> Mt5Result<Option<NautilusMessage>> {
         let json_str = String::from_utf8_lossy(msg_bytes);
 
@@ -1045,24 +1039,18 @@ impl Mt5Client {
         _instruments: &Arc<Mutex<HashMap<String, InstrumentAny>>>,
         _account_id: Option<AccountId>,
     ) -> Mt5Result<Option<NautilusMessage>> {
-        let json_str = String::from_utf8_lossy(msg_bytes);
-
-        // For now, just return raw message
-        // TODO: Parse specific responses (ACCOUNT, POSITIONS, ORDERS, etc.)
-        Ok(Some(NautilusMessage::Raw(json_str.to_string())))
+        let _json_str = String::from_utf8_lossy(msg_bytes);
+        todo!("Parse specific responses (ACCOUNT, POSITIONS, ORDERS, etc.)")
     }
 
     /// Handle message from streamSocket (orders/positions)
     fn handle_stream_message(
         msg_bytes: &[u8],
-        instruments: &Arc<Mutex<HashMap<String, InstrumentAny>>>,
-        account_id: Option<AccountId>,
+        _instruments: &Arc<Mutex<HashMap<String, InstrumentAny>>>,
+        _account_id: Option<AccountId>,
     ) -> Mt5Result<Option<NautilusMessage>> {
-        let json_str = String::from_utf8_lossy(msg_bytes);
-
-        // For now, just return raw message
-        // TODO: Parse order/position updates
-        Ok(Some(NautilusMessage::Raw(json_str.to_string())))
+        let _json_str = String::from_utf8_lossy(msg_bytes);
+        todo!("Parse order/position updates")
     }
 
     /// Wait until client is active or timeout
@@ -1109,38 +1097,6 @@ impl Mt5Client {
             return Err(Mt5Error::Parse(
                 "MT5 returned ERROR - deserialization failed on MT5 side".to_string(),
             ));
-        }
-
-        Ok(response)
-    }
-
-    /// Receive response from MT5 dataSocket
-    ///
-    /// This receives a PULL message from data_port (async responses)
-    fn receive_data_response(&self) -> Mt5Result<String> {
-        let context = zmq::Context::new();
-        let socket = context.socket(zmq::PULL)?;
-        socket.connect(&format!(
-            "tcp://{}:{}",
-            self.config.host, self.config.data_port
-        ))?;
-
-        // Set timeout for receiving
-        socket.set_rcvtimeo(10000)?; // 10 seconds for large responses
-
-        let response = socket.recv_string(0)?.map_err(|e| {
-            Mt5Error::Connection(format!("Invalid UTF-8 in data response: {:?}", e))
-        })?;
-
-        // Check if response is an error message
-        if response.contains("\"error\":true") || response.contains("\"error\": true") {
-            // Try to parse error details
-            if let Ok(error_json) = serde_json::from_str::<serde_json::Value>(&response) {
-                if let Some(desc) = error_json.get("error_description").and_then(|v| v.as_str()) {
-                    return Err(Mt5Error::Parse(format!("MT5 error: {}", desc)));
-                }
-            }
-            return Err(Mt5Error::Parse(format!("MT5 returned error: {}", response)));
         }
 
         Ok(response)

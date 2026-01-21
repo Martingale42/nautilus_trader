@@ -148,12 +148,6 @@ impl Mt5Client {
             .map_err(to_pyruntime_err)
     }
 
-    #[pyo3(name = "subscribe")]
-    fn py_subscribe(&self, symbols: Vec<String>) -> PyResult<()> {
-        #[allow(deprecated)]
-        self.subscribe(symbols).map_err(to_pyruntime_err)
-    }
-
     #[pyo3(name = "connect")]
     fn py_connect<'py>(
         &self,
@@ -198,9 +192,8 @@ impl Mt5Client {
                             let py_obj = data_to_pycapsule(py, data);
                             call_python(py, &callback, py_obj);
                         }),
-                        NautilusMessage::Raw(raw_json) => {
-                            tracing::debug!("Raw MT5 message: {}", raw_json);
-                            // TODO: Parse and handle other message types (orders, positions, etc.)
+                        NautilusMessage::Raw(_raw_json) => {
+                            todo!("Parse and handle other message types (orders, positions, etc.)")
                         }
                     }
                 }
@@ -216,12 +209,6 @@ impl Mt5Client {
 
     #[pyo3(name = "close")]
     fn py_close(&self) {
-        self.close();
-    }
-
-    #[pyo3(name = "disconnect")]
-    fn py_disconnect(&self) {
-        // Deprecated: Use close() instead
         self.close();
     }
 

@@ -16,9 +16,6 @@
 //! - Position management
 //! - Historical data retrieval
 
-#![allow(dead_code)] // Remove in production
-#![allow(unused_variables)] // Remove in production
-
 pub mod common;
 pub mod websocket;
 

@@ -236,8 +236,8 @@ if client.is_connected:
 # Data will be published to the message bus automatically
 # Subscribe to the message bus to receive QuoteTick and Bar objects
 
-# Disconnect when done
-await client.disconnect()
+# Close when done
+client.close()
 ```
 
 ### Supported Timeframes

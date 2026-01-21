@@ -320,8 +320,8 @@ class MT5DataClient(LiveMarketDataClient):
 
         self._subscribed_trades.add(instrument_id)
 
-        # Subscribe via MT5 ZeroMQ client
-        self._client.subscribe([symbol])
+        # Subscribe via MT5 ZeroMQ client (uses same tick stream as quotes)
+        self._client.subscribe_quotes([symbol])
         self._log.info(f"Subscribed to {instrument_id} trade ticks", LogColor.BLUE)
 
     async def _subscribe_bars(self, command: SubscribeBars) -> None:

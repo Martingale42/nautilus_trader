@@ -4,96 +4,16 @@ use std::str::FromStr;
 
 use nautilus_core::{uuid::UUID4, UnixNanos};
 use nautilus_model::{
-    data::{Bar, BarType, QuoteTick, TradeTick},
-    enums::{AggressorSide, OrderSide, OrderStatus, OrderType, TimeInForce},
-    identifiers::{AccountId, ClientOrderId, InstrumentId, Symbol, TradeId, Venue, VenueOrderId},
+    data::{Bar, BarType, QuoteTick},
+    enums::{OrderSide, OrderStatus, OrderType, TimeInForce},
+    identifiers::{AccountId, ClientOrderId, InstrumentId, Symbol, Venue, VenueOrderId},
     instruments::{CurrencyPair, Instrument, InstrumentAny},
     reports::OrderStatusReport,
     types::{Currency, Price, Quantity},
 };
 
 use super::messages::*;
-use crate::common::{parse_timestamp_ms, Mt5TickFlags};
-
-/// Parse MT5 tick message to Nautilus TradeTick
-///
-/// # Arguments
-/// * `msg` - MT5 tick message
-/// * `instrument` - Instrument definition
-/// * `ts_init` - Timestamp when message was received
-pub fn parse_mt5_tick_to_trade(
-    msg: &Mt5TickMsg,
-    instrument: &InstrumentAny,
-    ts_init: UnixNanos,
-) -> anyhow::Result<TradeTick> {
-    let instrument_id = instrument.id();
-
-    // Determine aggressor side from flags
-    let flags = Mt5TickFlags(msg.flags);
-    let aggressor_side = if flags.is_buy() {
-        AggressorSide::Buyer
-    } else if flags.is_sell() {
-        AggressorSide::Seller
-    } else {
-        AggressorSide::NoAggressor
-    };
-
-    // Use last price if available, otherwise mid price
-    let price_value = if msg.last > 0.0 {
-        msg.last
-    } else {
-        (msg.bid + msg.ask) / 2.0
-    };
-
-    let price = Price::new(price_value, instrument.price_precision());
-    let size = Quantity::new(msg.volume, instrument.size_precision());
-
-    // Generate unique trade ID
-    let trade_id = TradeId::new(&format!("mt5-{}-{}", msg.symbol, msg.time));
-
-    // Convert timestamp from milliseconds to nanoseconds
-    let ts_event = UnixNanos::from(parse_timestamp_ms(msg.time));
-
-    Ok(TradeTick::new(
-        instrument_id,
-        price,
-        size,
-        aggressor_side,
-        trade_id,
-        ts_event,
-        ts_init,
-    ))
-}
-
-/// Parse MT5 tick message to Nautilus QuoteTick
-///
-/// QuoteTicks are better for forex/CFD where bid/ask is more relevant than trades
-pub fn parse_mt5_tick_to_quote(
-    msg: &Mt5TickMsg,
-    instrument: &InstrumentAny,
-    ts_init: UnixNanos,
-) -> anyhow::Result<QuoteTick> {
-    let instrument_id = instrument.id();
-
-    let bid_price = Price::new(msg.bid, instrument.price_precision());
-    let ask_price = Price::new(msg.ask, instrument.price_precision());
-
-    // MT5 doesn't provide bid/ask sizes directly, use volume or default
-    let bid_size = Quantity::new(msg.volume, instrument.size_precision());
-    let ask_size = Quantity::new(msg.volume, instrument.size_precision());
-
-    let ts_event = UnixNanos::from(parse_timestamp_ms(msg.time));
-
-    Ok(QuoteTick::new(
-        instrument_id,
-        bid_price,
-        ask_price,
-        bid_size,
-        ask_size,
-        ts_event,
-        ts_init,
-    ))
-}
+use crate::common::parse_timestamp_ms;
 
 /// Parse MT5 live tick message to Nautilus QuoteTick
 ///
@@ -287,9 +207,39 @@ pub fn parse_mt5_order_status(
         Some(UUID4::new()),
     );
 
+    // Set price fields based on order type
+    if msg.price_open > 0.0 {
+        match order_type {
+            OrderType::StopMarket => {
+                // For stop market orders, price_open IS the trigger/activation price
+                report = report.with_trigger_price(price);
+            }
+            OrderType::Limit => {
+                report = report.with_price(price);
+            }
+            OrderType::StopLimit => {
+                // price_open is the limit price for stop-limit orders
+                report = report.with_price(price);
+                // StopLimit orders need trigger_price from MT5's price_stoplimit field
+                // which is not yet in Mt5OrderMsg struct
+                todo!("Add price_stoplimit field to Mt5OrderMsg for StopLimit trigger_price");
+            }
+            _ => {
+                // Market orders: price_open may be 0 or execution price
+            }
+        }
+    }
+
     // Set client order ID if available
     if !msg.comment.is_empty() {
         report = report.with_client_order_id(client_order_id);
+    }
+
+    // Set average fill price when order has fills
+    if filled_qty.as_f64() > 0.0 {
+        // MT5 doesn't provide avg_px directly in order messages
+        // Need to fetch from deal history
+        todo!("Calculate avg_px from MT5 deal history for filled orders");
     }
 
     Ok(report)
@@ -373,79 +323,6 @@ mod tests {
 
     use super::*;
     use crate::common::testing::load_test_json;
-
-    fn create_test_instrument() -> InstrumentAny {
-        let raw_symbol = Symbol::new("EURUSD");
-        let instrument_id = InstrumentId::new(raw_symbol, Venue::new("MT5"));
-        let base_currency = Currency::USD();
-        let quote_currency = Currency::USD();
-
-        InstrumentAny::CurrencyPair(CurrencyPair::new(
-            instrument_id,
-            raw_symbol, // raw_symbol
-            base_currency,
-            quote_currency,
-            5,                      // price_precision
-            2,                      // size_precision
-            Price::new(0.00001, 5), // price_increment
-            Quantity::new(0.01, 2), // size_increment
-            None,                   // multiplier
-            None,                   // lot_size
-            None,                   // max_quantity
-            None,                   // min_quantity
-            None,                   // max_notional
-            None,                   // min_notional
-            None,                   // max_price
-            None,                   // min_price
-            None,                   // margin_init
-            None,                   // margin_maint
-            None,                   // maker_fee
-            None,                   // taker_fee
-            UnixNanos::default(),   // ts_event
-            UnixNanos::default(),   // ts_init
-        ))
-    }
-
-    // Legacy format tests (Mt5TickMsg)
-
-    #[test]
-    fn test_parse_tick_to_trade() {
-        let msg = Mt5TickMsg {
-            symbol: "EURUSD".into(),
-            bid: 1.08500,
-            ask: 1.08510,
-            last: 1.08505,
-            volume: 100.0,
-            time: 1709891679000,
-            flags: Mt5TickFlags::BUY,
-        };
-
-        let instrument = create_test_instrument();
-        let trade = parse_mt5_tick_to_trade(&msg, &instrument, UnixNanos::default()).unwrap();
-
-        assert_eq!(trade.price.as_f64(), 1.08505);
-        assert_eq!(trade.size.as_f64(), 100.0);
-        assert_eq!(trade.aggressor_side, AggressorSide::Buyer);
-    }
-
-    #[test]
-    fn test_parse_tick_to_quote() {
-        let msg = Mt5TickMsg {
-            symbol: "EURUSD".into(),
-            bid: 1.08500,
-            ask: 1.08510,
-            last: 0.0,
-            volume: 100.0,
-            time: 1709891679000,
-            flags: 0,
-        };
-
-        let instrument = create_test_instrument();
-        let quote = parse_mt5_tick_to_quote(&msg, &instrument, UnixNanos::default()).unwrap();
-
-        assert_eq!(quote.bid_price.as_f64(), 1.08500);
-        assert_eq!(quote.ask_price.as_f64(), 1.08510);
-    }
 
     // Live streaming format tests (Mt5LiveTickMsg, Mt5LiveBarMsg)
 

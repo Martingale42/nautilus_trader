@@ -28,7 +28,6 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Mt5Message {
-    Tick(Mt5TickMsg),
     Trade(Mt5TradeResponseMsg),
     Order(Mt5OrderMsg),
     Position(Mt5PositionMsg),
@@ -67,29 +66,6 @@ pub struct Mt5LiveBarMsg {
     pub timeframe: Ustr,
     /// Bar data: [timestamp_sec, open, high, low, close, volume]
     pub data: Vec<f64>,
-}
-
-/// Legacy MT5 tick message format (not actually used by MT5-ZeroMQ)
-///
-/// Kept for compatibility with old code/tests
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct Mt5TickMsg {
-    /// Symbol name (e.g., "EURUSD")
-    pub symbol: Ustr,
-    /// Bid price
-    pub bid: f64,
-    /// Ask price
-    pub ask: f64,
-    /// Last price
-    pub last: f64,
-    /// Volume
-    pub volume: f64,
-    /// Timestamp in milliseconds
-    pub time: i64,
-    /// Tick flags (optional)
-    #[serde(default)]
-    pub flags: u32,
 }
 
 /// MT5 trade response message (from streamSocket after order submission)
@@ -552,24 +528,6 @@ impl Mt5TradeRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_deserialize_tick_msg() {
-        let json = r#"{
-            "symbol": "EURUSD",
-            "bid": 1.08500,
-            "ask": 1.08510,
-            "last": 1.08505,
-            "volume": 100.0,
-            "time": 1709891679000,
-            "flags": 32
-        }"#;
-
-        let msg: Mt5TickMsg = serde_json::from_str(json).unwrap();
-        assert_eq!(msg.symbol.as_str(), "EURUSD");
-        assert_eq!(msg.bid, 1.08500);
-        assert_eq!(msg.ask, 1.08510);
-    }
 
     #[test]
     fn test_deserialize_trade_response() {
