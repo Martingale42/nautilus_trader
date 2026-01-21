@@ -192,8 +192,39 @@ impl Mt5Client {
                             let py_obj = data_to_pycapsule(py, data);
                             call_python(py, &callback, py_obj);
                         }),
-                        NautilusMessage::Raw(_raw_json) => {
-                            todo!("Parse and handle other message types (orders, positions, etc.)")
+                        NautilusMessage::TradeResponse(trade_resp) => {
+                            // Trade response from order submission
+                            // Log for now - execution client will handle order status reports
+                            tracing::debug!(
+                                "Trade response: retcode={}, order={}, price={}",
+                                trade_resp.retcode,
+                                trade_resp.order,
+                                trade_resp.price
+                            );
+                        }
+                        NautilusMessage::OrderUpdate(order_msg) => {
+                            // Order update from stream socket
+                            // Log for now - execution client will convert to OrderStatusReport
+                            tracing::debug!(
+                                "Order update: ticket={}, symbol={}, type={}",
+                                order_msg.ticket,
+                                order_msg.symbol,
+                                order_msg.type_
+                            );
+                        }
+                        NautilusMessage::PositionUpdate(pos_msg) => {
+                            // Position update from stream socket
+                            // Log for now - execution client will convert to PositionStatusReport
+                            tracing::debug!(
+                                "Position update: id={}, symbol={}, type={}",
+                                pos_msg.id,
+                                pos_msg.symbol,
+                                pos_msg.type_
+                            );
+                        }
+                        NautilusMessage::Raw(raw_json) => {
+                            // Raw/unhandled message - log at debug level like Bybit
+                            tracing::debug!("Received raw/unhandled message, skipping: {}", raw_json);
                         }
                     }
                 }

@@ -62,9 +62,20 @@ pub enum Mt5Error {
 pub type Mt5Result<T> = Result<T, Mt5Error>;
 
 /// Nautilus message wrapper for parsed MT5 data
+///
+/// Similar to Bybit's `BybitWebSocketMessage`, this enum provides typed variants
+/// for different MT5 message types, enabling proper handling in Python bindings.
 #[derive(Debug, Clone)]
 pub enum NautilusMessage {
+    /// Fully parsed Nautilus data (QuoteTick, Bar, etc.)
     Data(Data),
+    /// Trade response from MT5 (order submission result)
+    TradeResponse(Mt5TradeResponseMsg),
+    /// Order update from stream socket
+    OrderUpdate(Mt5OrderMsg),
+    /// Position update from stream socket
+    PositionUpdate(Mt5PositionMsg),
+    /// Raw/unhandled message (for debugging)
     Raw(String),
 }
 
@@ -1059,7 +1070,8 @@ impl Mt5Client {
     /// Handle message from streamSocket (orders/positions)
     ///
     /// This handles streaming updates for orders and positions from MT5.
-    /// Following Bybit's pattern, we return Raw for unrecognized messages rather than panicking.
+    /// Following Bybit's pattern, we return typed variants for known message types
+    /// and Raw for unrecognized messages.
     fn handle_stream_message(
         msg_bytes: &[u8],
         _instruments: &Arc<Mutex<HashMap<String, InstrumentAny>>>,
@@ -1085,10 +1097,7 @@ impl Mt5Client {
                     trade_resp.order,
                     trade_resp.price
                 );
-                // Return as Raw for now - full OrderStatusReport conversion requires more context
-                return Ok(Some(NautilusMessage::Raw(
-                    serde_json::to_string(&trade_resp)?,
-                )));
+                return Ok(Some(NautilusMessage::TradeResponse(trade_resp)));
             }
         }
 
@@ -1101,9 +1110,7 @@ impl Mt5Client {
                     order_msg.symbol,
                     order_msg.type_
                 );
-                return Ok(Some(NautilusMessage::Raw(
-                    serde_json::to_string(&order_msg)?,
-                )));
+                return Ok(Some(NautilusMessage::OrderUpdate(order_msg)));
             }
         }
 
@@ -1116,9 +1123,7 @@ impl Mt5Client {
                     pos_msg.symbol,
                     pos_msg.type_
                 );
-                return Ok(Some(NautilusMessage::Raw(
-                    serde_json::to_string(&pos_msg)?,
-                )));
+                return Ok(Some(NautilusMessage::PositionUpdate(pos_msg)));
             }
         }
 
