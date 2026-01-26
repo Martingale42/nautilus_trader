@@ -317,6 +317,39 @@ pub struct Mt5PositionsResponse {
     pub server_time: i64,
 }
 
+/// MT5 deal/trade information (from HISTORY/TRADES action)
+///
+/// Represents a historical deal (fill) from MT5
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5DealMsg {
+    /// Deal ticket (unique identifier)
+    pub ticket: u64,
+    /// Deal execution time (Unix timestamp in seconds)
+    pub time: i64,
+    /// Execution price
+    pub price: f64,
+    /// Executed volume
+    pub volume: f64,
+    /// Symbol name
+    pub symbol: Ustr,
+    /// Deal type description ("Buy" or "Sell")
+    #[serde(rename = "type")]
+    pub type_: Ustr,
+    /// Entry type (0=DEAL_ENTRY_IN, 1=DEAL_ENTRY_OUT, 2=DEAL_ENTRY_INOUT)
+    pub entry: i64,
+    /// Profit/loss for this deal
+    pub profit: f64,
+}
+
+/// MT5 trades/deals response
+///
+/// Response to HISTORY action with actionType="TRADES"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mt5TradesResponse {
+    /// List of historical deals
+    pub trades: Vec<Mt5DealMsg>,
+}
+
 /// MT5 symbol information response
 ///
 /// Response to SYMBOL_INFO action

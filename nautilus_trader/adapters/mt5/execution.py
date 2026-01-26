@@ -48,23 +48,87 @@ from nautilus_trader.live.cancellation import DEFAULT_FUTURE_CANCELLATION_TIMEOU
 from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
 from nautilus_trader.live.execution_client import LiveExecutionClient
 from nautilus_trader.model.enums import AccountType
+from nautilus_trader.model.enums import LiquiditySide
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.enums import OrderType
+from nautilus_trader.model.enums import PositionSide
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.functions import order_side_to_pyo3
 from nautilus_trader.model.functions import time_in_force_to_pyo3
 from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import ClientOrderId
+from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import VenueOrderId
 from nautilus_trader.model.orders import LimitOrder
 from nautilus_trader.model.orders import MarketOrder
 from nautilus_trader.model.orders import Order
 from nautilus_trader.model.orders import StopLimitOrder
 from nautilus_trader.model.orders import StopMarketOrder
+from nautilus_trader.model.objects import Money
 from nautilus_trader.model.position import Position
 from nautilus_trader.model.currencies import Currency
+from nautilus_trader.core.uuid import UUID4
+
+
+def _parse_mt5_order_type(mt5_type: str) -> tuple[OrderType, OrderSide]:
+    """
+    Parse MT5 order type string to Nautilus OrderType and OrderSide.
+
+    Parameters
+    ----------
+    mt5_type : str
+        MT5 order type string (e.g., "ORDER_TYPE_BUY_LIMIT")
+
+    Returns
+    -------
+    tuple[OrderType, OrderSide]
+        The order type and side.
+
+    """
+    type_map = {
+        "ORDER_TYPE_BUY": (OrderType.MARKET, OrderSide.BUY),
+        "ORDER_TYPE_SELL": (OrderType.MARKET, OrderSide.SELL),
+        "ORDER_TYPE_BUY_LIMIT": (OrderType.LIMIT, OrderSide.BUY),
+        "ORDER_TYPE_SELL_LIMIT": (OrderType.LIMIT, OrderSide.SELL),
+        "ORDER_TYPE_BUY_STOP": (OrderType.STOP_MARKET, OrderSide.BUY),
+        "ORDER_TYPE_SELL_STOP": (OrderType.STOP_MARKET, OrderSide.SELL),
+        "ORDER_TYPE_BUY_STOP_LIMIT": (OrderType.STOP_LIMIT, OrderSide.BUY),
+        "ORDER_TYPE_SELL_STOP_LIMIT": (OrderType.STOP_LIMIT, OrderSide.SELL),
+    }
+    return type_map.get(mt5_type, (OrderType.MARKET, OrderSide.BUY))
+
+
+def _parse_mt5_order_status(mt5_state: str) -> OrderStatus:
+    """
+    Parse MT5 order state string to Nautilus OrderStatus.
+
+    Parameters
+    ----------
+    mt5_state : str
+        MT5 order state string (e.g., "ORDER_STATE_PLACED")
+
+    Returns
+    -------
+    OrderStatus
+        The order status.
+
+    """
+    state_map = {
+        "ORDER_STATE_STARTED": OrderStatus.INITIALIZED,
+        "ORDER_STATE_PLACED": OrderStatus.ACCEPTED,
+        "ORDER_STATE_CANCELED": OrderStatus.CANCELED,
+        "ORDER_STATE_PARTIAL": OrderStatus.PARTIALLY_FILLED,
+        "ORDER_STATE_FILLED": OrderStatus.FILLED,
+        "ORDER_STATE_REJECTED": OrderStatus.REJECTED,
+        "ORDER_STATE_EXPIRED": OrderStatus.EXPIRED,
+        "ORDER_STATE_REQUEST_ADD": OrderStatus.PENDING_UPDATE,
+        "ORDER_STATE_REQUEST_MODIFY": OrderStatus.PENDING_UPDATE,
+        "ORDER_STATE_REQUEST_CANCEL": OrderStatus.PENDING_CANCEL,
+    }
+    return state_map.get(mt5_state, OrderStatus.INITIALIZED)
 
 
 class _Mt5OrderReport:
@@ -320,27 +384,63 @@ class MT5ExecutionClient(LiveExecutionClient):
         if not self._client.is_initialized():
             await self._cache_instruments()
 
-        # Fetch active symbols from cached state
-        active_symbols = self._get_cache_active_symbols()
-
         try:
-            # TODO: Implement request_order_status_reports() in Rust client
-            # This should send a query to MT5 via sysSocket and parse responses
-            self._log.warning(
-                "Order status report generation not yet fully implemented - "
-                "querying MT5 for orders",
-            )
+            # Query orders from MT5
+            orders = await self._client.request_orders()
 
-            # Placeholder: In production, this would call the Rust client
-            # pyo3_reports = await self._client.request_order_status_reports(
-            #     account_id=self.pyo3_account_id,
-            #     symbols=list(active_symbols),
-            # )
-            #
-            # for pyo3_report in pyo3_reports:
-            #     report = OrderStatusReport.from_pyo3(pyo3_report)
-            #     self._log.debug(f"Received {report}", LogColor.MAGENTA)
-            #     reports.append(report)
+            for order in orders:
+                try:
+                    # Parse order type and side
+                    order_type, order_side = _parse_mt5_order_type(order.get("type", ""))
+                    order_status = _parse_mt5_order_status(order.get("state", ""))
+
+                    # Get instrument
+                    symbol = order.get("symbol", "")
+                    instrument_id = nautilus_pyo3.InstrumentId.from_str(f"{symbol}.{MT5}")
+                    instrument = self._cache.instrument(instrument_id)
+
+                    if instrument is None:
+                        self._log.warning(f"Instrument {instrument_id} not found, skipping order")
+                        continue
+
+                    # Parse quantities with instrument precision
+                    quantity = instrument.make_qty(order.get("volume_initial", 0.0))
+                    filled_qty = instrument.make_qty(
+                        order.get("volume_initial", 0.0) - order.get("volume_current", 0.0)
+                    )
+
+                    # Parse price
+                    price = instrument.make_price(order.get("price_open", 0.0))
+
+                    # Extract client_order_id from comment field
+                    comment = order.get("comment", "")
+                    client_order_id = ClientOrderId(comment) if comment else None
+
+                    # Create report
+                    report = OrderStatusReport(
+                        account_id=self.account_id,
+                        instrument_id=instrument_id,
+                        venue_order_id=VenueOrderId(str(order.get("ticket", 0))),
+                        order_side=order_side,
+                        order_type=order_type,
+                        time_in_force=TimeInForce.GTC,  # MT5 default
+                        order_status=order_status,
+                        quantity=quantity,
+                        filled_qty=filled_qty,
+                        price=price if order_type != OrderType.MARKET else None,
+                        client_order_id=client_order_id,
+                        ts_accepted=order.get("time_setup", 0) * 1_000_000_000,  # Convert to ns
+                        ts_last=self._clock.timestamp_ns(),
+                        ts_init=self._clock.timestamp_ns(),
+                        report_id=UUID4(),
+                    )
+
+                    self._log.debug(f"Received {report}", LogColor.MAGENTA)
+                    reports.append(report)
+
+                except Exception as e:
+                    self._log.warning(f"Failed to parse order: {e}")
+                    continue
 
         except Exception as e:
             self._log.exception("Failed to generate OrderStatusReports", e)
@@ -439,17 +539,52 @@ class MT5ExecutionClient(LiveExecutionClient):
         reports: list[FillReport] = []
 
         try:
-            # TODO: Implement in Rust client
-            # pyo3_reports = await self._client.request_fill_reports(
-            #     account_id=self.pyo3_account_id,
-            #     start=command.start,
-            # )
-            #
-            # for pyo3_report in pyo3_reports:
-            #     report = FillReport.from_pyo3(pyo3_report)
-            #     self._log.debug(f"Received {report}", LogColor.MAGENTA)
-            #     reports.append(report)
-            self._log.warning("Fill report generation not yet fully implemented")
+            # Query trade history from MT5
+            trades = await self._client.request_trade_history()
+
+            for trade in trades:
+                try:
+                    # Get instrument
+                    symbol = trade.get("symbol", "")
+                    instrument_id = nautilus_pyo3.InstrumentId.from_str(f"{symbol}.{MT5}")
+                    instrument = self._cache.instrument(instrument_id)
+
+                    if instrument is None:
+                        self._log.warning(f"Instrument {instrument_id} not found, skipping trade")
+                        continue
+
+                    # Parse order side from type description
+                    trade_type = trade.get("type", "Buy")
+                    order_side = OrderSide.BUY if trade_type == "Buy" else OrderSide.SELL
+
+                    # Parse quantity and price with instrument precision
+                    last_qty = instrument.make_qty(trade.get("volume", 0.0))
+                    last_px = instrument.make_price(trade.get("price", 0.0))
+
+                    # Create report
+                    # Note: MT5 doesn't provide commission per deal, defaulting to 0
+                    report = FillReport(
+                        account_id=self.account_id,
+                        instrument_id=instrument_id,
+                        venue_order_id=VenueOrderId(str(trade.get("ticket", 0))),
+                        trade_id=TradeId(str(trade.get("ticket", 0))),
+                        order_side=order_side,
+                        last_qty=last_qty,
+                        last_px=last_px,
+                        commission=Money(0, instrument.quote_currency),  # MT5 doesn't provide per-deal commission
+                        liquidity_side=LiquiditySide.NO_LIQUIDITY_SIDE,  # Unknown from MT5
+                        ts_event=trade.get("time", 0) * 1_000_000_000,  # Convert to ns
+                        ts_init=self._clock.timestamp_ns(),
+                        report_id=UUID4(),
+                    )
+
+                    self._log.debug(f"Received {report}", LogColor.MAGENTA)
+                    reports.append(report)
+
+                except Exception as e:
+                    self._log.warning(f"Failed to parse trade: {e}")
+                    continue
+
         except Exception as e:
             self._log.exception("Failed to generate FillReports", e)
 
@@ -485,16 +620,50 @@ class MT5ExecutionClient(LiveExecutionClient):
         reports: list[PositionStatusReport] = []
 
         try:
-            # TODO: Implement in Rust client
-            # pyo3_reports = await self._client.request_position_status_reports(
-            #     account_id=self.pyo3_account_id,
-            # )
-            #
-            # for pyo3_report in pyo3_reports:
-            #     report = PositionStatusReport.from_pyo3(pyo3_report)
-            #     self._log.debug(f"Received {report}", LogColor.MAGENTA)
-            #     reports.append(report)
-            self._log.warning("Position report generation not yet fully implemented")
+            # Query positions from MT5
+            positions = await self._client.request_positions()
+
+            for position in positions:
+                try:
+                    # Get instrument
+                    symbol = position.get("symbol", "")
+                    instrument_id = nautilus_pyo3.InstrumentId.from_str(f"{symbol}.{MT5}")
+                    instrument = self._cache.instrument(instrument_id)
+
+                    if instrument is None:
+                        self._log.warning(f"Instrument {instrument_id} not found, skipping position")
+                        continue
+
+                    # Parse position side
+                    pos_type = position.get("type", "")
+                    if pos_type == "POSITION_TYPE_BUY":
+                        position_side = PositionSide.LONG
+                    elif pos_type == "POSITION_TYPE_SELL":
+                        position_side = PositionSide.SHORT
+                    else:
+                        position_side = PositionSide.FLAT
+
+                    # Parse quantity with instrument precision
+                    quantity = instrument.make_qty(position.get("volume", 0.0))
+
+                    # Create report
+                    report = PositionStatusReport(
+                        account_id=self.account_id,
+                        instrument_id=instrument_id,
+                        position_side=position_side,
+                        quantity=quantity,
+                        ts_last=self._clock.timestamp_ns(),
+                        ts_init=self._clock.timestamp_ns(),
+                        report_id=UUID4(),
+                    )
+
+                    self._log.debug(f"Received {report}", LogColor.MAGENTA)
+                    reports.append(report)
+
+                except Exception as e:
+                    self._log.warning(f"Failed to parse position: {e}")
+                    continue
+
         except Exception as e:
             self._log.exception("Failed to generate PositionReports", e)
 

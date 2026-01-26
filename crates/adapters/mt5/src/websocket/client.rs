@@ -128,6 +128,10 @@ pub enum ZmqCommand {
         count: Option<i32>,
         response_tx: oneshot::Sender<Mt5Result<String>>,
     },
+    /// Request trade/deal history from account
+    RequestTradeHistory {
+        response_tx: oneshot::Sender<Mt5Result<String>>,
+    },
 }
 
 /// Configuration for MT5 client
@@ -531,6 +535,40 @@ impl Mt5Client {
         ))
     }
 
+    /// Handle HISTORY/TRADES request-response in ZMQ thread
+    ///
+    /// Sends HISTORY request with actionType=TRADES, waits for ACK, then receives response
+    fn handle_trade_history_request(
+        sys_socket: &zmq::Socket,
+        data_socket: &zmq::Socket,
+    ) -> Mt5Result<String> {
+        let request = serde_json::json!({
+            "action": "HISTORY",
+            "actionType": "TRADES"
+        });
+        let request_str = serde_json::to_string(&request)?;
+
+        tracing::debug!("Sending HISTORY/TRADES request: {}", request_str);
+
+        // Send request via REQ socket
+        sys_socket.send(&request_str, 0)?;
+
+        // Wait for ACK (blocking, should be fast)
+        let ack = sys_socket
+            .recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("ACK recv error: {:?}", e)))?;
+        tracing::debug!("HISTORY/TRADES ACK: {}", ack);
+
+        // Receive actual response from PULL socket (blocking with timeout)
+        data_socket.set_rcvtimeo(10000)?; // 10 second timeout
+        let response = data_socket
+            .recv_string(0)?
+            .map_err(|e| Mt5Error::Connection(format!("Data recv error: {:?}", e)))?;
+
+        tracing::debug!("HISTORY/TRADES response received: {} bytes", response.len());
+        Ok(response)
+    }
+
     /// Fallback method for requesting instruments when ZMQ thread is not running
     ///
     /// Creates temporary sockets, makes blocking request, and cleans up
@@ -892,6 +930,10 @@ impl Mt5Client {
                             end,
                             count,
                         );
+                        let _ = response_tx.send(result);
+                    }
+                    ZmqCommand::RequestTradeHistory { response_tx } => {
+                        let result = Self::handle_trade_history_request(&sys_socket, &data_socket);
                         let _ = response_tx.send(result);
                     }
                 }
@@ -1441,6 +1483,42 @@ impl Mt5Client {
         );
 
         Ok(history_msg)
+    }
+
+    /// Request trade/deal history from MT5
+    ///
+    /// Sends HISTORY action with actionType=TRADES to retrieve all historical deals
+    pub async fn request_trade_history(&self) -> Mt5Result<Vec<Mt5DealMsg>> {
+        // Acquire lock to serialize this request-response cycle
+        let _lock = self.request_response_lock.lock().await;
+
+        tracing::debug!("Sending HISTORY/TRADES request via command channel");
+
+        // Create oneshot channel for response
+        let (response_tx, response_rx) = oneshot::channel();
+
+        // Send command to ZMQ thread
+        self.command_tx
+            .send(ZmqCommand::RequestTradeHistory { response_tx })
+            .map_err(|_| Mt5Error::Connection("Command channel closed".to_string()))?;
+
+        // Wait for response from ZMQ thread
+        let response = response_rx
+            .await
+            .map_err(|_| Mt5Error::Connection("Response channel closed".to_string()))??;
+
+        tracing::debug!("HISTORY/TRADES response received: {} bytes", response.len());
+
+        // Parse response as Mt5TradesResponse
+        let trades_response: Mt5TradesResponse = serde_json::from_str(&response)
+            .map_err(|e| Mt5Error::Parse(format!("Failed to parse TRADES response: {}", e)))?;
+
+        tracing::info!(
+            "Successfully parsed {} historical trades from MT5",
+            trades_response.trades.len()
+        );
+
+        Ok(trades_response.trades)
     }
 
     /// Submit a trade order to MT5

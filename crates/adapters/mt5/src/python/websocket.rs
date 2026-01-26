@@ -419,6 +419,40 @@ impl Mt5Client {
         })
     }
 
+    #[pyo3(name = "request_trade_history")]
+    fn py_request_trade_history<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let trades = client
+                .request_trade_history()
+                .await
+                .map_err(to_pyruntime_err)?;
+
+            Python::attach(|py| {
+                let py_trades: PyResult<Vec<Py<PyAny>>> = trades
+                    .into_iter()
+                    .map(|trade| {
+                        let dict = PyDict::new(py);
+                        dict.set_item("ticket", trade.ticket)?;
+                        dict.set_item("time", trade.time)?;
+                        dict.set_item("price", trade.price)?;
+                        dict.set_item("volume", trade.volume)?;
+                        dict.set_item("symbol", trade.symbol.as_str())?;
+                        dict.set_item("type", trade.type_.as_str())?;
+                        dict.set_item("entry", trade.entry)?;
+                        dict.set_item("profit", trade.profit)?;
+                        dict.into_py_any(py)
+                    })
+                    .collect();
+
+                PyList::new(py, py_trades?)
+                    .unwrap()
+                    .into_any()
+                    .into_py_any(py)
+            })
+        })
+    }
+
     #[pyo3(name = "submit_order")]
     fn py_submit_order<'py>(
         &self,
