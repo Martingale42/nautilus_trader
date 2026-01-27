@@ -80,7 +80,7 @@ node = TradingNode(config=config_node)
 # Configure instruments to test
 # Replace with symbols available in your MT5 Market Watch
 instrument_ids = [
-    InstrumentId.from_str("XAUUSD.MT5"),
+    InstrumentId.from_str("BTCUSD.MT5"),
     # InstrumentId.from_str("ADAUSD.MT5"),
     # InstrumentId.from_str("DOGEUSD.MT5"),
 ]
@@ -88,7 +88,7 @@ instrument_ids = [
 # Configure your actor
 config_tester = DataTesterConfig(
     instrument_ids=instrument_ids,
-    bar_types=[BarType.from_str("XAUUSD.MT5-1-MINUTE-LAST-EXTERNAL")],
+    bar_types=[BarType.from_str("BTCUSD.MT5-1-MINUTE-LAST-EXTERNAL")],
     subscribe_quotes=True,  # Subscribe to QuoteTicks (bid/ask)
     subscribe_trades=False,  # TradeTicks not commonly used for MT5
     subscribe_bars=True,  # Subscribe to BarTicks (M1)

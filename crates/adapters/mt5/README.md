@@ -31,13 +31,14 @@ MT5 Adapter (Rust)
 
 ## Features
 
-- ✅ Real-time market data (quotes, bars)
-- ✅ Quote tick streaming (bid/ask prices)
-- ✅ Bar data streaming (OHLCV with multiple timeframes: M1, M5, M15, M30, H1, H4, D1, W1, MN1)
-- ✅ Order execution (market, limit, stop orders)
-- ✅ Position management
-- ✅ Account state queries
-- ✅ Native MT5 JSON format (no protocol emulation)
+- Real-time quote tick streaming (bid/ask)
+- Real-time bar streaming (M1 to MN1 timeframes)
+- Historical bar data for reconciliation
+- Order execution (market, limit, stop, stop-limit)
+- Bracket orders with SL/TP (via MT5's native fields)
+- Position and account state queries
+- Execution reports (trade history)
+- Native MT5 JSON format (no protocol emulation)
 
 ## Project Structure
 
@@ -103,78 +104,50 @@ The adapter connects to three ZeroMQ sockets:
 
 ## Development Status
 
-**Overall Progress**: 3 stages completed, fully functional adapter ready for integration testing
+**Overall Progress**: Live trading functional, under active testing
 
-| Stage | Description | Status | LOC |
-|-------|-------------|--------|-----|
-| 1 | Rust Core & PyO3 Bindings | ✅ Complete | ~2,800 |
-| 2 | Python Adapter Layer | ✅ Complete | ~2,100 |
-| 3 | Enhanced Rust Functionality | ✅ Complete | ~250 |
-| **Total** | **Production-ready adapter** | **✅ Complete** | **~5,150** |
+| Component | Status | LOC |
+|-----------|--------|-----|
+| Rust Core (ZeroMQ + PyO3) | ✅ Complete | ~4,000 |
+| Python Adapter Layer | ✅ Complete | ~2,800 |
+| **Total** | **Live trading ready** | **~6,800** |
 
-### ✅ Completed (Stage 1 - Rust Core & Python Bindings)
-- [x] Project structure (14 files, ~2,800 LOC)
-- [x] MT5 message structs (messages.rs) - All MT5 JSON types including Mt5LiveTickMsg and Mt5LiveBarMsg
-- [x] MT5 enums and constants - Error codes, OrderType, TimeFrame, etc.
-- [x] MT5 → Nautilus parsers - QuoteTick, Bar, OrderStatusReport
-- [x] ZeroMQ client implementation - **Dedicated thread + channel pattern**
-- [x] Quote tick parsing (QuoteTick from TICK timeframe messages)
-- [x] Bar data parsing (Bar from M1/H1/etc. timeframe messages)
-- [x] Dynamic routing based on timeframe field (TICK → QuoteTick, M1/H1/etc. → Bar)
-- [x] Order status parsing
-- [x] **PyO3 bindings** - Full Python integration with async support
-- [x] ✨ **Clean compilation** (no errors, no warnings)
+### ✅ Implemented Features
 
-### ✅ Completed (Stage 2 - Python Adapter Layer)
-- [x] **Python adapter structure** (7 files, ~2,100 LOC)
-- [x] **constants.py** - MT5_VENUE, supported order types, error codes
-- [x] **config.py** - MT5DataClientConfig, MT5ExecClientConfig
-- [x] **providers.py** - MT5InstrumentProvider for instrument loading
-- [x] **data.py** - MT5DataClient (LiveMarketDataClient)
-  - Connection lifecycle (connect, disconnect)
-  - Subscription management (quotes via `subscribe_quotes()`, bars via `subscribe_bars()`)
-  - Timeframe mapping (Nautilus BarType → MT5 timeframes)
-  - Message handling from Rust ZeroMQ client
-- [x] **execution.py** - MT5ExecutionClient (LiveExecutionClient)
-  - Order submission (market, limit, stop)
-  - Order cancellation
-  - Report generation (orders, fills, positions)
-  - Account state synchronization
-- [x] **factories.py** - Factory classes for client creation
-- [x] **__init__.py** - Public API exports
+**Data Client:**
+- [x] Real-time quote tick streaming (bid/ask)
+- [x] Real-time bar streaming (M1, M5, M15, M30, H1, H4, D1, W1, MN1)
+- [x] Historical bar data retrieval for live trading reconciliation
+- [x] Instrument loading from MT5
 
-### ✅ Completed (Stage 3 - Enhanced Rust Functionality)
-- [x] **wait_until_active()** - Async method to wait for connection
-- [x] **request_instruments()** - Query available symbols from MT5
-- [x] **request_account_state()** - Query balance, margin, equity
-- [x] **request_orders()** - Query pending orders
-- [x] **request_positions()** - Query open positions
-- [x] **submit_order()** - Submit trade orders (market, limit, stop)
-- [x] **cancel_order()** - Cancel pending orders
-- [x] **PyO3 bindings** - All new methods exposed to Python
+**Execution Client:**
+- [x] Market orders
+- [x] Limit orders
+- [x] Stop orders (stop-market)
+- [x] Stop-limit orders (mapped to MT5's native stop orders)
+- [x] Bracket orders (entry + SL/TP) via MT5's native SL/TP fields
+- [x] Order cancellation
+- [x] Order modification
+- [x] Position queries
+- [x] Account state queries
+- [x] Execution reports for live trading reconciliation (trade history)
 
-**Added Methods** (client.rs):
-- `wait_until_active(timeout_secs)` - Polls until connected
-- `send_sys_request(request)` - Internal REQ/REP socket helper
-- `request_instruments()` - INSTRUMENTS action
-- `request_account_state()` - ACCOUNT action
-- `request_orders()` - ORDERS action
-- `request_positions()` - POSITIONS action
-- `submit_order(request)` - TRADE action
-- `cancel_order(ticket)` - DELETE action
+**Architecture:**
+- [x] Dedicated ZMQ thread + async channel pattern (handles non-Send ZMQ sockets)
+- [x] PyO3 bindings with async support
+- [x] Typed message variants following Bybit adapter pattern
 
-**Python Bindings** (python/websocket.rs):
-- All methods wrapped with `pyo3_async_runtimes::tokio::future_into_py`
-- Return types: PyDict for objects, PyList for collections
-- Proper error handling with `to_pyruntime_err`
+### ⚠️ Known Limitations
 
-### 📋 Todo (Stage 4+)
-- [ ] Historical data retrieval (HISTORY action implementation)
-- [ ] Enhanced order lifecycle event handling from stream socket
-- [ ] Comprehensive error handling and reconnection logic
-- [ ] Integration tests with MT5 demo account
-- [ ] Example trading strategy
-- [ ] Performance optimization and stress testing
+- **Stop-limit orders**: MT5's stop orders are natively stop-limit. Both `StopMarket` and `StopLimit` map to `ORDER_TYPE_*_STOP`. The "stop limit price" field is not yet utilized for different trigger/limit prices.
+- **Order events**: Bracket order SL/TP use virtual venue_order_ids (`{ticket}-SL`, `{ticket}-TP`). MT5 doesn't provide separate order IDs for attached SL/TP.
+- **Shutdown timing**: Orders in `PENDING_CANCEL` state at shutdown may still exist on MT5 if confirmation wasn't received before disconnect.
+
+### 📋 Todo
+- [ ] Different trigger/limit prices for stop-limit orders
+- [ ] Reconnection logic with order state recovery
+- [ ] Stream socket order lifecycle events (partial fills, modifications)
+- [ ] Integration test suite
 
 ## Building
 

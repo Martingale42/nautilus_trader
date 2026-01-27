@@ -31,6 +31,7 @@ from nautilus_trader.config import LiveExecEngineConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.config import TradingNodeConfig
 from nautilus_trader.live.node import TradingNode
+from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
@@ -103,6 +104,11 @@ config_node = TradingNodeConfig(
 node = TradingNode(config=config_node)
 
 # Configure your strategy
+# Order types tested:
+# - LIMIT (buy/sell) via enable_buys/enable_sells (default True)
+# - STOP_LIMIT via stop_order_type + enable_stop_buys/enable_stop_sells
+# - BRACKET orders via enable_brackets (LIMIT entry + SL/TP)
+# Change stop_order_type to OrderType.STOP_MARKET to test stop market orders instead
 config_tester = ExecTesterConfig(
     instrument_id=instrument_id,
     external_order_claims=[instrument_id],  # Claim external orders for this instrument
@@ -112,6 +118,7 @@ config_tester = ExecTesterConfig(
     subscribe_trades=False,  # Not commonly used for MT5
     enable_stop_buys=True,
     enable_stop_sells=True,
+    stop_order_type=OrderType.STOP_LIMIT,  # Test stop-limit orders (trigger + limit price)
     enable_brackets=True,
     use_post_only=False,  # MT5 doesn't support post_only
     close_positions_time_in_force=TimeInForce.GTC,  # MT5 default time-in-force
