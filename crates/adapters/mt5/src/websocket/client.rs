@@ -638,12 +638,14 @@ impl Mt5Client {
         comment: &str,
     ) -> Mt5Result<String> {
         // Map OrderSide to MT5 action type
+        // MT5's stop orders (BUY_STOP/SELL_STOP) are natively stop-limit orders
+        // They have both a trigger price and a stop limit price field
+        // So both StopMarket and StopLimit map to the same MT5 order type
         let action_type = match order_side {
             OrderSide::Buy => match order_type {
                 OrderType::Market => "ORDER_TYPE_BUY",
                 OrderType::Limit => "ORDER_TYPE_BUY_LIMIT",
-                OrderType::StopMarket => "ORDER_TYPE_BUY_STOP",
-                OrderType::StopLimit => "ORDER_TYPE_BUY_STOP_LIMIT",
+                OrderType::StopMarket | OrderType::StopLimit => "ORDER_TYPE_BUY_STOP",
                 _ => {
                     return Err(Mt5Error::Parse(format!(
                         "Unsupported order type: {:?}",
@@ -654,8 +656,7 @@ impl Mt5Client {
             OrderSide::Sell => match order_type {
                 OrderType::Market => "ORDER_TYPE_SELL",
                 OrderType::Limit => "ORDER_TYPE_SELL_LIMIT",
-                OrderType::StopMarket => "ORDER_TYPE_SELL_STOP",
-                OrderType::StopLimit => "ORDER_TYPE_SELL_STOP_LIMIT",
+                OrderType::StopMarket | OrderType::StopLimit => "ORDER_TYPE_SELL_STOP",
                 _ => {
                     return Err(Mt5Error::Parse(format!(
                         "Unsupported order type: {:?}",
