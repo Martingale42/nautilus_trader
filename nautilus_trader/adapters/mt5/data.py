@@ -539,7 +539,7 @@ class MT5DataClient(LiveMarketDataClient):
         # Convert datetime to Unix timestamps (milliseconds for ticks)
         start_ts = None
         end_ts = None
-        count = request.limit if request.limit else 1000
+        limit = request.limit if request.limit else None
 
         if request.start:
             start_ts = int(request.start.timestamp())
@@ -547,8 +547,7 @@ class MT5DataClient(LiveMarketDataClient):
             end_ts = int(request.end.timestamp())
 
         self._log.info(
-            f"Requesting {count} quote ticks for {request.instrument_id} "
-            f"(symbol={symbol}, start={start_ts}, end={end_ts})",
+            f"Requesting quote ticks {start_ts=}, {end_ts=}, {request.limit=}",
         )
 
         try:
@@ -558,7 +557,7 @@ class MT5DataClient(LiveMarketDataClient):
                 timeframe="TICK",
                 start=start_ts,
                 end=end_ts,
-                count=count,
+                count=limit,
             )
 
             # Parse ticks from response
@@ -661,7 +660,7 @@ class MT5DataClient(LiveMarketDataClient):
         # Convert datetime to Unix timestamps (seconds)
         start_ts = None
         end_ts = None
-        count = request.limit if request.limit else 1000
+        limit = request.limit if request.limit else None
 
         if request.start:
             start_ts = int(request.start.timestamp())
@@ -669,9 +668,7 @@ class MT5DataClient(LiveMarketDataClient):
             end_ts = int(request.end.timestamp())
 
         self._log.info(
-            f"Requesting {count} bars for {request.bar_type} "
-            f"(symbol={symbol}, timeframe={mt5_timeframe}, "
-            f"start={start_ts}, end={end_ts})",
+            f"Requesting bars {start_ts=}, {end_ts=}, {request.limit=}",
         )
 
         try:
@@ -681,7 +678,7 @@ class MT5DataClient(LiveMarketDataClient):
                 timeframe=mt5_timeframe,
                 start=start_ts,
                 end=end_ts,
-                count=count,
+                count=limit,
             )
 
             # Parse bars from response
