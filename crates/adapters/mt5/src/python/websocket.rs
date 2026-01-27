@@ -174,7 +174,7 @@ impl Mt5Client {
             tracing::info!("py_connect: async block executing");
 
             // Spawn background task to process messages
-            let task_handle = tokio::spawn(async move {
+            let _task_handle = tokio::spawn(async move {
                 // CRITICAL: Capture client first to keep it alive for the entire task
                 // This prevents Drop from being called while the stream is active
                 let _client_guard = client;

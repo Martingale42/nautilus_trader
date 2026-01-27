@@ -220,9 +220,12 @@ pub fn parse_mt5_order_status(
             OrderType::StopLimit => {
                 // price_open is the limit price for stop-limit orders
                 report = report.with_price(price);
-                // StopLimit orders need trigger_price from MT5's price_stoplimit field
-                // which is not yet in Mt5OrderMsg struct
-                todo!("Add price_stoplimit field to Mt5OrderMsg for StopLimit trigger_price");
+                // price_stoplimit is the trigger price
+                if msg.price_stoplimit > 0.0 {
+                    let trigger_price =
+                        Price::new(msg.price_stoplimit, instrument.price_precision());
+                    report = report.with_trigger_price(trigger_price);
+                }
             }
             _ => {
                 // Market orders: price_open may be 0 or execution price

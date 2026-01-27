@@ -245,8 +245,12 @@ pub struct Mt5OrderMsg {
     pub volume_initial: f64,
     /// Current volume (unfilled)
     pub volume_current: f64,
-    /// Order price
+    /// Order price (limit price for stop-limit orders)
+    #[serde(rename = "open")]
     pub price_open: f64,
+    /// Stop-limit trigger price (only for ORDER_TYPE_*_STOP_LIMIT)
+    #[serde(default, rename = "stoplimit")]
+    pub price_stoplimit: f64,
     /// Stop loss price
     #[serde(default)]
     pub stoploss: f64,
