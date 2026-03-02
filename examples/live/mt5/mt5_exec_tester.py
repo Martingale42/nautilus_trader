@@ -43,7 +43,7 @@ from nautilus_trader.test_kit.strategies.tester_exec import ExecTesterConfig
 instrument_id: InstrumentId = InstrumentId.from_str("BTCUSD.MT5")  # Replace with your broker's symbol
 offset_ticks: int = 50  # Number of ticks to offset limit orders from the market (wider for MT5)
 trade_size: Decimal = Decimal("0.01")  # 0.01 lots (micro lot)
-mt5_account_id = "1600039229"  # Replace with your MT5 account number (just the number, MT5 prefix added automatically)
+mt5_account_id = "1600099432"  # Replace with your MT5 account number (just the number, MT5 prefix added automatically)
 dry_run = False  # Set this to False to enable actual trading (CAUTION!)
 
 # Configure the trading node
@@ -51,7 +51,7 @@ config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
     logging=LoggingConfig(log_level="INFO", use_pyo3=True),
     exec_engine=LiveExecEngineConfig(
-        reconciliation=True,  # Enable reconciliation for order state sync
+        reconciliation=True,  # Disable reconciliation for order state sync
         # snapshot_orders=True,
         # snapshot_positions=True,
         # snapshot_positions_interval_secs=5.0,
