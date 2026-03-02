@@ -18,8 +18,7 @@ where
         0 => Ok(false),
         1 => Ok(true),
         other => Err(serde::de::Error::custom(format!(
-            "Expected 0 or 1 for boolean, got {}",
-            other
+            "Expected 0 or 1 for boolean, got {other}"
         ))),
     }
 }

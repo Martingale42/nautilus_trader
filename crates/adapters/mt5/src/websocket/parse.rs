@@ -124,13 +124,13 @@ pub fn parse_mt5_order_status(
     let instrument_id = instrument.id();
 
     // Parse venue order ID
-    let venue_order_id = VenueOrderId::new(&msg.ticket.to_string());
+    let venue_order_id = VenueOrderId::new(msg.ticket.to_string());
 
     // Parse client order ID from comment if available
-    let client_order_id = if !msg.comment.is_empty() {
-        ClientOrderId::new(&msg.comment)
+    let client_order_id = if msg.comment.is_empty() {
+        ClientOrderId::new(format!("mt5-{}", msg.ticket))
     } else {
-        ClientOrderId::new(&format!("mt5-{}", msg.ticket))
+        ClientOrderId::new(msg.comment)
     };
 
     // Map MT5 order type to Nautilus OrderType (MT5 sends as string)
@@ -263,7 +263,7 @@ pub fn parse_mt5_symbol_info_to_instrument(
     let volume_step = symbol_info.volume_step.parse::<f64>()?;
 
     // Create instrument ID and symbol
-    let raw_symbol = Symbol::new(&symbol_info.symbol);
+    let raw_symbol = Symbol::new(symbol_info.symbol);
     let instrument_id = InstrumentId::new(raw_symbol, *venue);
 
     // Parse currencies
@@ -272,7 +272,7 @@ pub fn parse_mt5_symbol_info_to_instrument(
 
     // Calculate size precision from volume_step
     let size_precision = if volume_step > 0.0 {
-        let decimal_str = format!("{:.10}", volume_step);
+        let decimal_str = format!("{volume_step:.10}");
         if let Some(dot_pos) = decimal_str.find('.') {
             let after_dot = &decimal_str[dot_pos + 1..];
             after_dot.trim_end_matches('0').len() as u8
@@ -305,6 +305,7 @@ pub fn parse_mt5_symbol_info_to_instrument(
         None,                                       // margin_maint
         None,                                       // maker_fee
         None,                                       // taker_fee
+        None,                                       // info
         ts_event,
         ts_init,
     );
@@ -356,7 +357,7 @@ mod tests {
             2,                      // size_precision
             Price::new(0.01, 2),    // price_increment
             Quantity::new(0.01, 2), // size_increment
-            None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None,
             UnixNanos::default(),
             UnixNanos::default(),
         ));
@@ -398,7 +399,7 @@ mod tests {
             2,                      // size_precision
             Price::new(0.01, 2),    // price_increment
             Quantity::new(0.01, 2), // size_increment
-            None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None,
             UnixNanos::default(),
             UnixNanos::default(),
         ));
@@ -439,7 +440,7 @@ mod tests {
             2, 2,
             Price::new(0.01, 2),
             Quantity::new(0.01, 2),
-            None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None,
             UnixNanos::default(),
             UnixNanos::default(),
         ));

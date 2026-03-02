@@ -32,6 +32,7 @@ from nautilus_trader.common.enums import LogColor
 from nautilus_trader.common.enums import LogLevel
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.correctness import PyCondition
+from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import CancelAllOrders
 from nautilus_trader.execution.messages import CancelOrder
 from nautilus_trader.execution.messages import GenerateFillReports
@@ -47,6 +48,7 @@ from nautilus_trader.execution.reports import PositionStatusReport
 from nautilus_trader.live.cancellation import DEFAULT_FUTURE_CANCELLATION_TIMEOUT
 from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
 from nautilus_trader.live.execution_client import LiveExecutionClient
+from nautilus_trader.model.currencies import Currency
 from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import LiquiditySide
 from nautilus_trader.model.enums import OmsType
@@ -56,21 +58,18 @@ from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import PositionSide
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.functions import order_side_to_pyo3
-from nautilus_trader.model.functions import time_in_force_to_pyo3
 from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import VenueOrderId
+from nautilus_trader.model.objects import Money
 from nautilus_trader.model.orders import LimitOrder
 from nautilus_trader.model.orders import MarketOrder
 from nautilus_trader.model.orders import Order
 from nautilus_trader.model.orders import StopLimitOrder
 from nautilus_trader.model.orders import StopMarketOrder
-from nautilus_trader.model.objects import Money
 from nautilus_trader.model.position import Position
-from nautilus_trader.model.currencies import Currency
-from nautilus_trader.core.uuid import UUID4
 
 
 def _parse_mt5_order_type(mt5_type: str) -> tuple[OrderType, OrderSide]:
@@ -137,8 +136,9 @@ class _Mt5OrderReport:
 
     This is used to pass the MT5 ticket number to the order accepted event.
     """
+
     def __init__(self, venue_order_id_value: str):
-        self.venue_order_id = type('VenueOrderId', (), {'value': venue_order_id_value})()
+        self.venue_order_id = type("VenueOrderId", (), {"value": venue_order_id_value})()
 
 
 class MT5ExecutionClient(LiveExecutionClient):
@@ -267,7 +267,6 @@ class MT5ExecutionClient(LiveExecutionClient):
             balance = account_data.get("balance", 0.0)
             equity = account_data.get("equity", 0.0)
             margin = account_data.get("margin", 0.0)
-            margin_free = account_data.get("margin_free", 0.0)
             currency_str = account_data.get("currency", "USD")
 
             # Get currency
@@ -332,7 +331,7 @@ class MT5ExecutionClient(LiveExecutionClient):
             )
 
             self._log.warning(
-                f"Using fallback account state with default balance: 10000 USD",
+                "Using fallback account state with default balance: 10000 USD",
                 LogColor.YELLOW,
             )
 
@@ -948,7 +947,7 @@ class MT5ExecutionClient(LiveExecutionClient):
 
         # Identify child orders (SL/TP) via linked_order_ids
         child_orders = []
-        if hasattr(entry_order, 'linked_order_ids') and entry_order.linked_order_ids:
+        if hasattr(entry_order, "linked_order_ids") and entry_order.linked_order_ids:
             for linked_id in entry_order.linked_order_ids:
                 child_order = self._cache.order(linked_id)
                 if child_order:
@@ -1009,9 +1008,9 @@ class MT5ExecutionClient(LiveExecutionClient):
                 for child in child_orders:
                     # Determine child type from tags
                     child_type = "UNKNOWN"
-                    if child.tags and 'STOP_LOSS' in child.tags:
+                    if child.tags and "STOP_LOSS" in child.tags:
                         child_type = "SL"
-                    elif child.tags and 'TAKE_PROFIT' in child.tags:
+                    elif child.tags and "TAKE_PROFIT" in child.tags:
                         child_type = "TP"
 
                     # Create virtual venue order ID: <parent_ticket>-<type>
@@ -1109,7 +1108,7 @@ class MT5ExecutionClient(LiveExecutionClient):
         tp = None
 
         # Check if this order has linked orders (bracket order structure)
-        if not hasattr(order, 'linked_order_ids') or not order.linked_order_ids:
+        if not hasattr(order, "linked_order_ids") or not order.linked_order_ids:
             return (sl, tp)
 
         # Iterate through linked orders to find SL and TP
@@ -1121,7 +1120,7 @@ class MT5ExecutionClient(LiveExecutionClient):
             # Check order tags to identify SL/TP
             tags = linked_order.tags or []
 
-            if 'STOP_LOSS' in tags:
+            if "STOP_LOSS" in tags:
                 # Stop loss is a stop market order - use trigger_price
                 if isinstance(linked_order, StopMarketOrder):
                     sl = nautilus_pyo3.Price.from_str(str(linked_order.trigger_price))
@@ -1129,7 +1128,7 @@ class MT5ExecutionClient(LiveExecutionClient):
                 else:
                     self._log.warning(f"Stop loss order {linked_id} is not StopMarketOrder, skipping")
 
-            elif 'TAKE_PROFIT' in tags:
+            elif "TAKE_PROFIT" in tags:
                 # Take profit is a limit order - use limit price
                 if isinstance(linked_order, LimitOrder):
                     tp = nautilus_pyo3.Price.from_str(str(linked_order.price))

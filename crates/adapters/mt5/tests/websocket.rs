@@ -69,6 +69,7 @@ fn create_test_instrument(symbol: &str, price_precision: u8) -> InstrumentAny {
         None,
         None,
         None,
+        None,
         UnixNanos::default(),
         UnixNanos::default(),
     ))

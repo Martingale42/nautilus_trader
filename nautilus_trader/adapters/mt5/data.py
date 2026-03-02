@@ -55,6 +55,7 @@ from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 
+
 # MT5 supported timeframes (in minutes)
 MT5_TIMEFRAMES = {
     1: "M1",
@@ -266,14 +267,14 @@ class MT5DataClient(LiveMarketDataClient):
         Subscribe to all instruments (no-op for MT5).
 
         """
-        pass  # MT5 doesn't support instrument updates subscription
+        # MT5 doesn't support instrument updates subscription
 
     async def _subscribe_instrument(self, command: SubscribeInstrument) -> None:
         """
         Subscribe to a single instrument (no-op for MT5).
 
         """
-        pass  # MT5 doesn't support instrument updates subscription
+        # MT5 doesn't support instrument updates subscription
 
     async def _subscribe_quote_ticks(self, command: SubscribeQuoteTicks) -> None:
         """
@@ -286,7 +287,6 @@ class MT5DataClient(LiveMarketDataClient):
 
         """
         instrument_id = command.instrument_id
-        symbol = instrument_id.symbol.value
 
         if instrument_id in self._subscribed_quotes:
             self._log.warning(f"Already subscribed to {instrument_id} quotes")
@@ -400,14 +400,12 @@ class MT5DataClient(LiveMarketDataClient):
         Unsubscribe from all instruments (no-op for MT5).
 
         """
-        pass
 
     async def _unsubscribe_instrument(self, command: UnsubscribeInstrument) -> None:
         """
         Unsubscribe from a single instrument (no-op for MT5).
 
         """
-        pass
 
     async def _unsubscribe_quote_ticks(self, command: UnsubscribeQuoteTicks) -> None:
         """
@@ -453,7 +451,6 @@ class MT5DataClient(LiveMarketDataClient):
         Unsubscribe from bar data (no-op for MT5).
 
         """
-        pass
 
     async def _unsubscribe_instrument_status(self, command) -> None:
         """
@@ -463,7 +460,7 @@ class MT5DataClient(LiveMarketDataClient):
         This is a no-op to prevent NotImplementedError.
 
         """
-        pass  # No-op: MT5 doesn't support instrument status subscriptions
+        # No-op: MT5 doesn't support instrument status subscriptions
 
     async def _unsubscribe_instrument_close(self, command) -> None:
         """
@@ -473,7 +470,7 @@ class MT5DataClient(LiveMarketDataClient):
         This is a no-op to prevent NotImplementedError.
 
         """
-        pass  # No-op: MT5 doesn't support instrument close subscriptions
+        # No-op: MT5 doesn't support instrument close subscriptions
 
     async def _request_instrument(self, request: RequestInstrument) -> None:
         """
@@ -597,7 +594,7 @@ class MT5DataClient(LiveMarketDataClient):
                 request.params,
             )
         except Exception as e:
-            self._log.exception(f"Failed to request quote ticks from MT5", e)
+            self._log.exception("Failed to request quote ticks from MT5", e)
 
     async def _request_trade_ticks(self, request: RequestTradeTicks) -> None:
         """
@@ -722,7 +719,7 @@ class MT5DataClient(LiveMarketDataClient):
                 request.params,
             )
         except Exception as e:
-            self._log.exception(f"Failed to request bars from MT5", e)
+            self._log.exception("Failed to request bars from MT5", e)
 
     def _handle_msg(self, msg: Any) -> None:
         """

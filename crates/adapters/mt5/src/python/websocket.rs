@@ -507,7 +507,7 @@ impl Mt5Client {
 
         let client = self.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let venue_order_id = VenueOrderId::new(&ticket.to_string());
+            let venue_order_id = VenueOrderId::new(ticket.to_string());
             let response = client
                 .cancel_order(venue_order_id)
                 .await
