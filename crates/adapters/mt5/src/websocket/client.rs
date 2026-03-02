@@ -1020,16 +1020,19 @@ impl Mt5Client {
         bar_types: &Arc<Mutex<HashMap<(String, String), String>>>,
         _account_id: Option<AccountId>,
     ) -> Mt5Result<Option<NautilusMessage>> {
+        /// Lightweight peek struct to avoid full Value parse on every tick
+        #[derive(serde::Deserialize)]
+        struct LiveMsgPeek {
+            timeframe: String,
+        }
+
         let json_str = String::from_utf8_lossy(msg_bytes);
 
-        // Peek at the JSON to determine if it's tick or bar data
-        let peek: serde_json::Value = serde_json::from_str(&json_str)?;
-        let timeframe = peek
-            .get("timeframe")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                Mt5Error::Parse("Missing 'timeframe' field in live message".to_string())
-            })?;
+        // Peek at just the timeframe field to route the message
+        let peek: LiveMsgPeek = serde_json::from_str(&json_str).map_err(|e| {
+            Mt5Error::Parse(format!("Missing 'timeframe' field in live message: {e}"))
+        })?;
+        let timeframe = peek.timeframe.as_str();
 
         let ts_init = get_atomic_clock_realtime().get_time_ns();
 
@@ -1138,8 +1141,8 @@ impl Mt5Client {
         // MT5 order/position updates can be identified by specific fields
 
         // Check for trade response (has retcode field)
-        if value.get("retcode").is_some()
-            && let Ok(trade_resp) = serde_json::from_value::<Mt5TradeResponseMsg>(value.clone()) {
+        if value.get("retcode").is_some() {
+            if let Ok(trade_resp) = serde_json::from_str::<Mt5TradeResponseMsg>(&json_str) {
                 tracing::info!(
                     "Trade response: retcode={}, order={}, price={}",
                     trade_resp.retcode,
@@ -1148,10 +1151,11 @@ impl Mt5Client {
                 );
                 return Ok(Some(NautilusMessage::TradeResponse(trade_resp)));
             }
+        }
 
         // Check for order update (has ticket and volume_initial fields)
-        if value.get("ticket").is_some() && value.get("volume_initial").is_some()
-            && let Ok(order_msg) = serde_json::from_value::<Mt5OrderMsg>(value.clone()) {
+        if value.get("ticket").is_some() && value.get("volume_initial").is_some() {
+            if let Ok(order_msg) = serde_json::from_str::<Mt5OrderMsg>(&json_str) {
                 tracing::info!(
                     "Order update: ticket={}, symbol={}, type={}",
                     order_msg.ticket,
@@ -1160,10 +1164,11 @@ impl Mt5Client {
                 );
                 return Ok(Some(NautilusMessage::OrderUpdate(order_msg)));
             }
+        }
 
         // Check for position update (has id and open fields)
-        if value.get("id").is_some() && value.get("open").is_some()
-            && let Ok(pos_msg) = serde_json::from_value::<Mt5PositionMsg>(value.clone()) {
+        if value.get("id").is_some() && value.get("open").is_some() {
+            if let Ok(pos_msg) = serde_json::from_str::<Mt5PositionMsg>(&json_str) {
                 tracing::info!(
                     "Position update: id={}, symbol={}, type={}",
                     pos_msg.id,
@@ -1172,6 +1177,7 @@ impl Mt5Client {
                 );
                 return Ok(Some(NautilusMessage::PositionUpdate(pos_msg)));
             }
+        }
 
         // Return as Raw message for unrecognized stream messages
         Ok(Some(NautilusMessage::Raw(value.to_string())))
@@ -1531,7 +1537,7 @@ impl Mt5Client {
         sl: Option<Price>,
         tp: Option<Price>,
         comment: String,
-    ) -> Mt5Result<Mt5TradeResponse> {
+    ) -> Mt5Result<Mt5TradeResponseMsg> {
         // Acquire lock to serialize this request-response cycle
         let _lock = self.request_response_lock.lock().await;
 
@@ -1559,8 +1565,8 @@ impl Mt5Client {
             .await
             .map_err(|_| Mt5Error::Connection("Response channel closed".to_string()))??;
 
-        // Parse response as Mt5TradeResponse
-        let trade_response: Mt5TradeResponse = serde_json::from_str(&response)
+        // Parse response as Mt5TradeResponseMsg
+        let trade_response: Mt5TradeResponseMsg = serde_json::from_str(&response)
             .map_err(|e| Mt5Error::Parse(format!("Failed to parse TRADE response: {e}")))?;
 
         Ok(trade_response)
@@ -1569,7 +1575,7 @@ impl Mt5Client {
     /// Cancel an order in MT5
     ///
     /// Sends TRADE_CLOSE action with order ticket via command channel
-    pub async fn cancel_order(&self, venue_order_id: VenueOrderId) -> Mt5Result<Mt5TradeResponse> {
+    pub async fn cancel_order(&self, venue_order_id: VenueOrderId) -> Mt5Result<Mt5TradeResponseMsg> {
         // Acquire lock to serialize this request-response cycle
         let _lock = self.request_response_lock.lock().await;
 
@@ -1591,8 +1597,8 @@ impl Mt5Client {
 
         tracing::debug!("TRADE_CLOSE response received: {} bytes", response.len());
 
-        // Parse response as Mt5TradeResponse
-        let trade_response: Mt5TradeResponse = serde_json::from_str(&response)
+        // Parse response as Mt5TradeResponseMsg
+        let trade_response: Mt5TradeResponseMsg = serde_json::from_str(&response)
             .map_err(|e| Mt5Error::Parse(format!("Failed to parse TRADE_CLOSE response: {e}")))?;
 
         Ok(trade_response)
@@ -1608,7 +1614,7 @@ impl Mt5Client {
         quantity: Option<Quantity>,
         sl: Option<Price>,
         tp: Option<Price>,
-    ) -> Mt5Result<Mt5TradeResponse> {
+    ) -> Mt5Result<Mt5TradeResponseMsg> {
         // Acquire lock to serialize this request-response cycle
         let _lock = self.request_response_lock.lock().await;
 
@@ -1634,8 +1640,8 @@ impl Mt5Client {
 
         tracing::debug!("TRADE_MODIFY response received: {} bytes", response.len());
 
-        // Parse response as Mt5TradeResponse
-        let trade_response: Mt5TradeResponse = serde_json::from_str(&response).map_err(|e| {
+        // Parse response as Mt5TradeResponseMsg
+        let trade_response: Mt5TradeResponseMsg = serde_json::from_str(&response).map_err(|e| {
             Mt5Error::Parse(format!("Failed to parse TRADE_MODIFY response: {e}"))
         })?;
 

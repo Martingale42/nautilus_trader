@@ -489,7 +489,7 @@ impl Mt5Client {
                 let dict = PyDict::new(py);
                 dict.set_item("error", response.error)?;
                 dict.set_item("retcode", response.retcode)?;
-                dict.set_item("description", response.desription.as_str())?; // MT5's typo
+                dict.set_item("description", response.description.as_str())?; // MT5's typo
                 dict.set_item("order", response.order)?;
                 dict.set_item("volume", response.volume)?;
                 dict.set_item("price", response.price)?;
@@ -517,7 +517,7 @@ impl Mt5Client {
                 let dict = PyDict::new(py);
                 dict.set_item("error", response.error)?;
                 dict.set_item("retcode", response.retcode)?;
-                dict.set_item("description", response.desription.as_str())?; // MT5's typo
+                dict.set_item("description", response.description.as_str())?; // MT5's typo
                 dict.set_item("order", response.order)?;
                 dict.into_py_any(py)
             })

@@ -12,6 +12,8 @@ use nautilus_model::{
     types::{Currency, Price, Quantity},
 };
 
+use nautilus_core::parsing::precision_from_str;
+
 use super::messages::*;
 use crate::common::parse_timestamp_ms;
 
@@ -43,7 +45,7 @@ pub fn parse_mt5_live_tick_to_quote(
     let bid_size = Quantity::new(default_size.as_f64(), instrument.size_precision());
     let ask_size = Quantity::new(default_size.as_f64(), instrument.size_precision());
 
-    let ts_event = UnixNanos::from(parse_timestamp_ms(timestamp_ms));
+    let ts_event = UnixNanos::from(parse_timestamp_ms(timestamp_ms)?);
 
     Ok(QuoteTick::new(
         instrument_id,
@@ -155,7 +157,7 @@ pub fn parse_mt5_order_status(
 
     // Map MT5 order state to Nautilus OrderStatus (MT5 sends as string)
     let state_str = msg.state.as_str();
-    let order_status = if state_str.contains("FILLED") || state_str.contains("PLACED") {
+    let order_status = if state_str.contains("FILLED") {
         OrderStatus::Filled
     } else if state_str.contains("CANCELED") {
         OrderStatus::Canceled
@@ -165,7 +167,10 @@ pub fn parse_mt5_order_status(
         OrderStatus::Expired
     } else if state_str.contains("PARTIAL") {
         OrderStatus::PartiallyFilled
-    } else if state_str.contains("ACCEPTED") || state_str.contains("STARTED") {
+    } else if state_str.contains("ACCEPTED")
+        || state_str.contains("STARTED")
+        || state_str.contains("PLACED")
+    {
         OrderStatus::Accepted
     } else {
         OrderStatus::Initialized
@@ -184,7 +189,7 @@ pub fn parse_mt5_order_status(
         Quantity::zero(instrument.size_precision())
     };
 
-    let ts_accepted = UnixNanos::from(parse_timestamp_ms(msg.time_setup));
+    let ts_accepted = UnixNanos::from(parse_timestamp_ms(msg.time_setup)?);
     let ts_last = ts_init; // Use current time as last update
 
     // Default to GTC for time in force
@@ -272,13 +277,7 @@ pub fn parse_mt5_symbol_info_to_instrument(
 
     // Calculate size precision from volume_step
     let size_precision = if volume_step > 0.0 {
-        let decimal_str = format!("{volume_step:.10}");
-        if let Some(dot_pos) = decimal_str.find('.') {
-            let after_dot = &decimal_str[dot_pos + 1..];
-            after_dot.trim_end_matches('0').len() as u8
-        } else {
-            0
-        }
+        precision_from_str(&format!("{volume_step}"))
     } else {
         2 // default
     };

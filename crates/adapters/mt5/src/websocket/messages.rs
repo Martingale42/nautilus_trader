@@ -67,9 +67,10 @@ pub struct Mt5LiveBarMsg {
     pub data: Vec<f64>,
 }
 
-/// MT5 trade response message (from streamSocket after order submission)
+/// MT5 trade response message (from streamSocket or command response)
 ///
-/// Response to TRADE action
+/// Response to TRADE action. This is the canonical trade response type used
+/// for both stream messages and command responses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mt5TradeResponseMsg {
     /// Whether the trade resulted in an error
@@ -77,10 +78,10 @@ pub struct Mt5TradeResponseMsg {
     /// MT5 return code (10009 = success, etc.)
     pub retcode: i32,
     /// Human-readable description
-    #[serde(rename = "desription")] // Note: typo in JsonAPI.mq5
+    #[serde(default, rename = "desription")] // Note: typo in JsonAPI.mq5
     pub description: Ustr,
-    /// Order ticket number
-    pub order: i64,
+    /// Order ticket number (venue_order_id)
+    pub order: u64,
     /// Executed volume
     pub volume: f64,
     /// Executed price
@@ -90,6 +91,7 @@ pub struct Mt5TradeResponseMsg {
     /// Current ask
     pub ask: f64,
     /// Function that processed the request
+    #[serde(default)]
     pub function: Ustr,
 }
 
@@ -194,33 +196,6 @@ pub struct Mt5ErrorMsg {
     /// Error description
     pub error_description: Ustr,
     /// Function where error occurred
-    #[serde(default)]
-    pub function: Ustr,
-}
-
-/// MT5 trade response
-///
-/// Response to TRADE action (order submission)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Mt5TradeResponse {
-    /// Whether the response contains an error
-    pub error: bool,
-    /// Return code (e.g., 10009 = TRADE_RETCODE_DONE)
-    pub retcode: i32,
-    /// Return code description
-    #[serde(default)]
-    pub desription: Ustr, // Note: MT5 has typo "desription"
-    /// Order ticket number (venue_order_id)
-    pub order: u64,
-    /// Executed volume
-    pub volume: f64,
-    /// Execution price
-    pub price: f64,
-    /// Current bid price
-    pub bid: f64,
-    /// Current ask price
-    pub ask: f64,
-    /// Function name
     #[serde(default)]
     pub function: Ustr,
 }

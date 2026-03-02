@@ -65,7 +65,6 @@ from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import VenueOrderId
 from nautilus_trader.model.objects import Money
 from nautilus_trader.model.orders import LimitOrder
-from nautilus_trader.model.orders import MarketOrder
 from nautilus_trader.model.orders import Order
 from nautilus_trader.model.orders import StopLimitOrder
 from nautilus_trader.model.orders import StopMarketOrder
@@ -130,15 +129,21 @@ def _parse_mt5_order_status(mt5_state: str) -> OrderStatus:
     return state_map.get(mt5_state, OrderStatus.INITIALIZED)
 
 
-class _Mt5OrderReport:
-    """
-    Simple wrapper for MT5 order response containing venue_order_id.
+def _get_order_price(order: Order) -> nautilus_pyo3.Price | None:
+    """Return the appropriate price for the order type, or None for market orders."""
+    if isinstance(order, LimitOrder):
+        return nautilus_pyo3.Price.from_str(str(order.price))
+    elif isinstance(order, (StopMarketOrder, StopLimitOrder)):
+        return nautilus_pyo3.Price.from_str(str(order.trigger_price))
+    return None
 
-    This is used to pass the MT5 ticket number to the order accepted event.
-    """
 
-    def __init__(self, venue_order_id_value: str):
-        self.venue_order_id = type("VenueOrderId", (), {"value": venue_order_id_value})()
+_NT_TO_PYO3_ORDER_TYPE = {
+    OrderType.MARKET: nautilus_pyo3.OrderType.MARKET,
+    OrderType.LIMIT: nautilus_pyo3.OrderType.LIMIT,
+    OrderType.STOP_MARKET: nautilus_pyo3.OrderType.STOP_MARKET,
+    OrderType.STOP_LIMIT: nautilus_pyo3.OrderType.STOP_LIMIT,
+}
 
 
 class MT5ExecutionClient(LiveExecutionClient):
@@ -883,26 +888,21 @@ class MT5ExecutionClient(LiveExecutionClient):
         )
 
         try:
-            # Route to specific order type handler
-            if order.order_type == OrderType.MARKET:
-                report = await self._submit_market_order(order)
-            elif order.order_type == OrderType.LIMIT:
-                report = await self._submit_limit_order(order)
-            elif order.order_type == OrderType.STOP_MARKET:
-                report = await self._submit_stop_market_order(order)
-            elif order.order_type == OrderType.STOP_LIMIT:
-                report = await self._submit_stop_limit_order(order)
-            else:
+            # Map nautilus OrderType to pyo3 OrderType
+            pyo3_order_type = _NT_TO_PYO3_ORDER_TYPE.get(order.order_type)
+            if pyo3_order_type is None:
                 self._log.error(f"Submitting {order.type_string()} orders not currently supported")
                 return
 
-            # Generate accepted event if we got a report
-            if report is not None:
+            ticket = await self._send_order_to_mt5(order, pyo3_order_type, _get_order_price(order))
+
+            # Generate accepted event if we got a ticket
+            if ticket is not None:
                 self.generate_order_accepted(
                     instrument_id=order.instrument_id,
                     strategy_id=order.strategy_id,
                     client_order_id=order.client_order_id,
-                    venue_order_id=VenueOrderId(report.venue_order_id.value),
+                    venue_order_id=VenueOrderId(ticket),
                     ts_event=self._clock.timestamp_ns(),
                 )
         except Exception as e:
@@ -982,24 +982,21 @@ class MT5ExecutionClient(LiveExecutionClient):
 
         # Submit entry order (SL/TP will be extracted automatically by existing logic)
         try:
-            if entry_order.order_type == OrderType.MARKET:
-                report = await self._submit_market_order(entry_order)
-            elif entry_order.order_type == OrderType.LIMIT:
-                report = await self._submit_limit_order(entry_order)
-            elif entry_order.order_type == OrderType.STOP_MARKET:
-                report = await self._submit_stop_market_order(entry_order)
-            elif entry_order.order_type == OrderType.STOP_LIMIT:
-                report = await self._submit_stop_limit_order(entry_order)
-            else:
+            pyo3_order_type = _NT_TO_PYO3_ORDER_TYPE.get(entry_order.order_type)
+            if pyo3_order_type is None:
                 raise ValueError(f"Unsupported entry order type: {entry_order.order_type}")
 
+            ticket = await self._send_order_to_mt5(
+                entry_order, pyo3_order_type, _get_order_price(entry_order),
+            )
+
             # Generate accepted event for entry order
-            if report is not None:
+            if ticket is not None:
                 self.generate_order_accepted(
                     strategy_id=entry_order.strategy_id,
                     instrument_id=entry_order.instrument_id,
                     client_order_id=entry_order.client_order_id,
-                    venue_order_id=VenueOrderId(report.venue_order_id.value),
+                    venue_order_id=VenueOrderId(ticket),
                     ts_event=self._clock.timestamp_ns(),
                 )
 
@@ -1014,7 +1011,7 @@ class MT5ExecutionClient(LiveExecutionClient):
                         child_type = "TP"
 
                     # Create virtual venue order ID: <parent_ticket>-<type>
-                    virtual_venue_id = f"{report.venue_order_id.value}-{child_type}"
+                    virtual_venue_id = f"{ticket}-{child_type}"
 
                     self.generate_order_accepted(
                         strategy_id=child.strategy_id,
@@ -1037,7 +1034,7 @@ class MT5ExecutionClient(LiveExecutionClient):
                 )
             else:
                 # Submission returned None, reject all orders
-                reason = "Entry order submission returned no report"
+                reason = "Entry order submission returned no ticket"
                 self._reject_order_bracket(entry_order, child_orders, reason)
 
         except Exception as e:
@@ -1138,49 +1135,47 @@ class MT5ExecutionClient(LiveExecutionClient):
 
         return (sl, tp)
 
-    async def _submit_market_order(
+    async def _send_order_to_mt5(
         self,
-        order: MarketOrder,
-    ) -> _Mt5OrderReport | None:
+        order: Order,
+        order_type: nautilus_pyo3.OrderType,
+        price: nautilus_pyo3.Price | None,
+    ) -> str | None:
         """
-        Submit a market order to MT5.
+        Send an order to MT5 via the Rust client and return the ticket.
 
         Parameters
         ----------
-        order : MarketOrder
-            The market order to submit.
+        order : Order
+            The order to submit.
+        order_type : nautilus_pyo3.OrderType
+            The PyO3 order type enum.
+        price : nautilus_pyo3.Price or None
+            The order price (limit price, trigger price, or None for market).
 
         Returns
         -------
-        _Mt5OrderReport or None
-            The order report containing venue_order_id.
+        str or None
+            The MT5 ticket number as string (venue_order_id), or None.
 
         """
-        # Convert to PyO3 types
         instrument_id = nautilus_pyo3.InstrumentId.from_str(order.instrument_id.value)
         client_order_id = nautilus_pyo3.ClientOrderId(order.client_order_id.value)
         order_side = order_side_to_pyo3(order.side)
-        order_type = nautilus_pyo3.OrderType.MARKET
         quantity = nautilus_pyo3.Quantity.from_str(str(order.quantity))
-        price = None  # Market orders don't have a limit price
-
-        # Extract SL/TP from linked orders (bracket orders)
         sl, tp = self._extract_sl_tp_from_linked_orders(order)
-
-        # Comment contains client_order_id for tracking
         comment = order.client_order_id.value
 
-        # Build log message with SL/TP info
         sl_tp_info = ""
         if sl or tp:
             sl_tp_info = f" (SL: {sl.as_double() if sl else 'None'}, TP: {tp.as_double() if tp else 'None'})"
 
         self._log.info(
-            f"Submitting MARKET order to MT5: {order.side} {order.quantity} "
-            f"{order.instrument_id.symbol}{sl_tp_info}",
+            f"Submitting {order.type_string()} order to MT5: {order.side} {order.quantity} "
+            f"{order.instrument_id.symbol}"
+            f"{f' @ {price}' if price else ''}{sl_tp_info}",
         )
 
-        # Call Rust client
         response = await self._client.submit_order(
             instrument_id,
             client_order_id,
@@ -1193,10 +1188,8 @@ class MT5ExecutionClient(LiveExecutionClient):
             comment,
         )
 
-        # Log full response for debugging
         self._log.info(f"MT5 response received: {response}")
 
-        # Parse response (dict from Rust)
         # Note: MT5 has typo "desription" instead of "description"
         if response.get("error", True):
             error_msg = (
@@ -1207,90 +1200,6 @@ class MT5ExecutionClient(LiveExecutionClient):
             self._log.error(error_msg, LogColor.RED)
             raise RuntimeError(error_msg)
 
-        # Extract MT5 ticket number (venue_order_id)
-        ticket = response.get("order", 0)
-        if ticket == 0:
-            raise RuntimeError("MT5 returned ticket 0 - order may not have been placed")
-
-        self._log.info(
-            f"Order submitted successfully to MT5: ticket={ticket}, "
-            f"fill_price={response.get('price', 'N/A')}",
-            LogColor.GREEN,
-        )
-
-        # Return report with venue_order_id
-        return _Mt5OrderReport(str(ticket))
-
-    async def _submit_limit_order(
-        self,
-        order: LimitOrder,
-    ) -> _Mt5OrderReport | None:
-        """
-        Submit a limit order to MT5.
-
-        Parameters
-        ----------
-        order : LimitOrder
-            The limit order to submit.
-
-        Returns
-        -------
-        _Mt5OrderReport or None
-            The order report containing venue_order_id.
-
-        """
-        # Convert to PyO3 types
-        instrument_id = nautilus_pyo3.InstrumentId.from_str(order.instrument_id.value)
-        client_order_id = nautilus_pyo3.ClientOrderId(order.client_order_id.value)
-        order_side = order_side_to_pyo3(order.side)
-        order_type = nautilus_pyo3.OrderType.LIMIT
-        quantity = nautilus_pyo3.Quantity.from_str(str(order.quantity))
-        price = nautilus_pyo3.Price.from_str(str(order.price))
-
-        # Extract SL/TP from linked orders (bracket orders)
-        sl, tp = self._extract_sl_tp_from_linked_orders(order)
-
-        # Comment contains client_order_id for tracking
-        comment = order.client_order_id.value
-
-        # Build log message with SL/TP info
-        sl_tp_info = ""
-        if sl or tp:
-            sl_tp_info = f" (SL: {sl.as_double() if sl else 'None'}, TP: {tp.as_double() if tp else 'None'})"
-
-        self._log.info(
-            f"Submitting LIMIT order to MT5: {order.side} {order.quantity} "
-            f"{order.instrument_id.symbol} @ {order.price}{sl_tp_info}",
-        )
-
-        # Call Rust client
-        response = await self._client.submit_order(
-            instrument_id,
-            client_order_id,
-            order_side,
-            order_type,
-            quantity,
-            price,
-            sl,
-            tp,
-            comment,
-        )
-
-        # Log full response for debugging
-        self._log.info(f"MT5 response received: {response}")
-
-        # Parse response (dict from Rust)
-        # Note: MT5 has typo "desription" instead of "description"
-        if response.get("error", True):
-            error_msg = (
-                f"MT5 order submission failed: "
-                f"retcode={response.get('retcode', 'unknown')}, "
-                f"description={response.get('desription', response.get('description', 'no description'))}"
-            )
-            self._log.error(error_msg, LogColor.RED)
-            raise RuntimeError(error_msg)
-
-        # Extract MT5 ticket number (venue_order_id)
         ticket = response.get("order", 0)
         if ticket == 0:
             raise RuntimeError("MT5 returned ticket 0 - order may not have been placed")
@@ -1301,174 +1210,7 @@ class MT5ExecutionClient(LiveExecutionClient):
             LogColor.GREEN,
         )
 
-        # Return report with venue_order_id
-        return _Mt5OrderReport(str(ticket))
-
-    async def _submit_stop_market_order(
-        self,
-        order: StopMarketOrder,
-    ) -> _Mt5OrderReport | None:
-        """
-        Submit a stop market order to MT5.
-
-        Parameters
-        ----------
-        order : StopMarketOrder
-            The stop market order to submit.
-
-        Returns
-        -------
-        _Mt5OrderReport or None
-            The order report containing venue_order_id.
-
-        """
-        # Convert to PyO3 types
-        instrument_id = nautilus_pyo3.InstrumentId.from_str(order.instrument_id.value)
-        client_order_id = nautilus_pyo3.ClientOrderId(order.client_order_id.value)
-        order_side = order_side_to_pyo3(order.side)
-        order_type = nautilus_pyo3.OrderType.STOP_MARKET
-        quantity = nautilus_pyo3.Quantity.from_str(str(order.quantity))
-        price = nautilus_pyo3.Price.from_str(str(order.trigger_price))  # Stop price
-
-        # Extract SL/TP from linked orders (bracket orders)
-        sl, tp = self._extract_sl_tp_from_linked_orders(order)
-
-        # Comment contains client_order_id for tracking
-        comment = order.client_order_id.value
-
-        # Build log message with SL/TP info
-        sl_tp_info = ""
-        if sl or tp:
-            sl_tp_info = f" (SL: {sl.as_double() if sl else 'None'}, TP: {tp.as_double() if tp else 'None'})"
-
-        self._log.info(
-            f"Submitting STOP_MARKET order to MT5: {order.side} {order.quantity} "
-            f"{order.instrument_id.symbol} @ stop {order.trigger_price}{sl_tp_info}",
-        )
-
-        # Call Rust client
-        response = await self._client.submit_order(
-            instrument_id,
-            client_order_id,
-            order_side,
-            order_type,
-            quantity,
-            price,
-            sl,
-            tp,
-            comment,
-        )
-
-        # Log full response for debugging
-        self._log.info(f"MT5 response received: {response}")
-
-        # Parse response (dict from Rust)
-        # Note: MT5 has typo "desription" instead of "description"
-        if response.get("error", True):
-            error_msg = (
-                f"MT5 order submission failed: "
-                f"retcode={response.get('retcode', 'unknown')}, "
-                f"description={response.get('desription', response.get('description', 'no description'))}"
-            )
-            self._log.error(error_msg, LogColor.RED)
-            raise RuntimeError(error_msg)
-
-        # Extract MT5 ticket number (venue_order_id)
-        ticket = response.get("order", 0)
-        if ticket == 0:
-            raise RuntimeError("MT5 returned ticket 0 - order may not have been placed")
-
-        self._log.info(
-            f"Order submitted successfully to MT5: ticket={ticket}",
-            LogColor.GREEN,
-        )
-
-        # Return report with venue_order_id
-        return _Mt5OrderReport(str(ticket))
-
-    async def _submit_stop_limit_order(
-        self,
-        order: StopLimitOrder,
-    ) -> _Mt5OrderReport | None:
-        """
-        Submit a stop limit order to MT5.
-
-        Parameters
-        ----------
-        order : StopLimitOrder
-            The stop limit order to submit.
-
-        Returns
-        -------
-        _Mt5OrderReport or None
-            The order report containing venue_order_id.
-
-        """
-        # Convert to PyO3 types
-        instrument_id = nautilus_pyo3.InstrumentId.from_str(order.instrument_id.value)
-        client_order_id = nautilus_pyo3.ClientOrderId(order.client_order_id.value)
-        order_side = order_side_to_pyo3(order.side)
-        order_type = nautilus_pyo3.OrderType.STOP_LIMIT
-        quantity = nautilus_pyo3.Quantity.from_str(str(order.quantity))
-        # For stop limit: price is the limit price, trigger_price is the stop price
-        # MT5 typically uses the trigger_price as the main price and limit as a deviation
-        price = nautilus_pyo3.Price.from_str(str(order.trigger_price))
-
-        # Extract SL/TP from linked orders (bracket orders)
-        sl, tp = self._extract_sl_tp_from_linked_orders(order)
-
-        # Comment contains client_order_id for tracking
-        comment = order.client_order_id.value
-
-        # Build log message with SL/TP info
-        sl_tp_info = ""
-        if sl or tp:
-            sl_tp_info = f" (SL: {sl.as_double() if sl else 'None'}, TP: {tp.as_double() if tp else 'None'})"
-
-        self._log.info(
-            f"Submitting STOP_LIMIT order to MT5: {order.side} {order.quantity} "
-            f"{order.instrument_id.symbol} @ stop {order.trigger_price} limit {order.price}{sl_tp_info}",
-        )
-
-        # Call Rust client
-        response = await self._client.submit_order(
-            instrument_id,
-            client_order_id,
-            order_side,
-            order_type,
-            quantity,
-            price,
-            sl,
-            tp,
-            comment,
-        )
-
-        # Log full response for debugging
-        self._log.info(f"MT5 response received: {response}")
-
-        # Parse response (dict from Rust)
-        # Note: MT5 has typo "desription" instead of "description"
-        if response.get("error", True):
-            error_msg = (
-                f"MT5 order submission failed: "
-                f"retcode={response.get('retcode', 'unknown')}, "
-                f"description={response.get('desription', response.get('description', 'no description'))}"
-            )
-            self._log.error(error_msg, LogColor.RED)
-            raise RuntimeError(error_msg)
-
-        # Extract MT5 ticket number (venue_order_id)
-        ticket = response.get("order", 0)
-        if ticket == 0:
-            raise RuntimeError("MT5 returned ticket 0 - order may not have been placed")
-
-        self._log.info(
-            f"Order submitted successfully to MT5: ticket={ticket}",
-            LogColor.GREEN,
-        )
-
-        # Return report with venue_order_id
-        return _Mt5OrderReport(str(ticket))
+        return str(ticket)
 
     def _handle_msg(self, msg: Any) -> None:
         """

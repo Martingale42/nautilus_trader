@@ -1,5 +1,6 @@
 //! Utility parsing functions for MT5 adapter.
 
+use nautilus_core::datetime::{millis_to_nanos, secs_to_nanos};
 use nautilus_model::identifiers::{InstrumentId, Symbol, Venue};
 
 /// Parse MT5 symbol string to Nautilus InstrumentId
@@ -18,14 +19,16 @@ pub fn parse_instrument_id(symbol: &str) -> anyhow::Result<InstrumentId> {
 
 /// Parse timestamp from MT5 milliseconds to UnixNanos
 ///
-/// MT5 sends timestamps in milliseconds, we need to convert to nanoseconds
-pub fn parse_timestamp_ms(ms: i64) -> u64 {
-    (ms * 1_000_000) as u64
+/// Delegates to `nautilus_core::datetime::millis_to_nanos` for overflow-checked conversion.
+pub fn parse_timestamp_ms(ms: i64) -> anyhow::Result<u64> {
+    millis_to_nanos(ms as f64)
 }
 
 /// Parse timestamp from MT5 seconds to UnixNanos
-pub fn parse_timestamp_s(s: i64) -> u64 {
-    (s * 1_000_000_000) as u64
+///
+/// Delegates to `nautilus_core::datetime::secs_to_nanos` for overflow-checked conversion.
+pub fn parse_timestamp_s(s: i64) -> anyhow::Result<u64> {
+    secs_to_nanos(s as f64)
 }
 
 #[cfg(test)]
@@ -42,14 +45,14 @@ mod tests {
     #[test]
     fn test_parse_timestamp_ms() {
         let ms = 1709891679000_i64;
-        let ns = parse_timestamp_ms(ms);
+        let ns = parse_timestamp_ms(ms).unwrap();
         assert_eq!(ns, 1709891679000000000);
     }
 
     #[test]
     fn test_parse_timestamp_s() {
         let s = 1709891679_i64;
-        let ns = parse_timestamp_s(s);
+        let ns = parse_timestamp_s(s).unwrap();
         assert_eq!(ns, 1709891679000000000);
     }
 }
