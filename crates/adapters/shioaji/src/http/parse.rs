@@ -2,11 +2,15 @@ use nautilus_core::UnixNanos;
 use nautilus_model::{
     data::{Bar, BarType, QuoteTick, TradeTick},
     enums::AggressorSide,
-    identifiers::{InstrumentId, TradeId},
-    types::{Price, Quantity},
+    identifiers::{InstrumentId, Symbol, TradeId},
+    instruments::{Equity, InstrumentAny},
+    types::{Currency, Price, Quantity},
 };
 
-use super::models::{KBarsResponse, SnapshotData, TicksResponse};
+use super::models::{KBarsResponse, SnapshotData, StockContract, TicksResponse};
+use crate::common::instrument::{SIZE_PRECISION, STOCK_LOT_SIZE};
+use crate::common::parse::parse_instrument_id;
+use crate::common::tick_size::twse_stock_tick_size;
 
 /// Parse a `SnapshotData` into a `QuoteTick` (top-of-book bid/ask).
 pub fn parse_snapshot_to_quote_tick(
@@ -93,12 +97,58 @@ pub fn parse_kbars_response(
     result
 }
 
+/// Parse a gateway `StockContract` into a Nautilus `Equity` instrument.
+///
+/// - `InstrumentId` = `{code}.SINOPAC`
+/// - Tick size and precision derived from reference price via TWSE schedule
+/// - Lot size = 1000 shares (standard Taiwan market lot)
+pub fn parse_stock_to_equity(
+    contract: &StockContract,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+) -> anyhow::Result<InstrumentAny> {
+    let instrument_id = parse_instrument_id(&contract.code)?;
+    let raw_symbol = Symbol::new(&contract.code);
+    let currency = Currency::TWD();
+
+    let (tick_size, price_precision) = twse_stock_tick_size(contract.reference);
+    let price_increment = Price::new(tick_size, price_precision);
+    let lot_size = Some(Quantity::new(STOCK_LOT_SIZE, SIZE_PRECISION));
+
+    let max_price = Some(Price::new(contract.limit_up, price_precision));
+    let min_price = Some(Price::new(contract.limit_down, price_precision));
+
+    let equity = Equity::new(
+        instrument_id,
+        raw_symbol,
+        None, // isin
+        currency,
+        price_precision,
+        price_increment,
+        lot_size,
+        None, // max_quantity
+        None, // min_quantity
+        max_price,
+        min_price,
+        None, // margin_init
+        None, // margin_maint
+        None, // maker_fee
+        None, // taker_fee
+        None, // info
+        ts_event,
+        ts_init,
+    );
+
+    Ok(InstrumentAny::Equity(equity))
+}
+
 #[cfg(test)]
 mod tests {
     use nautilus_model::data::BarSpecification;
     use nautilus_model::enums::{AggregationSource, BarAggregation, PriceType};
     use nautilus_model::identifiers::Symbol;
     use nautilus_model::identifiers::Venue;
+    use nautilus_model::instruments::Instrument;
 
     use super::*;
     use crate::common::testing::load_test_json_as;
@@ -159,5 +209,28 @@ mod tests {
         assert_eq!(bars[0].high, Price::new(582.0, 1));
         assert_eq!(bars[0].close, Price::new(580.0, 1));
         assert_eq!(bars[1].open, Price::new(580.0, 1));
+    }
+
+    #[test]
+    fn test_parse_stock_to_equity_tsmc() {
+        let contracts: Vec<StockContract> = load_test_json_as("contracts_stocks.json");
+        let equity = parse_stock_to_equity(
+            &contracts[0], // 2330 TSMC, reference=580.0
+            UnixNanos::default(),
+            UnixNanos::default(),
+        )
+        .unwrap();
+
+        match equity {
+            InstrumentAny::Equity(e) => {
+                assert_eq!(e.id().to_string(), "2330.SINOPAC");
+                assert_eq!(e.price_precision(), 1); // 580 TWD -> tick=1.0 -> precision 1
+                assert_eq!(e.quote_currency().code.as_str(), "TWD");
+                assert!(e.lot_size().is_some());
+                assert_eq!(e.lot_size().unwrap().as_f64(), 1000.0);
+                assert!(e.max_price().is_some());
+            }
+            _ => panic!("Expected Equity"),
+        }
     }
 }
