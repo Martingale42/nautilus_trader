@@ -450,4 +450,68 @@ mod tests {
         let nanos = parse_date_to_nanos("2026-03-02").unwrap();
         assert_eq!(nanos.as_u64(), 1_772_380_800_000_000_000);
     }
+
+    #[test]
+    fn test_parse_all_instrument_types() {
+        // Stocks -> Equity
+        let stocks: Vec<StockContract> = load_test_json_as("contracts_stocks.json");
+        for stock in &stocks {
+            let instrument =
+                parse_stock_to_equity(stock, UnixNanos::default(), UnixNanos::default());
+            assert!(instrument.is_ok(), "Failed to parse stock: {}", stock.code);
+            match instrument.unwrap() {
+                InstrumentAny::Equity(_) => {}
+                other => panic!("Expected Equity for {}, got {other:?}", stock.code),
+            }
+        }
+
+        // Futures -> FuturesContract
+        let futures: Vec<FuturesContract> = load_test_json_as("contracts_futures.json");
+        for f in &futures {
+            let instrument =
+                parse_futures_to_contract(f, UnixNanos::default(), UnixNanos::default());
+            assert!(instrument.is_ok(), "Failed to parse futures: {}", f.code);
+            match instrument.unwrap() {
+                InstrumentAny::FuturesContract(_) => {}
+                other => panic!("Expected FuturesContract for {}, got {other:?}", f.code),
+            }
+        }
+
+        // Options -> OptionContract
+        let options: Vec<OptionsContract> = load_test_json_as("contracts_options.json");
+        for opt in &options {
+            let instrument =
+                parse_options_to_contract(opt, UnixNanos::default(), UnixNanos::default());
+            assert!(instrument.is_ok(), "Failed to parse option: {}", opt.code);
+            match instrument.unwrap() {
+                InstrumentAny::OptionContract(_) => {}
+                other => panic!("Expected OptionContract for {}, got {other:?}", opt.code),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_stock_low_price_different_tick_size() {
+        let contract = StockContract {
+            code: "9999".to_string(),
+            symbol: "TSE9999".to_string(),
+            name: "Test".to_string(),
+            exchange: "TSE".to_string(),
+            category: "Test".to_string(),
+            limit_up: 8.8,
+            limit_down: 7.2,
+            reference: 8.0, // < 10 TWD -> tick=0.01, precision=2
+            update_date: "2026-03-04".to_string(),
+            day_trade: "No".to_string(),
+        };
+
+        let instrument =
+            parse_stock_to_equity(&contract, UnixNanos::default(), UnixNanos::default()).unwrap();
+        match instrument {
+            InstrumentAny::Equity(e) => {
+                assert_eq!(e.price_precision(), 2); // 0.01 tick -> 2 decimals
+            }
+            _ => panic!("Expected Equity"),
+        }
+    }
 }
