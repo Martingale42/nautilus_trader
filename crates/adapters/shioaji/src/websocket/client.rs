@@ -16,6 +16,10 @@ use crate::common::consts::SHIOAJI_GATEWAY_WS_URL;
 
 /// WebSocket client for streaming market data and order updates
 /// from the Shioaji FastAPI gateway.
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_pyo3.shioaji", skip_from_py_object)
+)]
 pub struct ShioajiWebSocketClient {
     url: String,
     cmd_tx: Option<mpsc::UnboundedSender<WsCommand>>,

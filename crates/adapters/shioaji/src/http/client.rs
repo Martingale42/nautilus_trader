@@ -12,6 +12,10 @@ use crate::common::{consts::SHIOAJI_GATEWAY_HTTP_URL, urls::gateway_http_url};
 
 /// HTTP client for communicating with the Shioaji FastAPI gateway.
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(module = "nautilus_pyo3.shioaji", skip_from_py_object)
+)]
 pub struct ShioajiHttpClient {
     base_url: String,
     client: HttpClient,
