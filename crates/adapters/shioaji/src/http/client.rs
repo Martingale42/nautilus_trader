@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use nautilus_network::http::{HttpClient, Method};
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::error::ShioajiHttpError;
+use super::{
+    error::ShioajiHttpError,
+    models::*,
+    query::{KBarsQuery, PositionsQuery, SnapshotsQuery, TicksQuery},
+};
 use crate::common::{consts::SHIOAJI_GATEWAY_HTTP_URL, urls::gateway_http_url};
 
 /// HTTP client for communicating with the Shioaji FastAPI gateway.
@@ -181,5 +185,103 @@ impl ShioajiHttpClient {
         }
 
         serde_json::from_slice(&response.body).map_err(ShioajiHttpError::from)
+    }
+
+    // ─── Auth ────────────────────────────────────
+
+    pub async fn login(&self, request: &LoginRequest) -> Result<LoginResponse, ShioajiHttpError> {
+        self.post("/auth/login", request).await
+    }
+
+    pub async fn logout(&self) -> Result<MessageResponse, ShioajiHttpError> {
+        self.post("/auth/logout", &serde_json::Value::Object(Default::default()))
+            .await
+    }
+
+    pub async fn status(&self) -> Result<StatusResponse, ShioajiHttpError> {
+        self.get("/auth/status").await
+    }
+
+    // ─── Contracts ───────────────────────────────
+
+    pub async fn list_stocks(&self) -> Result<Vec<StockContract>, ShioajiHttpError> {
+        self.get("/contracts/stocks").await
+    }
+
+    pub async fn get_stock(&self, code: &str) -> Result<StockContract, ShioajiHttpError> {
+        self.get(&format!("/contracts/stocks/{code}")).await
+    }
+
+    pub async fn list_futures(&self) -> Result<Vec<FuturesContract>, ShioajiHttpError> {
+        self.get("/contracts/futures").await
+    }
+
+    pub async fn list_options(&self) -> Result<Vec<OptionsContract>, ShioajiHttpError> {
+        self.get("/contracts/options").await
+    }
+
+    // ─── Market Data ─────────────────────────────
+
+    pub async fn snapshots(
+        &self,
+        query: &SnapshotsQuery,
+    ) -> Result<Vec<SnapshotData>, ShioajiHttpError> {
+        self.get_with_params("/market/snapshots", query).await
+    }
+
+    pub async fn ticks(&self, query: &TicksQuery) -> Result<TicksResponse, ShioajiHttpError> {
+        self.get_with_params("/market/ticks", query).await
+    }
+
+    pub async fn kbars(&self, query: &KBarsQuery) -> Result<KBarsResponse, ShioajiHttpError> {
+        self.get_with_params("/market/kbars", query).await
+    }
+
+    // ─── Orders ──────────────────────────────────
+
+    pub async fn place_order(
+        &self,
+        request: &PlaceOrderRequest,
+    ) -> Result<PlaceOrderResponse, ShioajiHttpError> {
+        self.post("/orders/place", request).await
+    }
+
+    pub async fn update_order(
+        &self,
+        request: &UpdateOrderRequest,
+    ) -> Result<TradeIdResponse, ShioajiHttpError> {
+        self.put("/orders/update", request).await
+    }
+
+    pub async fn cancel_order(
+        &self,
+        request: &CancelOrderRequest,
+    ) -> Result<TradeIdResponse, ShioajiHttpError> {
+        self.delete("/orders/cancel", request).await
+    }
+
+    pub async fn list_trades(&self) -> Result<Vec<TradeInfo>, ShioajiHttpError> {
+        self.get("/orders/trades").await
+    }
+
+    // ─── Account ─────────────────────────────────
+
+    pub async fn list_positions(
+        &self,
+        query: &PositionsQuery,
+    ) -> Result<Vec<Position>, ShioajiHttpError> {
+        self.get_with_params("/account/positions", query).await
+    }
+
+    pub async fn account_balance(&self) -> Result<AccountBalance, ShioajiHttpError> {
+        self.get("/account/balance").await
+    }
+
+    pub async fn margin(&self) -> Result<MarginInfo, ShioajiHttpError> {
+        self.get("/account/margin").await
+    }
+
+    pub async fn list_profit_loss(&self) -> Result<Vec<ProfitLoss>, ShioajiHttpError> {
+        self.get("/account/pnl").await
     }
 }
