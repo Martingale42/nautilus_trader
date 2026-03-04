@@ -88,62 +88,88 @@ impl ShioajiWebSocketClient {
                         msg_count += 1;
                         match msg {
                             WsIncomingMsg::Tick(ref tick_msg) => {
-                                if let Some(inst) = instruments.get(&tick_msg.code) {
-                                    let ts_event = parse_taiwan_timestamp(
-                                        &tick_msg.data.timestamp,
-                                    )
-                                    .unwrap_or_default();
-                                    let ts_init = UnixNanos::default();
+                                let Some(inst) = instruments.get(&tick_msg.code) else {
+                                    tracing::debug!(
+                                        "Tick for unknown code: {}",
+                                        tick_msg.code
+                                    );
+                                    continue;
+                                };
+                                let ts_event = match parse_taiwan_timestamp(
+                                    &tick_msg.data.timestamp,
+                                ) {
+                                    Ok(ts) => ts,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Bad timestamp for tick {}: {e}",
+                                            tick_msg.code
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let ts_init = UnixNanos::default();
 
-                                    match parse_ws_tick_to_trade_tick(
-                                        tick_msg,
-                                        inst.id(),
-                                        inst.price_precision(),
-                                        inst.size_precision(),
-                                        ts_event,
-                                        ts_init,
-                                    ) {
-                                        Ok(trade) => Python::attach(|py| {
-                                            let capsule =
-                                                data_to_pycapsule(py, Data::Trade(trade));
-                                            call_python(py, &callback, capsule);
-                                        }),
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "Failed to parse tick for {}: {e}",
-                                                tick_msg.code
-                                            );
-                                        }
+                                match parse_ws_tick_to_trade_tick(
+                                    tick_msg,
+                                    inst.id(),
+                                    inst.price_precision(),
+                                    inst.size_precision(),
+                                    ts_event,
+                                    ts_init,
+                                ) {
+                                    Ok(trade) => Python::attach(|py| {
+                                        let capsule =
+                                            data_to_pycapsule(py, Data::Trade(trade));
+                                        call_python(py, &callback, capsule);
+                                    }),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to parse tick for {}: {e}",
+                                            tick_msg.code
+                                        );
                                     }
                                 }
                             }
                             WsIncomingMsg::BidAsk(ref ba_msg) => {
-                                if let Some(inst) = instruments.get(&ba_msg.code) {
-                                    let ts_event = parse_taiwan_timestamp(
-                                        &ba_msg.data.timestamp,
-                                    )
-                                    .unwrap_or_default();
-                                    let ts_init = UnixNanos::default();
+                                let Some(inst) = instruments.get(&ba_msg.code) else {
+                                    tracing::debug!(
+                                        "BidAsk for unknown code: {}",
+                                        ba_msg.code
+                                    );
+                                    continue;
+                                };
+                                let ts_event = match parse_taiwan_timestamp(
+                                    &ba_msg.data.timestamp,
+                                ) {
+                                    Ok(ts) => ts,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Bad timestamp for bidask {}: {e}",
+                                            ba_msg.code
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let ts_init = UnixNanos::default();
 
-                                    match parse_ws_bidask_to_quote_tick(
-                                        ba_msg,
-                                        inst.id(),
-                                        inst.price_precision(),
-                                        inst.size_precision(),
-                                        ts_event,
-                                        ts_init,
-                                    ) {
-                                        Ok(quote) => Python::attach(|py| {
-                                            let capsule =
-                                                data_to_pycapsule(py, Data::Quote(quote));
-                                            call_python(py, &callback, capsule);
-                                        }),
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "Failed to parse bidask for {}: {e}",
-                                                ba_msg.code
-                                            );
-                                        }
+                                match parse_ws_bidask_to_quote_tick(
+                                    ba_msg,
+                                    inst.id(),
+                                    inst.price_precision(),
+                                    inst.size_precision(),
+                                    ts_event,
+                                    ts_init,
+                                ) {
+                                    Ok(quote) => Python::attach(|py| {
+                                        let capsule =
+                                            data_to_pycapsule(py, Data::Quote(quote));
+                                        call_python(py, &callback, capsule);
+                                    }),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to parse bidask for {}: {e}",
+                                            ba_msg.code
+                                        );
                                     }
                                 }
                             }
