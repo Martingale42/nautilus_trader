@@ -3,10 +3,10 @@ pub fn gateway_http_url(base_url: &str) -> String {
 }
 
 pub fn gateway_ws_url(base_url: &str) -> String {
-    if base_url.starts_with("http://") {
-        format!("ws://{}/ws", &base_url["http://".len()..])
-    } else if base_url.starts_with("https://") {
-        format!("wss://{}/ws", &base_url["https://".len()..])
+    if let Some(host) = base_url.strip_prefix("http://") {
+        format!("ws://{host}/ws")
+    } else if let Some(host) = base_url.strip_prefix("https://") {
+        format!("wss://{host}/ws")
     } else {
         format!("{base_url}/ws")
     }

@@ -15,7 +15,7 @@ use super::{messages::{WsIncomingMsg, WsSubscribeMsg}, WsCommand};
 /// Reads frames from the WS stream, deserializes to `WsIncomingMsg`,
 /// and forwards to the message channel. Also processes subscribe/unsubscribe
 /// commands from the command channel.
-pub async fn ws_handler_loop<S>(
+pub(crate) async fn ws_handler_loop<S>(
     ws_stream: S,
     mut cmd_rx: mpsc::UnboundedReceiver<WsCommand>,
     msg_tx: mpsc::UnboundedSender<WsIncomingMsg>,
