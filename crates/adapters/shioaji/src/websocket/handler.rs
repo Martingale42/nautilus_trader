@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsFrame;
 use tracing::{debug, error, warn};
 
-use super::{messages::WsIncomingMsg, WsCommand};
+use super::{messages::{WsIncomingMsg, WsSubscribeMsg}, WsCommand};
 
 /// Background task that manages the WebSocket connection.
 ///
@@ -74,23 +74,25 @@ pub async fn ws_handler_loop<S>(
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(WsCommand::Subscribe { code, quote_type }) => {
-                        let msg = serde_json::json!({
-                            "action": "subscribe",
-                            "contract_code": code,
-                            "quote_type": quote_type,
-                        });
-                        if let Err(e) = sink.send(WsFrame::Text(msg.to_string().into())).await {
+                        let msg = WsSubscribeMsg {
+                            action: "subscribe".to_string(),
+                            contract_code: code,
+                            quote_type,
+                        };
+                        let text = serde_json::to_string(&msg).expect("serialize subscribe");
+                        if let Err(e) = sink.send(WsFrame::Text(text.into())).await {
                             error!("Failed to send subscribe: {e}");
                             break;
                         }
                     }
                     Some(WsCommand::Unsubscribe { code, quote_type }) => {
-                        let msg = serde_json::json!({
-                            "action": "unsubscribe",
-                            "contract_code": code,
-                            "quote_type": quote_type,
-                        });
-                        if let Err(e) = sink.send(WsFrame::Text(msg.to_string().into())).await {
+                        let msg = WsSubscribeMsg {
+                            action: "unsubscribe".to_string(),
+                            contract_code: code,
+                            quote_type,
+                        };
+                        let text = serde_json::to_string(&msg).expect("serialize unsubscribe");
+                        if let Err(e) = sink.send(WsFrame::Text(text.into())).await {
                             error!("Failed to send unsubscribe: {e}");
                             break;
                         }
