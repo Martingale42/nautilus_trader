@@ -1,7 +1,12 @@
 use nautilus_core::python::to_pyruntime_err;
-use pyo3::prelude::*;
+use nautilus_model::python::instruments::instrument_any_to_pyobject;
+use pyo3::{prelude::*, types::PyList};
 
-use crate::http::{client::ShioajiHttpClient, models::LoginRequest};
+use crate::http::{
+    client::ShioajiHttpClient,
+    models::LoginRequest,
+    parse::{parse_futures_to_contract, parse_options_to_contract, parse_stock_to_equity},
+};
 
 #[pymethods]
 impl ShioajiHttpClient {
@@ -62,6 +67,90 @@ impl ShioajiHttpClient {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             client.logout().await.map_err(to_pyruntime_err)?;
             Ok(())
+        })
+    }
+
+    /// Fetch all stock contracts and return as Nautilus Equity instruments.
+    #[pyo3(name = "request_stock_instruments")]
+    fn py_request_stock_instruments<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let contracts = client.list_stocks().await.map_err(to_pyruntime_err)?;
+            let ts = nautilus_core::UnixNanos::default();
+            let instruments: Vec<_> = contracts
+                .iter()
+                .filter_map(|c| parse_stock_to_equity(c, ts, ts).ok())
+                .collect();
+            Python::attach(|py| {
+                let py_instruments: PyResult<Vec<_>> = instruments
+                    .into_iter()
+                    .map(|inst| instrument_any_to_pyobject(py, inst))
+                    .collect();
+                let pylist = PyList::new(py, py_instruments?)
+                    .unwrap()
+                    .into_any()
+                    .unbind();
+                Ok(pylist)
+            })
+        })
+    }
+
+    /// Fetch all futures contracts and return as Nautilus FuturesContract instruments.
+    #[pyo3(name = "request_futures_instruments")]
+    fn py_request_futures_instruments<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let contracts = client.list_futures().await.map_err(to_pyruntime_err)?;
+            let ts = nautilus_core::UnixNanos::default();
+            let instruments: Vec<_> = contracts
+                .iter()
+                .filter_map(|c| parse_futures_to_contract(c, ts, ts).ok())
+                .collect();
+            Python::attach(|py| {
+                let py_instruments: PyResult<Vec<_>> = instruments
+                    .into_iter()
+                    .map(|inst| instrument_any_to_pyobject(py, inst))
+                    .collect();
+                let pylist = PyList::new(py, py_instruments?)
+                    .unwrap()
+                    .into_any()
+                    .unbind();
+                Ok(pylist)
+            })
+        })
+    }
+
+    /// Fetch all options contracts and return as Nautilus OptionContract instruments.
+    #[pyo3(name = "request_options_instruments")]
+    fn py_request_options_instruments<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let contracts = client.list_options().await.map_err(to_pyruntime_err)?;
+            let ts = nautilus_core::UnixNanos::default();
+            let instruments: Vec<_> = contracts
+                .iter()
+                .filter_map(|c| parse_options_to_contract(c, ts, ts).ok())
+                .collect();
+            Python::attach(|py| {
+                let py_instruments: PyResult<Vec<_>> = instruments
+                    .into_iter()
+                    .map(|inst| instrument_any_to_pyobject(py, inst))
+                    .collect();
+                let pylist = PyList::new(py, py_instruments?)
+                    .unwrap()
+                    .into_any()
+                    .unbind();
+                Ok(pylist)
+            })
         })
     }
 }
