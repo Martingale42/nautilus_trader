@@ -4,7 +4,7 @@ use nautilus_network::http::{HttpClient, Method};
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::error::ShioajiHttpError;
-use crate::common::consts::SHIOAJI_GATEWAY_HTTP_URL;
+use crate::common::{consts::SHIOAJI_GATEWAY_HTTP_URL, urls::gateway_http_url};
 
 /// HTTP client for communicating with the Shioaji FastAPI gateway.
 #[derive(Clone, Debug)]
@@ -15,8 +15,12 @@ pub struct ShioajiHttpClient {
 
 impl ShioajiHttpClient {
     /// Creates a new [`ShioajiHttpClient`].
+    ///
+    /// The `base_url` is the raw gateway URL (e.g. `http://localhost:8000`).
+    /// The `/api` prefix is appended automatically via [`gateway_http_url`].
     pub fn new(base_url: Option<String>) -> Result<Self, ShioajiHttpError> {
-        let base_url = base_url.unwrap_or_else(|| SHIOAJI_GATEWAY_HTTP_URL.to_string());
+        let raw_base = base_url.unwrap_or_else(|| SHIOAJI_GATEWAY_HTTP_URL.to_string());
+        let base_url = gateway_http_url(&raw_base);
         let client = HttpClient::new(HashMap::new(), Vec::new(), Vec::new(), None, Some(30), None)?;
         Ok(Self { base_url, client })
     }
