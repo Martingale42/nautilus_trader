@@ -151,8 +151,10 @@ pub struct PlaceOrderRequest {
 #[derive(Debug, Serialize)]
 pub struct UpdateOrderRequest {
     pub trade_id: String,
-    pub price: f64,
-    pub quantity: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
