@@ -216,3 +216,111 @@ pub struct ProfitLoss {
     pub pnl: f64,
     pub pr_ratio: f64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::testing::load_test_json_as;
+
+    #[test]
+    fn test_deserialize_stock_contracts() {
+        let contracts: Vec<StockContract> = load_test_json_as("contracts_stocks.json");
+        assert_eq!(contracts.len(), 2);
+        assert_eq!(contracts[0].code, "2330");
+        assert_eq!(contracts[0].name, "台積電");
+        assert_eq!(contracts[0].exchange, "TSE");
+        assert_eq!(contracts[0].limit_up, 638.0);
+        assert_eq!(contracts[1].code, "2317");
+    }
+
+    #[test]
+    fn test_deserialize_futures_contracts() {
+        let contracts: Vec<FuturesContract> = load_test_json_as("contracts_futures.json");
+        assert_eq!(contracts.len(), 1);
+        assert_eq!(contracts[0].code, "TXFC6");
+        assert_eq!(contracts[0].delivery_month, "2026/06");
+        assert_eq!(contracts[0].underlying_kind, "I");
+    }
+
+    #[test]
+    fn test_deserialize_options_contracts() {
+        let contracts: Vec<OptionsContract> = load_test_json_as("contracts_options.json");
+        assert_eq!(contracts.len(), 1);
+        assert_eq!(contracts[0].code, "TXO20000C6");
+        assert_eq!(contracts[0].strike_price, 20000.0);
+        assert_eq!(contracts[0].option_right, "Call");
+    }
+
+    #[test]
+    fn test_deserialize_snapshots() {
+        let snapshots: Vec<SnapshotData> = load_test_json_as("market_snapshots.json");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].code, "2330");
+        assert_eq!(snapshots[0].close, 580.0);
+        assert_eq!(snapshots[0].buy_price, 580.0);
+        assert_eq!(snapshots[0].sell_price, 581.0);
+        assert_eq!(snapshots[0].buy_volume, 120.0);
+    }
+
+    #[test]
+    fn test_deserialize_ticks() {
+        let ticks: TicksResponse = load_test_json_as("market_ticks.json");
+        assert_eq!(ticks.code, "2330");
+        assert_eq!(ticks.ts.len(), 2);
+        assert_eq!(ticks.close, vec![580.0, 581.0]);
+        assert_eq!(ticks.volume, vec![100, 200]);
+        assert_eq!(ticks.tick_type, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_deserialize_kbars() {
+        let kbars: KBarsResponse = load_test_json_as("market_kbars.json");
+        assert_eq!(kbars.code, "2330");
+        assert_eq!(kbars.ts.len(), 2);
+        assert_eq!(kbars.open, vec![578.0, 580.0]);
+        assert_eq!(kbars.volume, vec![5000, 3000]);
+    }
+
+    #[test]
+    fn test_deserialize_account_balance() {
+        let balance: AccountBalance = load_test_json_as("account_balance.json");
+        assert_eq!(balance.date, "2026-03-02");
+        assert_eq!(balance.balance, 1_500_000.0);
+    }
+
+    #[test]
+    fn test_deserialize_positions() {
+        let positions: Vec<Position> = load_test_json_as("account_positions.json");
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].code, "2330");
+        assert_eq!(positions[0].direction, "Buy");
+        assert_eq!(positions[0].quantity, 1000);
+        assert_eq!(positions[0].pnl, 5000.0);
+    }
+
+    #[test]
+    fn test_deserialize_margin() {
+        let margin: MarginInfo = load_test_json_as("account_margin.json");
+        assert_eq!(margin.yesterday_balance, 2_000_000.0);
+        assert_eq!(margin.available_margin, 1_800_000.0);
+    }
+
+    #[test]
+    fn test_deserialize_profit_loss() {
+        let pnl: Vec<ProfitLoss> = load_test_json_as("account_pnl.json");
+        assert_eq!(pnl.len(), 1);
+        assert_eq!(pnl[0].code, "2330");
+        assert_eq!(pnl[0].pnl, 5000.0);
+        assert_eq!(pnl[0].pr_ratio, 0.87);
+    }
+
+    #[test]
+    fn test_deserialize_trades() {
+        let trades: Vec<TradeInfo> = load_test_json_as("orders_trades.json");
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].trade_id, "trade-001");
+        assert_eq!(trades[0].code, "2330");
+        assert_eq!(trades[0].action, "Buy");
+        assert_eq!(trades[0].status, "Filled");
+    }
+}
