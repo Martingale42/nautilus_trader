@@ -1,16 +1,24 @@
 use nautilus_core::UnixNanos;
 use nautilus_model::{
     data::{Bar, BarType, QuoteTick, TradeTick},
-    enums::AggressorSide,
+    enums::{AggressorSide, AssetClass, OptionKind},
     identifiers::{InstrumentId, Symbol, TradeId},
-    instruments::{Equity, InstrumentAny},
+    instruments::{
+        Equity, FuturesContract as NautilusFuturesContract, InstrumentAny,
+        OptionContract as NautilusOptionContract,
+    },
     types::{Currency, Price, Quantity},
 };
+use ustr::Ustr;
 
-use super::models::{KBarsResponse, SnapshotData, StockContract, TicksResponse};
-use crate::common::instrument::{SIZE_PRECISION, STOCK_LOT_SIZE};
+use super::models::{
+    FuturesContract, KBarsResponse, OptionsContract, SnapshotData, StockContract, TicksResponse,
+};
+use crate::common::instrument::{
+    futures_multiplier, options_multiplier, CONTRACT_LOT_SIZE, SIZE_PRECISION, STOCK_LOT_SIZE,
+};
 use crate::common::parse::parse_instrument_id;
-use crate::common::tick_size::twse_stock_tick_size;
+use crate::common::tick_size::{futures_tick_size, options_tick_size, twse_stock_tick_size};
 
 /// Parse a `SnapshotData` into a `QuoteTick` (top-of-book bid/ask).
 pub fn parse_snapshot_to_quote_tick(
@@ -142,6 +150,154 @@ pub fn parse_stock_to_equity(
     Ok(InstrumentAny::Equity(equity))
 }
 
+/// Parse a gateway `FuturesContract` into a Nautilus `FuturesContract` instrument.
+///
+/// - Root symbol and multiplier derived from `category` field
+/// - Tick size from `futures_tick_size()` lookup
+/// - Expiration parsed from `delivery_date`
+pub fn parse_futures_to_contract(
+    contract: &FuturesContract,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+) -> anyhow::Result<InstrumentAny> {
+    let instrument_id = parse_instrument_id(&contract.code)?;
+    let raw_symbol = Symbol::new(&contract.code);
+    let currency = Currency::TWD();
+
+    let root_symbol = &contract.category;
+    let (tick_size, price_precision) = futures_tick_size(root_symbol);
+    let price_increment = Price::new(tick_size, price_precision);
+    let multiplier = Quantity::new(futures_multiplier(root_symbol), 0);
+    let lot_size = Quantity::new(CONTRACT_LOT_SIZE, SIZE_PRECISION);
+
+    let expiration_ns = parse_date_to_nanos(&contract.delivery_date)?;
+    let activation_ns = parse_date_to_nanos(&contract.update_date).unwrap_or(ts_event);
+
+    let asset_class = match contract.underlying_kind.as_str() {
+        "I" => AssetClass::Index,
+        _ => AssetClass::Equity,
+    };
+
+    let max_price = Some(Price::new(contract.limit_up, price_precision));
+    let min_price = Some(Price::new(contract.limit_down, price_precision));
+
+    let futures = NautilusFuturesContract::new(
+        instrument_id,
+        raw_symbol,
+        asset_class,
+        Some(Ustr::from("TAIFEX")),
+        Ustr::from(root_symbol),
+        activation_ns,
+        expiration_ns,
+        currency,
+        price_precision,
+        price_increment,
+        multiplier,
+        lot_size,
+        None, // max_quantity
+        None, // min_quantity
+        max_price,
+        min_price,
+        None, // margin_init
+        None, // margin_maint
+        None, // maker_fee
+        None, // taker_fee
+        None, // info
+        ts_event,
+        ts_init,
+    );
+
+    Ok(InstrumentAny::FuturesContract(futures))
+}
+
+/// Parse a gateway `OptionsContract` into a Nautilus `OptionContract` instrument.
+///
+/// - Root symbol and multiplier derived from `category` field
+/// - Tick size from `options_tick_size()` based on reference premium
+/// - Option kind parsed from `option_right` ("Call" / "Put")
+pub fn parse_options_to_contract(
+    contract: &OptionsContract,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+) -> anyhow::Result<InstrumentAny> {
+    let instrument_id = parse_instrument_id(&contract.code)?;
+    let raw_symbol = Symbol::new(&contract.code);
+    let currency = Currency::TWD();
+
+    let root_symbol = &contract.category;
+    let (tick_size, price_precision) = options_tick_size(contract.reference);
+    let price_increment = Price::new(tick_size, price_precision);
+    let multiplier = Quantity::new(options_multiplier(root_symbol), 0);
+    let lot_size = Quantity::new(CONTRACT_LOT_SIZE, SIZE_PRECISION);
+
+    let option_kind = match contract.option_right.as_str() {
+        "Call" => OptionKind::Call,
+        "Put" => OptionKind::Put,
+        other => anyhow::bail!("Unknown option_right: {other}"),
+    };
+
+    let strike_price = Price::new(contract.strike_price, 0);
+
+    let expiration_ns = parse_date_to_nanos(&contract.delivery_date)?;
+    let activation_ns = parse_date_to_nanos(&contract.update_date).unwrap_or(ts_event);
+
+    let asset_class = match contract.underlying_kind.as_str() {
+        "I" => AssetClass::Index,
+        _ => AssetClass::Equity,
+    };
+
+    let max_price = Some(Price::new(contract.limit_up, price_precision));
+    let min_price = Some(Price::new(contract.limit_down, price_precision));
+
+    let option = NautilusOptionContract::new(
+        instrument_id,
+        raw_symbol,
+        asset_class,
+        Some(Ustr::from("TAIFEX")),
+        Ustr::from(root_symbol),
+        option_kind,
+        strike_price,
+        currency,
+        activation_ns,
+        expiration_ns,
+        price_precision,
+        price_increment,
+        multiplier,
+        lot_size,
+        None, // max_quantity
+        None, // min_quantity
+        max_price,
+        min_price,
+        None, // margin_init
+        None, // margin_maint
+        None, // maker_fee
+        None, // taker_fee
+        None, // info
+        ts_event,
+        ts_init,
+    );
+
+    Ok(InstrumentAny::OptionContract(option))
+}
+
+/// Parse a date string like "2026/06/17" or "2026-06-17" to `UnixNanos`.
+///
+/// Treats the date as midnight in Taiwan time (UTC+8).
+fn parse_date_to_nanos(date_str: &str) -> anyhow::Result<UnixNanos> {
+    let normalized = date_str.replace('/', "-");
+    let date = chrono::NaiveDate::parse_from_str(&normalized, "%Y-%m-%d")?;
+    let datetime = date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| anyhow::anyhow!("Invalid date: {date_str}"))?;
+    // Taiwan is UTC+8, so midnight local = 16:00 previous day UTC
+    let utc = datetime - chrono::Duration::hours(8);
+    let timestamp_ns = utc
+        .and_utc()
+        .timestamp_nanos_opt()
+        .ok_or_else(|| anyhow::anyhow!("Timestamp overflow for {date_str}"))?;
+    Ok(UnixNanos::from(timestamp_ns as u64))
+}
+
 #[cfg(test)]
 mod tests {
     use nautilus_model::data::BarSpecification;
@@ -152,6 +308,7 @@ mod tests {
 
     use super::*;
     use crate::common::testing::load_test_json_as;
+    use crate::http::models::{FuturesContract, OptionsContract};
 
     fn test_instrument_id() -> InstrumentId {
         InstrumentId::new(Symbol::new("2330"), Venue::new("SINOPAC"))
@@ -232,5 +389,63 @@ mod tests {
             }
             _ => panic!("Expected Equity"),
         }
+    }
+
+    #[test]
+    fn test_parse_futures_to_contract_txf() {
+        let contracts: Vec<FuturesContract> = load_test_json_as("contracts_futures.json");
+        let instrument = parse_futures_to_contract(
+            &contracts[0], // TXFC6
+            UnixNanos::default(),
+            UnixNanos::default(),
+        )
+        .unwrap();
+
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.id().to_string(), "TXFC6.SINOPAC");
+                assert_eq!(f.underlying().unwrap().as_str(), "TXF");
+                assert_eq!(f.multiplier().as_f64(), 200.0);
+                assert_eq!(f.price_precision(), 0); // TXF tick=1.0
+                assert_eq!(f.lot_size().unwrap().as_f64(), 1.0);
+                assert_eq!(f.quote_currency().code.as_str(), "TWD");
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[test]
+    fn test_parse_options_to_contract_call() {
+        let contracts: Vec<OptionsContract> = load_test_json_as("contracts_options.json");
+        let instrument = parse_options_to_contract(
+            &contracts[0], // TXO20000C6, strike=20000, Call
+            UnixNanos::default(),
+            UnixNanos::default(),
+        )
+        .unwrap();
+
+        match instrument {
+            InstrumentAny::OptionContract(o) => {
+                assert_eq!(o.id().to_string(), "TXO20000C6.SINOPAC");
+                assert_eq!(o.option_kind(), Some(OptionKind::Call));
+                assert_eq!(o.strike_price().unwrap().as_f64(), 20000.0);
+                assert_eq!(o.underlying().unwrap().as_str(), "TXO");
+                assert_eq!(o.multiplier().as_f64(), 50.0);
+                assert_eq!(o.quote_currency().code.as_str(), "TWD");
+            }
+            _ => panic!("Expected OptionContract"),
+        }
+    }
+
+    #[test]
+    fn test_parse_date_to_nanos_slash_format() {
+        let nanos = parse_date_to_nanos("2026/06/17").unwrap();
+        assert!(nanos.as_u64() > 0);
+    }
+
+    #[test]
+    fn test_parse_date_to_nanos_dash_format() {
+        let nanos = parse_date_to_nanos("2026-03-02").unwrap();
+        assert!(nanos.as_u64() > 0);
     }
 }
