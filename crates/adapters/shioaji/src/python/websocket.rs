@@ -1,7 +1,27 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use nautilus_core::UnixNanos;
 use nautilus_core::python::to_pyruntime_err;
+use nautilus_model::{
+    data::Data,
+    instruments::Instrument,
+    python::{
+        data::data_to_pycapsule,
+        instruments::pyobject_to_instrument_any,
+    },
+};
 use pyo3::prelude::*;
 
-use crate::websocket::client::ShioajiWebSocketClient;
+use crate::websocket::{
+    client::ShioajiWebSocketClient,
+    messages::WsIncomingMsg,
+    parse::{
+        parse_taiwan_timestamp,
+        parse_ws_bidask_to_quote_tick,
+        parse_ws_tick_to_trade_tick,
+    },
+};
 
 #[pymethods]
 impl ShioajiWebSocketClient {
@@ -24,5 +44,179 @@ impl ShioajiWebSocketClient {
     #[pyo3(name = "unsubscribe")]
     fn py_unsubscribe(&self, code: String, quote_type: String) -> PyResult<()> {
         self.unsubscribe(&code, &quote_type).map_err(to_pyruntime_err)
+    }
+
+    /// Connect to the gateway WS and start the message processing loop.
+    ///
+    /// `instruments` — list of pyo3 InstrumentAny objects (for ID/precision lookup)
+    /// `callback` — Python callable invoked with each parsed data PyCapsule
+    #[pyo3(name = "connect")]
+    fn py_connect<'py>(
+        &self,
+        py: Python<'py>,
+        instruments: Vec<Py<PyAny>>,
+        callback: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // Build instrument lookup: code -> InstrumentAny
+        let mut instrument_map = HashMap::new();
+        for inst_obj in instruments {
+            let inst_any = pyobject_to_instrument_any(py, inst_obj)?;
+            let code = inst_any.id().symbol.as_str().to_string();
+            instrument_map.insert(code, inst_any);
+        }
+        let instruments = Arc::new(instrument_map);
+
+        let client = self.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            // Establish WS connection (creates channels + spawns handler)
+            client.connect().await.map_err(to_pyruntime_err)?;
+
+            // Take msg_rx out of client — move it into the callback task
+            let msg_rx = client.take_msg_rx();
+
+            // Spawn background message processing task
+            tokio::spawn(async move {
+                // Keep client alive for the entire task lifetime
+                let _client_guard = client;
+
+                if let Some(mut rx) = msg_rx {
+                    tracing::info!("Shioaji WS callback loop started");
+                    let mut msg_count: u64 = 0;
+
+                    while let Some(msg) = rx.recv().await {
+                        msg_count += 1;
+                        match msg {
+                            WsIncomingMsg::Tick(ref tick_msg) => {
+                                if let Some(inst) = instruments.get(&tick_msg.code) {
+                                    let ts_event = parse_taiwan_timestamp(
+                                        &tick_msg.data.timestamp,
+                                    )
+                                    .unwrap_or_default();
+                                    let ts_init = UnixNanos::default();
+
+                                    match parse_ws_tick_to_trade_tick(
+                                        tick_msg,
+                                        inst.id(),
+                                        inst.price_precision(),
+                                        inst.size_precision(),
+                                        ts_event,
+                                        ts_init,
+                                    ) {
+                                        Ok(trade) => Python::attach(|py| {
+                                            let capsule =
+                                                data_to_pycapsule(py, Data::Trade(trade));
+                                            call_python(py, &callback, capsule);
+                                        }),
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "Failed to parse tick for {}: {e}",
+                                                tick_msg.code
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            WsIncomingMsg::BidAsk(ref ba_msg) => {
+                                if let Some(inst) = instruments.get(&ba_msg.code) {
+                                    let ts_event = parse_taiwan_timestamp(
+                                        &ba_msg.data.timestamp,
+                                    )
+                                    .unwrap_or_default();
+                                    let ts_init = UnixNanos::default();
+
+                                    match parse_ws_bidask_to_quote_tick(
+                                        ba_msg,
+                                        inst.id(),
+                                        inst.price_precision(),
+                                        inst.size_precision(),
+                                        ts_event,
+                                        ts_init,
+                                    ) {
+                                        Ok(quote) => Python::attach(|py| {
+                                            let capsule =
+                                                data_to_pycapsule(py, Data::Quote(quote));
+                                            call_python(py, &callback, capsule);
+                                        }),
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "Failed to parse bidask for {}: {e}",
+                                                ba_msg.code
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            WsIncomingMsg::OrderUpdate(_) => {
+                                // Phase 4 will handle order updates
+                                tracing::debug!("Received order update (not handled in Phase 3)");
+                            }
+                            WsIncomingMsg::Subscribed(ref confirm) => {
+                                tracing::info!(
+                                    "Subscribed: {} ({})",
+                                    confirm.code,
+                                    confirm.quote_type
+                                );
+                            }
+                            WsIncomingMsg::Unsubscribed(ref confirm) => {
+                                tracing::info!(
+                                    "Unsubscribed: {} ({})",
+                                    confirm.code,
+                                    confirm.quote_type
+                                );
+                            }
+                            WsIncomingMsg::Error(ref err) => {
+                                tracing::error!("WS error: {}", err.detail);
+                            }
+                        }
+                    }
+
+                    tracing::warn!(
+                        "Shioaji WS callback loop ended after {msg_count} messages"
+                    );
+                }
+            });
+
+            Ok(())
+        })
+    }
+
+    /// Disconnect from the gateway WS.
+    #[pyo3(name = "disconnect")]
+    fn py_disconnect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            client.disconnect().await.map_err(to_pyruntime_err)?;
+            Ok(())
+        })
+    }
+
+    /// Wait until the WS connection is active.
+    #[pyo3(name = "wait_until_active")]
+    fn py_wait_until_active<'py>(
+        &self,
+        py: Python<'py>,
+        timeout_secs: f64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs_f64(timeout_secs);
+            while !client.is_connected() {
+                if start.elapsed() > timeout {
+                    return Err(pyo3::exceptions::PyTimeoutError::new_err(format!(
+                        "WS connection timeout after {timeout_secs}s"
+                    )));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            Ok(())
+        })
+    }
+}
+
+fn call_python(py: Python, callback: &Py<PyAny>, py_obj: Py<PyAny>) {
+    if let Err(e) = callback.call1(py, (py_obj,)) {
+        tracing::error!("Error calling Python callback: {e}");
     }
 }
