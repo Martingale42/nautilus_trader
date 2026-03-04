@@ -3,6 +3,7 @@ from typing import Final
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import Venue
 
+
 SINOPAC: Final[str] = "SINOPAC"
 SINOPAC_VENUE: Final[Venue] = Venue(SINOPAC)
 SINOPAC_CLIENT_ID: Final[ClientId] = ClientId(SINOPAC)
