@@ -290,7 +290,7 @@ fn parse_date_to_nanos(date_str: &str) -> anyhow::Result<UnixNanos> {
         .and_hms_opt(0, 0, 0)
         .ok_or_else(|| anyhow::anyhow!("Invalid date: {date_str}"))?;
     // Taiwan is UTC+8, so midnight local = 16:00 previous day UTC
-    let utc = datetime - chrono::Duration::hours(8);
+    let utc = datetime - chrono::TimeDelta::hours(8);
     let timestamp_ns = utc
         .and_utc()
         .timestamp_nanos_opt()
@@ -439,13 +439,15 @@ mod tests {
 
     #[test]
     fn test_parse_date_to_nanos_slash_format() {
+        // 2026/06/17 00:00:00 +08:00 = 2026-06-16T16:00:00Z
         let nanos = parse_date_to_nanos("2026/06/17").unwrap();
-        assert!(nanos.as_u64() > 0);
+        assert_eq!(nanos.as_u64(), 1_781_625_600_000_000_000);
     }
 
     #[test]
     fn test_parse_date_to_nanos_dash_format() {
+        // 2026-03-02 00:00:00 +08:00 = 2026-03-01T16:00:00Z
         let nanos = parse_date_to_nanos("2026-03-02").unwrap();
-        assert!(nanos.as_u64() > 0);
+        assert_eq!(nanos.as_u64(), 1_772_380_800_000_000_000);
     }
 }
