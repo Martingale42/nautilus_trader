@@ -1,6 +1,15 @@
 use serde::{Deserialize, Serialize};
 
 /// Trading action (buy/sell).
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        from_py_object
+    )
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShioajiAction {
     Buy,
@@ -8,6 +17,15 @@ pub enum ShioajiAction {
 }
 
 /// Price type for order submission.
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        from_py_object
+    )
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShioajiPriceType {
     LMT,
@@ -16,6 +34,15 @@ pub enum ShioajiPriceType {
 }
 
 /// Order duration (time in force).
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        from_py_object
+    )
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShioajiOrderType {
     ROD,
@@ -24,6 +51,15 @@ pub enum ShioajiOrderType {
 }
 
 /// Stock order credit condition.
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        from_py_object
+    )
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShioajiOrderCond {
     Cash,
@@ -32,6 +68,15 @@ pub enum ShioajiOrderCond {
 }
 
 /// Stock lot size type.
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        from_py_object
+    )
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShioajiOrderLot {
     Common,
@@ -41,6 +86,15 @@ pub enum ShioajiOrderLot {
 }
 
 /// Quote subscription type.
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        from_py_object
+    )
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShioajiQuoteType {
@@ -49,6 +103,15 @@ pub enum ShioajiQuoteType {
 }
 
 /// Market type for endpoint routing.
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        from_py_object
+    )
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShioajiMarket {
@@ -58,6 +121,15 @@ pub enum ShioajiMarket {
 }
 
 /// Exchange code for Taiwan markets.
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        from_py_object
+    )
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShioajiExchange {
     TSE,
