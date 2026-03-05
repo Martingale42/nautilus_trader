@@ -74,10 +74,183 @@ pub struct WsBidAskData {
 
 // ─── Order Update Payloads ───────────────────────
 
+/// Raw order update envelope. The `event` field discriminates the data type.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsOrderUpdateMsg {
     pub event: String,
     pub data: serde_json::Value,
+}
+
+impl WsOrderUpdateMsg {
+    /// Parse the data field into a typed event based on the event string.
+    pub fn parse_event(&self) -> anyhow::Result<OrderEvent> {
+        match self.event.as_str() {
+            "OrderState.StockOrder" => {
+                let data: StockOrderEventData = serde_json::from_value(self.data.clone())?;
+                Ok(OrderEvent::StockOrder(data))
+            }
+            "OrderState.StockDeal" => {
+                let data: StockDealEventData = serde_json::from_value(self.data.clone())?;
+                Ok(OrderEvent::StockDeal(data))
+            }
+            "OrderState.FuturesOrder" => {
+                let data: FuturesOrderEventData = serde_json::from_value(self.data.clone())?;
+                Ok(OrderEvent::FuturesOrder(data))
+            }
+            "OrderState.FuturesDeal" => {
+                let data: FuturesDealEventData = serde_json::from_value(self.data.clone())?;
+                Ok(OrderEvent::FuturesDeal(data))
+            }
+            other => anyhow::bail!("Unknown order event type: {other}"),
+        }
+    }
+}
+
+/// Typed order event after parsing the `data` field.
+#[derive(Debug, Clone)]
+pub enum OrderEvent {
+    StockOrder(StockOrderEventData),
+    StockDeal(StockDealEventData),
+    FuturesOrder(FuturesOrderEventData),
+    FuturesDeal(FuturesDealEventData),
+}
+
+// ─── Shared sub-structs ─────────────────────────
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OperationInfo {
+    pub op_type: String,
+    pub op_code: String,
+    pub op_msg: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OrderStatusInfo {
+    pub id: String,
+    pub exchange_ts: f64,
+    pub modified_price: f64,
+    pub cancel_quantity: i64,
+    pub order_quantity: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StockContractInfo {
+    pub security_type: String,
+    pub exchange: String,
+    pub code: String,
+    pub symbol: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FuturesContractInfo {
+    pub security_type: String,
+    pub code: String,
+    pub exchange: String,
+    #[serde(default)]
+    pub delivery_month: Option<String>,
+    #[serde(default)]
+    pub strike_price: Option<f64>,
+    #[serde(default)]
+    pub option_right: Option<String>,
+}
+
+// ─── Stock order fields ─────────────────────────
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StockOrderInfo {
+    pub id: String,
+    pub seqno: String,
+    pub ordno: String,
+    pub action: String,
+    pub price: f64,
+    pub quantity: i64,
+    pub order_type: String,
+    pub price_type: String,
+    #[serde(default)]
+    pub order_cond: Option<String>,
+    #[serde(default)]
+    pub order_lot: Option<String>,
+}
+
+// ─── Futures order fields ───────────────────────
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FuturesOrderInfo {
+    pub id: String,
+    pub seqno: String,
+    pub ordno: String,
+    pub action: String,
+    pub price: f64,
+    pub quantity: i64,
+    pub order_type: String,
+    pub price_type: String,
+    #[serde(default)]
+    pub market_type: Option<String>,
+    #[serde(default)]
+    pub oc_type: Option<String>,
+    #[serde(default)]
+    pub combo: Option<bool>,
+}
+
+// ─── The 4 event data types ─────────────────────
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StockOrderEventData {
+    pub operation: OperationInfo,
+    pub order: StockOrderInfo,
+    pub status: OrderStatusInfo,
+    pub contract: StockContractInfo,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StockDealEventData {
+    pub trade_id: String,
+    pub seqno: String,
+    pub ordno: String,
+    #[serde(default)]
+    pub exchange_seq: Option<String>,
+    pub broker_id: String,
+    pub account_id: String,
+    pub action: String,
+    pub code: String,
+    pub price: f64,
+    pub quantity: i64,
+    pub ts: f64,
+    #[serde(default)]
+    pub order_cond: Option<String>,
+    #[serde(default)]
+    pub order_lot: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FuturesOrderEventData {
+    pub operation: OperationInfo,
+    pub order: FuturesOrderInfo,
+    pub status: OrderStatusInfo,
+    pub contract: FuturesContractInfo,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FuturesDealEventData {
+    pub trade_id: String,
+    pub seqno: String,
+    pub ordno: String,
+    #[serde(default)]
+    pub exchange_seq: Option<String>,
+    pub broker_id: String,
+    pub account_id: String,
+    pub action: String,
+    pub code: String,
+    pub price: f64,
+    pub quantity: i64,
+    pub ts: f64,
+    #[serde(default)]
+    pub security_type: Option<String>,
+    #[serde(default)]
+    pub market_type: Option<String>,
+    #[serde(default)]
+    pub combo: Option<bool>,
 }
 
 // ─── Confirmation & Error ────────────────────────
@@ -173,5 +346,120 @@ mod tests {
             }
             _ => panic!("Expected Error message"),
         }
+    }
+
+    // ─── Order Event Deserialization Tests ────────
+
+    #[test]
+    fn test_parse_order_event_stock_order() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_order_stock.json");
+        match msg {
+            WsIncomingMsg::OrderUpdate(update) => {
+                assert_eq!(update.event, "OrderState.StockOrder");
+                let event = update.parse_event().expect("parse_event failed");
+                match event {
+                    OrderEvent::StockOrder(data) => {
+                        assert_eq!(data.operation.op_type, "New");
+                        assert_eq!(data.operation.op_code, "00");
+                        assert_eq!(data.order.id, "abc123");
+                        assert_eq!(data.order.action, "Buy");
+                        assert_eq!(data.order.price, 580.0);
+                        assert_eq!(data.order.quantity, 1);
+                        assert_eq!(data.order.order_type, "ROD");
+                        assert_eq!(data.order.price_type, "LMT");
+                        assert_eq!(data.status.order_quantity, 1);
+                        assert_eq!(data.contract.code, "2330");
+                        assert_eq!(data.contract.security_type, "STK");
+                    }
+                    _ => panic!("Expected StockOrder event"),
+                }
+            }
+            _ => panic!("Expected OrderUpdate message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_order_event_stock_deal() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_deal_stock.json");
+        match msg {
+            WsIncomingMsg::OrderUpdate(update) => {
+                assert_eq!(update.event, "OrderState.StockDeal");
+                let event = update.parse_event().expect("parse_event failed");
+                match event {
+                    OrderEvent::StockDeal(data) => {
+                        assert_eq!(data.trade_id, "abc123");
+                        assert_eq!(data.ordno, "A1234");
+                        assert_eq!(data.action, "Buy");
+                        assert_eq!(data.code, "2330");
+                        assert_eq!(data.price, 580.0);
+                        assert_eq!(data.quantity, 1);
+                        assert_eq!(data.ts, 1709352601.0);
+                    }
+                    _ => panic!("Expected StockDeal event"),
+                }
+            }
+            _ => panic!("Expected OrderUpdate message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_order_event_futures_order() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_order_futures.json");
+        match msg {
+            WsIncomingMsg::OrderUpdate(update) => {
+                assert_eq!(update.event, "OrderState.FuturesOrder");
+                let event = update.parse_event().expect("parse_event failed");
+                match event {
+                    OrderEvent::FuturesOrder(data) => {
+                        assert_eq!(data.operation.op_type, "New");
+                        assert_eq!(data.operation.op_code, "00");
+                        assert_eq!(data.order.id, "fut001");
+                        assert_eq!(data.order.action, "Buy");
+                        assert_eq!(data.order.price, 18000.0);
+                        assert_eq!(data.order.quantity, 2);
+                        assert_eq!(data.order.market_type.as_deref(), Some("Day"));
+                        assert_eq!(data.order.oc_type.as_deref(), Some("New"));
+                        assert_eq!(data.contract.code, "TXFC6");
+                        assert_eq!(data.contract.security_type, "FUT");
+                    }
+                    _ => panic!("Expected FuturesOrder event"),
+                }
+            }
+            _ => panic!("Expected OrderUpdate message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_order_event_futures_deal() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_deal_futures.json");
+        match msg {
+            WsIncomingMsg::OrderUpdate(update) => {
+                assert_eq!(update.event, "OrderState.FuturesDeal");
+                let event = update.parse_event().expect("parse_event failed");
+                match event {
+                    OrderEvent::FuturesDeal(data) => {
+                        assert_eq!(data.trade_id, "fut001");
+                        assert_eq!(data.ordno, "F5678");
+                        assert_eq!(data.action, "Buy");
+                        assert_eq!(data.code, "TXFC6");
+                        assert_eq!(data.price, 18000.0);
+                        assert_eq!(data.quantity, 2);
+                        assert_eq!(data.ts, 1709352701.0);
+                        assert_eq!(data.security_type.as_deref(), Some("FUT"));
+                    }
+                    _ => panic!("Expected FuturesDeal event"),
+                }
+            }
+            _ => panic!("Expected OrderUpdate message"),
+        }
+    }
+
+    #[test]
+    fn test_parse_order_event_unknown_type() {
+        let msg = WsOrderUpdateMsg {
+            event: "OrderState.Unknown".to_string(),
+            data: serde_json::json!({}),
+        };
+        assert!(msg.parse_event().is_err());
     }
 }
