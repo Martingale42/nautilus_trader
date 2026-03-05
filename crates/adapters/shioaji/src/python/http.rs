@@ -6,16 +6,18 @@ use nautilus_model::{
     data::BarType,
     python::instruments::instrument_any_to_pyobject,
 };
-use pyo3::{conversion::IntoPyObjectExt, prelude::*, types::PyList};
+use pyo3::{conversion::IntoPyObjectExt, prelude::*, types::{PyDict, PyList}};
 
 use crate::http::{
     client::ShioajiHttpClient,
-    models::LoginRequest,
+    models::{
+        CancelOrderRequest, LoginRequest, PlaceOrderRequest, UpdateOrderRequest,
+    },
     parse::{
         parse_futures_to_contract, parse_kbars_response, parse_options_to_contract,
         parse_stock_to_equity, parse_ticks_response,
     },
-    query::{KBarsQuery, TicksQuery},
+    query::{KBarsQuery, PositionsQuery, TicksQuery},
 };
 use crate::common::parse::parse_instrument_id;
 
@@ -259,6 +261,187 @@ impl ShioajiHttpClient {
                     .into_any()
                     .unbind();
                 Ok(pylist)
+            })
+        })
+    }
+
+    // ─── Order Operations ───────────────────────
+
+    /// Place an order via the gateway.
+    #[pyo3(name = "place_order")]
+    #[pyo3(signature = (code, action, price, quantity, price_type="LMT", order_type="ROD", order_cond="Cash", order_lot="Common", market="stock"))]
+    fn py_place_order<'py>(
+        &self,
+        py: Python<'py>,
+        code: String,
+        action: String,
+        price: f64,
+        quantity: i64,
+        price_type: &str,
+        order_type: &str,
+        order_cond: &str,
+        order_lot: &str,
+        market: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        let request = PlaceOrderRequest {
+            code,
+            action,
+            price,
+            quantity,
+            price_type: price_type.to_string(),
+            order_type: order_type.to_string(),
+            order_cond: order_cond.to_string(),
+            order_lot: order_lot.to_string(),
+            market: market.to_string(),
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let resp = client.place_order(&request).await.map_err(to_pyruntime_err)?;
+            Python::attach(|py| {
+                let dict = PyDict::new(py);
+                dict.set_item("trade_id", resp.trade_id)?;
+                dict.set_item("code", resp.code)?;
+                dict.set_item("action", resp.action)?;
+                dict.set_item("status", resp.status)?;
+                Ok(dict.unbind())
+            })
+        })
+    }
+
+    /// Update (modify) an existing order.
+    #[pyo3(name = "update_order")]
+    #[pyo3(signature = (trade_id, price=None, quantity=None))]
+    fn py_update_order<'py>(
+        &self,
+        py: Python<'py>,
+        trade_id: String,
+        price: Option<f64>,
+        quantity: Option<i64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        let request = UpdateOrderRequest {
+            trade_id,
+            price,
+            quantity,
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let resp = client.update_order(&request).await.map_err(to_pyruntime_err)?;
+            Python::attach(|py| {
+                let dict = PyDict::new(py);
+                dict.set_item("status", resp.status)?;
+                dict.set_item("trade_id", resp.trade_id)?;
+                Ok(dict.unbind())
+            })
+        })
+    }
+
+    /// Cancel an existing order.
+    #[pyo3(name = "cancel_order")]
+    fn py_cancel_order<'py>(
+        &self,
+        py: Python<'py>,
+        trade_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        let request = CancelOrderRequest { trade_id };
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let resp = client.cancel_order(&request).await.map_err(to_pyruntime_err)?;
+            Python::attach(|py| {
+                let dict = PyDict::new(py);
+                dict.set_item("status", resp.status)?;
+                dict.set_item("trade_id", resp.trade_id)?;
+                Ok(dict.unbind())
+            })
+        })
+    }
+
+    /// List all trades (orders) from the gateway.
+    #[pyo3(name = "list_trades")]
+    fn py_list_trades<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let trades = client.list_trades().await.map_err(to_pyruntime_err)?;
+            Python::attach(|py| {
+                let list = PyList::empty(py);
+                for t in &trades {
+                    let dict = PyDict::new(py);
+                    dict.set_item("trade_id", &t.trade_id)?;
+                    dict.set_item("code", &t.code)?;
+                    dict.set_item("action", &t.action)?;
+                    dict.set_item("price", t.price)?;
+                    dict.set_item("quantity", t.quantity)?;
+                    dict.set_item("status", &t.status)?;
+                    dict.set_item("order_type", &t.order_type)?;
+                    dict.set_item("price_type", &t.price_type)?;
+                    list.append(dict)?;
+                }
+                Ok(list.unbind())
+            })
+        })
+    }
+
+    // ─── Account Operations ─────────────────────
+
+    /// Get account positions.
+    #[pyo3(name = "list_positions")]
+    #[pyo3(signature = (market="stock"))]
+    fn py_list_positions<'py>(
+        &self,
+        py: Python<'py>,
+        market: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        let query = PositionsQuery {
+            market: Some(market.to_string()),
+        };
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let positions = client.list_positions(&query).await.map_err(to_pyruntime_err)?;
+            Python::attach(|py| {
+                let list = PyList::empty(py);
+                for p in &positions {
+                    let dict = PyDict::new(py);
+                    dict.set_item("code", &p.code)?;
+                    dict.set_item("direction", &p.direction)?;
+                    dict.set_item("quantity", p.quantity)?;
+                    dict.set_item("price", p.price)?;
+                    dict.set_item("last_price", p.last_price)?;
+                    dict.set_item("pnl", p.pnl)?;
+                    dict.set_item("yd_quantity", p.yd_quantity)?;
+                    list.append(dict)?;
+                }
+                Ok(list.unbind())
+            })
+        })
+    }
+
+    /// Get account balance.
+    #[pyo3(name = "account_balance")]
+    fn py_account_balance<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let balance = client.account_balance().await.map_err(to_pyruntime_err)?;
+            Python::attach(|py| {
+                let dict = PyDict::new(py);
+                dict.set_item("date", balance.date)?;
+                dict.set_item("balance", balance.balance)?;
+                Ok(dict.unbind())
+            })
+        })
+    }
+
+    /// Get margin info.
+    #[pyo3(name = "margin")]
+    fn py_margin<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let margin = client.margin().await.map_err(to_pyruntime_err)?;
+            Python::attach(|py| {
+                let dict = PyDict::new(py);
+                dict.set_item("yesterday_balance", margin.yesterday_balance)?;
+                dict.set_item("today_balance", margin.today_balance)?;
+                dict.set_item("available_margin", margin.available_margin)?;
+                dict.set_item("risk_indicator", margin.risk_indicator)?;
+                Ok(dict.unbind())
             })
         })
     }
