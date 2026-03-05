@@ -23,12 +23,16 @@ from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
 from nautilus_trader.live.execution_client import LiveExecutionClient
 from nautilus_trader.model.currencies import Currency
 from nautilus_trader.model.enums import AccountType
+from nautilus_trader.model.enums import LiquiditySide
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
+from nautilus_trader.model.identifiers import ClientOrderId
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import VenueOrderId
 from nautilus_trader.model.instruments import Equity
 from nautilus_trader.model.instruments import FuturesContract
@@ -190,9 +194,138 @@ class ShioajiExecutionClient(LiveExecutionClient):
 
     def _handle_order_status_event(self, event: dict) -> None:
         """Handle a stock/futures order status event from WS."""
+        op_code = event.get("op_code", "")
+        op_type = event.get("op_type", "")
+        order_id = event.get("order_id", "")
+        code = event.get("code", "")
+
+        instrument_id = InstrumentId.from_str(f"{code}.{SINOPAC}")
+
+        # Look up the NT order via trade_id → client_order_id mapping
+        client_order_id_str = self._trade_id_to_client_order_id.get(order_id)
+        if client_order_id_str is None:
+            self._log.info(f"External order event: {op_type} {order_id} {code}")
+            return
+
+        client_order_id = ClientOrderId(client_order_id_str)
+        order = self._cache.order(client_order_id)
+        if order is None:
+            self._log.warning(f"Order {client_order_id} not found in cache for event")
+            return
+
+        venue_order_id = VenueOrderId(order_id)
+        ts_event = self._clock.timestamp_ns()
+
+        if op_code != "00":
+            # Operation failed
+            reason = event.get("op_msg", f"Operation failed: {op_type} code={op_code}")
+            if op_type == "New":
+                self.generate_order_rejected(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    reason=reason,
+                    ts_event=ts_event,
+                )
+            elif op_type == "Cancel":
+                self.generate_order_cancel_rejected(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=venue_order_id,
+                    reason=reason,
+                    ts_event=ts_event,
+                )
+            elif op_type in ("UpdatePrice", "UpdateQty"):
+                self.generate_order_modify_rejected(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=venue_order_id,
+                    reason=reason,
+                    ts_event=ts_event,
+                )
+            return
+
+        # Operation succeeded (op_code == "00")
+        if op_type == "Cancel":
+            self.generate_order_canceled(
+                strategy_id=order.strategy_id,
+                instrument_id=instrument_id,
+                client_order_id=client_order_id,
+                venue_order_id=venue_order_id,
+                ts_event=ts_event,
+            )
+        elif op_type in ("UpdatePrice", "UpdateQty"):
+            modified_price = event.get("modified_price", 0.0)
+            order_quantity = event.get("order_quantity", 0)
+            instrument = self._cache.instrument(instrument_id)
+            if instrument is not None:
+                self.generate_order_updated(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=venue_order_id,
+                    quantity=instrument.make_qty(order_quantity),
+                    price=instrument.make_price(modified_price)
+                    if modified_price > 0
+                    else order.price,
+                    trigger_price=None,
+                    ts_event=ts_event,
+                )
+        # "New" with op_code "00" = order accepted (already handled in _submit_order)
 
     def _handle_deal_event(self, event: dict) -> None:
         """Handle a stock/futures deal (fill) event from WS."""
+        trade_id_str = event.get("trade_id", "")
+        ordno = event.get("ordno", "")
+        code = event.get("code", "")
+        price = event.get("price", 0.0)
+        quantity = event.get("quantity", 0)
+        ts = event.get("ts", 0.0)
+
+        instrument_id = InstrumentId.from_str(f"{code}.{SINOPAC}")
+        instrument = self._cache.instrument(instrument_id)
+        if instrument is None:
+            self._log.error(f"Cannot process deal: instrument {instrument_id} not in cache")
+            return
+
+        # Look up the NT order
+        client_order_id_str = self._trade_id_to_client_order_id.get(trade_id_str)
+        if client_order_id_str is None:
+            self._log.info(
+                f"External deal: {code} {event.get('action', '')} {price}x{quantity}",
+            )
+            return
+
+        client_order_id = ClientOrderId(client_order_id_str)
+        order = self._cache.order(client_order_id)
+        if order is None:
+            self._log.warning(f"Order {client_order_id} not found for deal event")
+            return
+
+        from nautilus_trader.model.objects import Money
+
+        venue_order_id = order.venue_order_id or VenueOrderId(trade_id_str)
+        ts_event_ns = int(ts * 1_000_000_000) if ts > 0 else self._clock.timestamp_ns()
+
+        twd = Currency.from_str("TWD")
+        self.generate_order_filled(
+            strategy_id=order.strategy_id,
+            instrument_id=instrument_id,
+            client_order_id=client_order_id,
+            venue_order_id=venue_order_id,
+            venue_position_id=None,
+            trade_id=TradeId(f"{trade_id_str}-{ordno}"),
+            order_side=order.side,
+            order_type=order.order_type,
+            last_qty=instrument.make_qty(quantity),
+            last_px=instrument.make_price(price),
+            quote_currency=twd,
+            commission=Money(0, twd),
+            liquidity_side=LiquiditySide.NO_LIQUIDITY_SIDE,
+            ts_event=ts_event_ns,
+        )
 
     # -- Order operations -----------------------------------------------------
 
