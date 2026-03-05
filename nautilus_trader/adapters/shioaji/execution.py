@@ -15,9 +15,16 @@ from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.nautilus_pyo3 import shioaji as pyo3_shioaji
 from nautilus_trader.execution.messages import CancelAllOrders
 from nautilus_trader.execution.messages import CancelOrder
+from nautilus_trader.execution.messages import GenerateFillReports
+from nautilus_trader.execution.messages import GenerateOrderStatusReport
+from nautilus_trader.execution.messages import GenerateOrderStatusReports
+from nautilus_trader.execution.messages import GeneratePositionStatusReports
 from nautilus_trader.execution.messages import ModifyOrder
 from nautilus_trader.execution.messages import SubmitOrder
 from nautilus_trader.execution.messages import SubmitOrderList
+from nautilus_trader.execution.reports import FillReport
+from nautilus_trader.execution.reports import OrderStatusReport
+from nautilus_trader.execution.reports import PositionStatusReport
 from nautilus_trader.live.cancellation import DEFAULT_FUTURE_CANCELLATION_TIMEOUT
 from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
 from nautilus_trader.live.execution_client import LiveExecutionClient
@@ -26,7 +33,9 @@ from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import LiquiditySide
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.enums import OrderType
+from nautilus_trader.model.enums import PositionSide
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
@@ -38,6 +47,16 @@ from nautilus_trader.model.instruments import Equity
 from nautilus_trader.model.instruments import FuturesContract
 from nautilus_trader.model.instruments import OptionsContract
 
+
+_SHIOAJI_STATUS_MAP = {
+    "PendingSubmit": OrderStatus.SUBMITTED,
+    "PreSubmitted": OrderStatus.SUBMITTED,
+    "Submitted": OrderStatus.ACCEPTED,
+    "Failed": OrderStatus.REJECTED,
+    "Cancelled": OrderStatus.CANCELED,
+    "Filled": OrderStatus.FILLED,
+    "PartFilled": OrderStatus.PARTIALLY_FILLED,
+}
 
 _NT_TO_SHIOAJI_ACTION = {
     OrderSide.BUY: "Buy",
@@ -498,3 +517,155 @@ class ShioajiExecutionClient(LiveExecutionClient):
         elif isinstance(instrument, OptionsContract):
             return "options"
         return "stock"
+
+    # -- Reconciliation reports -----------------------------------------------
+
+    async def generate_order_status_reports(
+        self,
+        command: GenerateOrderStatusReports,
+    ) -> list[OrderStatusReport]:
+        reports: list[OrderStatusReport] = []
+        try:
+            trades = await self._http_client.list_trades()
+            for trade_dict in trades:
+                instrument_id = InstrumentId.from_str(
+                    f"{trade_dict['code']}.{SINOPAC}",
+                )
+
+                if command.instrument_id and command.instrument_id != instrument_id:
+                    continue
+
+                instrument = self._cache.instrument(instrument_id)
+                if instrument is None:
+                    continue
+
+                order_status = _SHIOAJI_STATUS_MAP.get(
+                    trade_dict["status"],
+                    OrderStatus.DENIED,
+                )
+                order_side = (
+                    OrderSide.BUY
+                    if trade_dict["action"] == "Buy"
+                    else OrderSide.SELL
+                )
+                order_type = (
+                    OrderType.LIMIT
+                    if trade_dict["price_type"] == "LMT"
+                    else OrderType.MARKET
+                )
+
+                trade_id = trade_dict["trade_id"]
+                client_order_id_str = self._trade_id_to_client_order_id.get(trade_id)
+                client_order_id = (
+                    ClientOrderId(client_order_id_str)
+                    if client_order_id_str
+                    else ClientOrderId(f"SHIOAJI-{trade_id}")
+                )
+
+                report = OrderStatusReport(
+                    account_id=self._account_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=VenueOrderId(trade_id),
+                    order_side=order_side,
+                    order_type=order_type,
+                    quantity=instrument.make_qty(trade_dict["quantity"]),
+                    price=instrument.make_price(trade_dict["price"]),
+                    order_status=order_status,
+                    ts_accepted=self._clock.timestamp_ns(),
+                    ts_last=self._clock.timestamp_ns(),
+                    ts_init=self._clock.timestamp_ns(),
+                )
+                reports.append(report)
+        except Exception as e:
+            self._log.error(f"Failed to generate order status reports: {e}")
+
+        return reports
+
+    async def generate_order_status_report(
+        self,
+        command: GenerateOrderStatusReport,
+    ) -> OrderStatusReport | None:
+        reports = await self.generate_order_status_reports(
+            GenerateOrderStatusReports(
+                trader_id=command.trader_id,
+                instrument_id=command.instrument_id,
+                command_id=command.id,
+                ts_init=command.ts_init,
+            ),
+        )
+        for report in reports:
+            if (
+                command.client_order_id
+                and report.client_order_id == command.client_order_id
+            ):
+                return report
+            if (
+                command.venue_order_id
+                and report.venue_order_id == command.venue_order_id
+            ):
+                return report
+        return None
+
+    async def generate_fill_reports(
+        self,
+        command: GenerateFillReports,
+    ) -> list[FillReport]:
+        self._log.info(
+            "Fill reports generated from WS events only (no historical fill endpoint)",
+        )
+        return []
+
+    async def generate_position_status_reports(
+        self,
+        command: GeneratePositionStatusReports,
+    ) -> list[PositionStatusReport]:
+        reports: list[PositionStatusReport] = []
+        try:
+            for market in ("stock", "futures"):
+                try:
+                    positions = await self._http_client.list_positions(market=market)
+                except Exception as e:
+                    self._log.debug(f"No {market} positions available: {e}")
+                    continue
+
+                for pos_dict in positions:
+                    instrument_id = InstrumentId.from_str(
+                        f"{pos_dict['code']}.{SINOPAC}",
+                    )
+
+                    if (
+                        command.instrument_id
+                        and command.instrument_id != instrument_id
+                    ):
+                        continue
+
+                    instrument = self._cache.instrument(instrument_id)
+                    if instrument is None:
+                        continue
+
+                    direction = pos_dict.get("direction", "")
+                    if direction == "Buy":
+                        position_side = PositionSide.LONG
+                    elif direction == "Sell":
+                        position_side = PositionSide.SHORT
+                    else:
+                        position_side = PositionSide.FLAT
+
+                    quantity = pos_dict.get("quantity", 0)
+                    if quantity == 0:
+                        continue
+
+                    report = PositionStatusReport(
+                        account_id=self._account_id,
+                        instrument_id=instrument_id,
+                        position_side=position_side,
+                        quantity=instrument.make_qty(quantity),
+                        ts_last=self._clock.timestamp_ns(),
+                        ts_init=self._clock.timestamp_ns(),
+                    )
+                    reports.append(report)
+        except Exception as e:
+            self._log.error(f"Failed to generate position status reports: {e}")
+
+        return reports
