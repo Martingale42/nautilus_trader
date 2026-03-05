@@ -13,6 +13,7 @@ from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.nautilus_pyo3 import shioaji as pyo3_shioaji
+from nautilus_trader.execution.messages import BatchCancelOrders
 from nautilus_trader.execution.messages import CancelAllOrders
 from nautilus_trader.execution.messages import CancelOrder
 from nautilus_trader.execution.messages import GenerateFillReports
@@ -504,7 +505,7 @@ class ShioajiExecutionClient(LiveExecutionClient):
             )
             await self._submit_order(submit)
 
-    async def _batch_cancel_orders(self, command) -> None:
+    async def _batch_cancel_orders(self, command: BatchCancelOrders) -> None:
         for cancel in command.cancels:
             await self._cancel_order(cancel)
 
@@ -539,10 +540,13 @@ class ShioajiExecutionClient(LiveExecutionClient):
                 if instrument is None:
                     continue
 
-                order_status = _SHIOAJI_STATUS_MAP.get(
-                    trade_dict["status"],
-                    OrderStatus.DENIED,
-                )
+                raw_status = trade_dict["status"]
+                order_status = _SHIOAJI_STATUS_MAP.get(raw_status)
+                if order_status is None:
+                    self._log.warning(
+                        f"Unknown Shioaji order status '{raw_status}', defaulting to DENIED",
+                    )
+                    order_status = OrderStatus.DENIED
                 order_side = (
                     OrderSide.BUY
                     if trade_dict["action"] == "Buy"
