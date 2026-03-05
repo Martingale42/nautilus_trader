@@ -1,3 +1,4 @@
+use chrono::NaiveDateTime;
 use nautilus_core::UnixNanos;
 use nautilus_model::{
     data::{QuoteTick, TradeTick},
@@ -7,6 +8,22 @@ use nautilus_model::{
 };
 
 use super::messages::{WsBidAskMsg, WsTickMsg};
+
+/// Parse a Taiwan local-time timestamp string to `UnixNanos`.
+///
+/// Format: "YYYY-MM-DD HH:MM:SS.ffffff" (UTC+8)
+/// The fractional seconds part is optional.
+pub fn parse_taiwan_timestamp(ts: &str) -> anyhow::Result<UnixNanos> {
+    let dt = NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S%.f")
+        .or_else(|_| NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S"))?;
+    // Taiwan is UTC+8
+    let utc = dt - chrono::TimeDelta::hours(8);
+    let nanos = utc
+        .and_utc()
+        .timestamp_nanos_opt()
+        .ok_or_else(|| anyhow::anyhow!("Timestamp overflow: {ts}"))?;
+    Ok(UnixNanos::from(nanos as u64))
+}
 
 /// Parse a WS tick message into a `TradeTick`.
 ///
@@ -70,6 +87,32 @@ mod tests {
     use super::*;
     use crate::common::testing::load_test_json_as;
     use crate::websocket::messages::WsIncomingMsg;
+
+    #[test]
+    fn test_parse_taiwan_timestamp_with_microseconds() {
+        let ts = parse_taiwan_timestamp("2026-03-02 09:30:00.123456").unwrap();
+        assert!(ts.as_u64() > 0);
+    }
+
+    #[test]
+    fn test_parse_taiwan_timestamp_without_fractional() {
+        let ts = parse_taiwan_timestamp("2026-03-02 09:30:00").unwrap();
+        assert!(ts.as_u64() > 0);
+    }
+
+    #[test]
+    fn test_parse_taiwan_timestamp_utc_offset() {
+        // 2026-03-02 00:00:00 Taiwan = 2026-03-01 16:00:00 UTC
+        let ts = parse_taiwan_timestamp("2026-03-02 00:00:00").unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2026, 3, 1)
+            .unwrap()
+            .and_hms_opt(16, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_nanos_opt()
+            .unwrap() as u64;
+        assert_eq!(ts.as_u64(), expected);
+    }
 
     fn test_instrument_id() -> InstrumentId {
         InstrumentId::new(Symbol::new("2330"), Venue::new("SINOPAC"))
