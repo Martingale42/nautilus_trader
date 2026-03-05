@@ -4,6 +4,9 @@ pub mod handler;
 pub mod messages;
 pub mod parse;
 
+#[cfg(feature = "python")]
+pub mod order_parse;
+
 /// Internal command sent from client API to the background handler task.
 pub(crate) enum WsCommand {
     Subscribe { code: String, quote_type: String },
