@@ -4,6 +4,7 @@ from nautilus_trader.adapters.shioaji.constants import SINOPAC
 from nautilus_trader.adapters.shioaji.constants import SINOPAC_CLIENT_ID
 from nautilus_trader.adapters.shioaji.constants import SINOPAC_VENUE
 from nautilus_trader.adapters.shioaji.data import ShioajiDataClient
+from nautilus_trader.adapters.shioaji.execution import ShioajiExecutionClient
 from nautilus_trader.adapters.shioaji.providers import ShioajiInstrumentProvider
 
 
@@ -14,5 +15,6 @@ __all__ = [
     "ShioajiDataClient",
     "ShioajiDataClientConfig",
     "ShioajiExecClientConfig",
+    "ShioajiExecutionClient",
     "ShioajiInstrumentProvider",
 ]
