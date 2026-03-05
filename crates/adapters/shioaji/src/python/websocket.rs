@@ -16,6 +16,7 @@ use pyo3::prelude::*;
 use crate::websocket::{
     client::ShioajiWebSocketClient,
     messages::WsIncomingMsg,
+    order_parse::order_event_to_pydict,
     parse::{
         parse_taiwan_timestamp,
         parse_ws_bidask_to_quote_tick,
@@ -173,9 +174,33 @@ impl ShioajiWebSocketClient {
                                     }
                                 }
                             }
-                            WsIncomingMsg::OrderUpdate(_) => {
-                                // Phase 4 will handle order updates
-                                tracing::debug!("Received order update (not handled in Phase 3)");
+                            WsIncomingMsg::OrderUpdate(ref order_msg) => {
+                                match order_msg.parse_event() {
+                                    Ok(event) => {
+                                        Python::attach(|py| {
+                                            match order_event_to_pydict(py, &event) {
+                                                Ok(dict) => {
+                                                    call_python(
+                                                        py,
+                                                        &callback,
+                                                        dict.into_any(),
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    tracing::error!(
+                                                        "Failed to convert order event to dict: {e}"
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to parse order event '{}': {e}",
+                                            order_msg.event
+                                        );
+                                    }
+                                }
                             }
                             WsIncomingMsg::Subscribed(ref confirm) => {
                                 tracing::info!(
