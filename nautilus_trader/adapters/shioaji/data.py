@@ -75,6 +75,7 @@ class ShioajiDataClient(LiveMarketDataClient):
             cache=cache,
             clock=clock,
             instrument_provider=instrument_provider,
+            config=config,
         )
         self._http_client = client
         self._ws_client = ws_client
@@ -188,6 +189,27 @@ class ShioajiDataClient(LiveMarketDataClient):
         code = instrument_id.symbol.value
         self._ws_client.unsubscribe(code, "bidask")
         self._log.info(f"Unsubscribed from quote ticks: {instrument_id}", LogColor.BLUE)
+
+    async def _subscribe_bars(self, command) -> None:
+        self._log.error(
+            f"Cannot subscribe to {command.bar_type} bars: "
+            "Shioaji does not support streaming bars (use request_bars for historical)",
+        )
+
+    async def _unsubscribe_bars(self, command) -> None:
+        pass  # No-op
+
+    async def _subscribe_instrument_status(self, command) -> None:
+        pass  # Not supported by Shioaji
+
+    async def _subscribe_instrument_close(self, command) -> None:
+        pass  # Not supported by Shioaji
+
+    async def _unsubscribe_instrument_status(self, command) -> None:
+        pass  # No-op
+
+    async def _unsubscribe_instrument_close(self, command) -> None:
+        pass  # No-op
 
     # -- Historical data requests ---------------------------------------------
 
