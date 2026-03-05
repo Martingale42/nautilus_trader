@@ -13,14 +13,43 @@ from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.nautilus_pyo3 import shioaji as pyo3_shioaji
+from nautilus_trader.execution.messages import CancelAllOrders
+from nautilus_trader.execution.messages import CancelOrder
+from nautilus_trader.execution.messages import ModifyOrder
+from nautilus_trader.execution.messages import SubmitOrder
+from nautilus_trader.execution.messages import SubmitOrderList
 from nautilus_trader.live.cancellation import DEFAULT_FUTURE_CANCELLATION_TIMEOUT
 from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
 from nautilus_trader.live.execution_client import LiveExecutionClient
 from nautilus_trader.model.currencies import Currency
 from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import OmsType
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.enums import OrderType
+from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
+from nautilus_trader.model.identifiers import VenueOrderId
+from nautilus_trader.model.instruments import Equity
+from nautilus_trader.model.instruments import FuturesContract
+from nautilus_trader.model.instruments import OptionsContract
+
+
+_NT_TO_SHIOAJI_ACTION = {
+    OrderSide.BUY: "Buy",
+    OrderSide.SELL: "Sell",
+}
+
+_NT_TO_SHIOAJI_PRICE_TYPE = {
+    OrderType.LIMIT: "LMT",
+    OrderType.MARKET: "MKT",
+}
+
+_NT_TO_SHIOAJI_ORDER_TYPE = {
+    TimeInForce.DAY: "ROD",
+    TimeInForce.IOC: "IOC",
+    TimeInForce.FOK: "FOK",
+}
 
 
 class ShioajiExecutionClient(LiveExecutionClient):
@@ -164,3 +193,175 @@ class ShioajiExecutionClient(LiveExecutionClient):
 
     def _handle_deal_event(self, event: dict) -> None:
         """Handle a stock/futures deal (fill) event from WS."""
+
+    # -- Order operations -----------------------------------------------------
+
+    async def _submit_order(self, command: SubmitOrder) -> None:
+        order = command.order
+        instrument_id = order.instrument_id
+
+        if order.order_type not in _NT_TO_SHIOAJI_PRICE_TYPE:
+            self._log.error(f"Unsupported order type: {order.order_type}")
+            return
+
+        self.generate_order_submitted(
+            strategy_id=order.strategy_id,
+            instrument_id=instrument_id,
+            client_order_id=order.client_order_id,
+            ts_event=self._clock.timestamp_ns(),
+        )
+
+        try:
+            code = instrument_id.symbol.value
+            action = _NT_TO_SHIOAJI_ACTION[order.side]
+            price_type = _NT_TO_SHIOAJI_PRICE_TYPE[order.order_type]
+            order_type = _NT_TO_SHIOAJI_ORDER_TYPE.get(order.time_in_force, "ROD")
+            price = float(order.price) if order.price is not None else 0.0
+            quantity = int(order.quantity)
+
+            instrument = self._cache.instrument(instrument_id)
+            market = self._determine_market(instrument)
+
+            response = await self._http_client.place_order(
+                code=code,
+                action=action,
+                price=price,
+                quantity=quantity,
+                price_type=price_type,
+                order_type=order_type,
+                market=market,
+            )
+
+            trade_id = response["trade_id"]
+            venue_order_id = VenueOrderId(trade_id)
+
+            self._trade_id_to_client_order_id[trade_id] = order.client_order_id.value
+
+            self.generate_order_accepted(
+                strategy_id=order.strategy_id,
+                instrument_id=instrument_id,
+                client_order_id=order.client_order_id,
+                venue_order_id=venue_order_id,
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+        except Exception as e:
+            self.generate_order_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=instrument_id,
+                client_order_id=order.client_order_id,
+                reason=str(e),
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+    async def _modify_order(self, command: ModifyOrder) -> None:
+        order = self._cache.order(command.client_order_id)
+        if order is None:
+            self._log.error(
+                f"Cannot modify: order {command.client_order_id} not found in cache",
+            )
+            return
+        if order.is_closed:
+            self._log.warning(
+                f"Cannot modify: order {command.client_order_id} already closed",
+            )
+            return
+
+        venue_order_id = order.venue_order_id
+        if venue_order_id is None:
+            self._log.error(
+                f"Cannot modify: no venue_order_id for {command.client_order_id}",
+            )
+            return
+
+        try:
+            trade_id = venue_order_id.value
+            price = float(command.price) if command.price is not None else None
+            quantity = int(command.quantity) if command.quantity is not None else None
+
+            await self._http_client.update_order(
+                trade_id=trade_id,
+                price=price,
+                quantity=quantity,
+            )
+            # Actual update confirmation comes via WS order event callback
+
+        except Exception as e:
+            self.generate_order_modify_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                venue_order_id=venue_order_id,
+                reason=str(e),
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+    async def _cancel_order(self, command: CancelOrder) -> None:
+        order = self._cache.order(command.client_order_id)
+        if order is None:
+            self._log.error(
+                f"Cannot cancel: order {command.client_order_id} not found in cache",
+            )
+            return
+        if order.is_closed:
+            self._log.warning(
+                f"Cannot cancel: order {command.client_order_id} already closed",
+            )
+            return
+
+        venue_order_id = order.venue_order_id
+        if venue_order_id is None:
+            self._log.error(
+                f"Cannot cancel: no venue_order_id for {command.client_order_id}",
+            )
+            return
+
+        try:
+            await self._http_client.cancel_order(trade_id=venue_order_id.value)
+            # Actual cancel confirmation comes via WS order event callback
+
+        except Exception as e:
+            self.generate_order_cancel_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                venue_order_id=venue_order_id,
+                reason=str(e),
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+    async def _cancel_all_orders(self, command: CancelAllOrders) -> None:
+        open_orders = self._cache.orders_open(instrument_id=command.instrument_id)
+        for order in open_orders:
+            if order.venue_order_id is not None:
+                try:
+                    await self._http_client.cancel_order(
+                        trade_id=order.venue_order_id.value,
+                    )
+                except Exception as e:
+                    self._log.error(f"Failed to cancel {order.client_order_id}: {e}")
+
+    async def _submit_order_list(self, command: SubmitOrderList) -> None:
+        for order in command.order_list.orders:
+            submit = SubmitOrder(
+                trader_id=command.trader_id,
+                strategy_id=command.strategy_id,
+                order=order,
+                command_id=command.id,
+                ts_init=command.ts_init,
+            )
+            await self._submit_order(submit)
+
+    async def _batch_cancel_orders(self, command) -> None:
+        for cancel in command.cancels:
+            await self._cancel_order(cancel)
+
+    def _determine_market(self, instrument) -> str:
+        """Determine the market type from the instrument."""
+        if isinstance(instrument, Equity):
+            return "stock"
+        elif isinstance(instrument, FuturesContract):
+            return "futures"
+        elif isinstance(instrument, OptionsContract):
+            return "options"
+        return "stock"
