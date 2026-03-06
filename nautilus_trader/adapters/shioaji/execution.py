@@ -46,7 +46,7 @@ from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import VenueOrderId
 from nautilus_trader.model.instruments import Equity
 from nautilus_trader.model.instruments import FuturesContract
-from nautilus_trader.model.instruments import OptionsContract
+from nautilus_trader.model.instruments import OptionContract
 
 
 _SHIOAJI_STATUS_MAP = {
@@ -515,7 +515,7 @@ class ShioajiExecutionClient(LiveExecutionClient):
             return "stock"
         elif isinstance(instrument, FuturesContract):
             return "futures"
-        elif isinstance(instrument, OptionsContract):
+        elif isinstance(instrument, OptionContract):
             return "options"
         return "stock"
 
