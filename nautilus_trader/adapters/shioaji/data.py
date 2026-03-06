@@ -52,6 +52,9 @@ class ShioajiDataClient(LiveMarketDataClient):
         The configuration for the client.
     name : str, optional
         The custom client ID.
+    ws_callback : object, optional
+        Factory-provided callback dispatcher for shared WS connection.
+        If None, defaults to ``self._handle_msg``.
 
     """
 
@@ -66,6 +69,7 @@ class ShioajiDataClient(LiveMarketDataClient):
         instrument_provider: ShioajiInstrumentProvider,
         config: ShioajiDataClientConfig,
         name: str | None = None,
+        ws_callback: object | None = None,
     ) -> None:
         super().__init__(
             loop=loop,
@@ -80,6 +84,7 @@ class ShioajiDataClient(LiveMarketDataClient):
         self._http_client = client
         self._ws_client = ws_client
         self._config = config
+        self._ws_callback = ws_callback or self._handle_msg
 
         # Subscription tracking
         self._subscribed_trades: set[InstrumentId] = set()
@@ -103,7 +108,7 @@ class ShioajiDataClient(LiveMarketDataClient):
         instruments_pyo3 = self.shioaji_instrument_provider.instruments_pyo3()
         await self._ws_client.connect(
             instruments=instruments_pyo3,
-            callback=self._handle_msg,
+            callback=self._ws_callback,
         )
         await self._ws_client.wait_until_active(timeout_secs=10.0)
 
