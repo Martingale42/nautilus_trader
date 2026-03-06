@@ -13,6 +13,7 @@ from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.nautilus_pyo3 import shioaji as pyo3_shioaji
+from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import BatchCancelOrders
 from nautilus_trader.execution.messages import CancelAllOrders
 from nautilus_trader.execution.messages import CancelOrder
@@ -138,7 +139,7 @@ class ShioajiExecutionClient(LiveExecutionClient):
         self._http_client = client
         self._ws_client = ws_client
         self._config = config
-        self._account_id = account_id
+        self._set_account_id(account_id)
         self._client_futures: set[asyncio.Future] = set()
 
         # Maps trade_id (VenueOrderId) → client_order_id for WS event correlation
@@ -541,7 +542,9 @@ class ShioajiExecutionClient(LiveExecutionClient):
                     continue
 
                 raw_status = trade_dict["status"]
-                order_status = _SHIOAJI_STATUS_MAP.get(raw_status)
+                # Gateway may return "Status.Failed" instead of "Failed"
+                status_key = raw_status.split(".")[-1] if "." in raw_status else raw_status
+                order_status = _SHIOAJI_STATUS_MAP.get(status_key)
                 if order_status is None:
                     self._log.warning(
                         f"Unknown Shioaji order status '{raw_status}', defaulting to DENIED",
@@ -558,6 +561,12 @@ class ShioajiExecutionClient(LiveExecutionClient):
                     else OrderType.MARKET
                 )
 
+                # Map gateway order_type to NT TimeInForce
+                raw_order_type = trade_dict.get("order_type", "ROD")
+                tif_key = raw_order_type.split(".")[-1] if "." in raw_order_type else raw_order_type
+                tif_map = {"ROD": TimeInForce.DAY, "IOC": TimeInForce.IOC, "FOK": TimeInForce.FOK}
+                time_in_force = tif_map.get(tif_key, TimeInForce.DAY)
+
                 trade_id = trade_dict["trade_id"]
                 client_order_id_str = self._trade_id_to_client_order_id.get(trade_id)
                 client_order_id = (
@@ -566,16 +575,21 @@ class ShioajiExecutionClient(LiveExecutionClient):
                     else ClientOrderId(f"SHIOAJI-{trade_id}")
                 )
 
+                filled_qty = trade_dict.get("filled_qty", 0)
+
                 report = OrderStatusReport(
-                    account_id=self._account_id,
+                    account_id=self.account_id,
                     instrument_id=instrument_id,
                     client_order_id=client_order_id,
                     venue_order_id=VenueOrderId(trade_id),
                     order_side=order_side,
                     order_type=order_type,
+                    time_in_force=time_in_force,
                     quantity=instrument.make_qty(trade_dict["quantity"]),
+                    filled_qty=instrument.make_qty(filled_qty),
                     price=instrument.make_price(trade_dict["price"]),
                     order_status=order_status,
+                    report_id=UUID4(),
                     ts_accepted=self._clock.timestamp_ns(),
                     ts_last=self._clock.timestamp_ns(),
                     ts_init=self._clock.timestamp_ns(),
@@ -661,10 +675,11 @@ class ShioajiExecutionClient(LiveExecutionClient):
                         continue
 
                     report = PositionStatusReport(
-                        account_id=self._account_id,
+                        account_id=self.account_id,
                         instrument_id=instrument_id,
                         position_side=position_side,
                         quantity=instrument.make_qty(quantity),
+                        report_id=UUID4(),
                         ts_last=self._clock.timestamp_ns(),
                         ts_init=self._clock.timestamp_ns(),
                     )
