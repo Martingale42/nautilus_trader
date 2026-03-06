@@ -5875,6 +5875,7 @@ dependencies = [
  "nautilus-polymarket",
  "nautilus-sandbox",
  "nautilus-serialization",
+ "nautilus-shioaji",
  "nautilus-tardis",
  "nautilus-testkit",
  "nautilus-trading",
@@ -5948,6 +5949,29 @@ dependencies = [
  "ustr",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "nautilus-shioaji"
+version = "0.54.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures-util",
+ "nautilus-common",
+ "nautilus-core",
+ "nautilus-model",
+ "nautilus-network",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "ustr",
 ]
 
 [[package]]
