@@ -48,6 +48,8 @@ from nautilus_trader.model.identifiers import VenueOrderId
 from nautilus_trader.model.instruments import Equity
 from nautilus_trader.model.instruments import FuturesContract
 from nautilus_trader.model.instruments import OptionContract
+from nautilus_trader.model.objects import AccountBalance
+from nautilus_trader.model.objects import Money
 
 
 _SINOPAC_STATUS_MAP = {
@@ -167,12 +169,9 @@ class SinopacExecutionClient(LiveExecutionClient):
         """Query account balance and generate AccountState event."""
         try:
             balance_data = await self._http_client.account_balance()
-            from nautilus_trader.model.objects import AccountBalance as NTAccountBalance
-            from nautilus_trader.model.objects import Money
-
             twd = Currency.from_str("TWD")
             balances = [
-                NTAccountBalance(
+                AccountBalance(
                     total=Money(balance_data["balance"], twd),
                     locked=Money(0, twd),
                     free=Money(balance_data["balance"], twd),
@@ -324,8 +323,6 @@ class SinopacExecutionClient(LiveExecutionClient):
         if order is None:
             self._log.warning(f"Order {client_order_id} not found for deal event")
             return
-
-        from nautilus_trader.model.objects import Money
 
         venue_order_id = order.venue_order_id or VenueOrderId(trade_id_str)
         ts_event_ns = int(ts * 1_000_000_000) if ts > 0 else self._clock.timestamp_ns()
@@ -511,7 +508,6 @@ class SinopacExecutionClient(LiveExecutionClient):
             await self._cancel_order(cancel)
 
     def _determine_market(self, instrument) -> str:
-        """Determine the market type from the instrument."""
         if isinstance(instrument, Equity):
             return "stock"
         elif isinstance(instrument, FuturesContract):
