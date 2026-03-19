@@ -15,7 +15,6 @@
 
 //! Parsers for Sinopac WebSocket market data messages.
 
-use chrono::NaiveDateTime;
 use nautilus_core::UnixNanos;
 use nautilus_model::{
     data::{QuoteTick, TradeTick},
@@ -25,21 +24,16 @@ use nautilus_model::{
 };
 
 use super::messages::{WsBidAskMsg, WsTickMsg};
+use crate::common::parse::taiwan_naive_to_unix_nanos;
 
 /// Parses a Taiwan local-time timestamp string to `UnixNanos`.
 ///
 /// Format: "YYYY-MM-DD HH:MM:SS.ffffff" (UTC+8)
 /// The fractional seconds part is optional.
 pub fn parse_taiwan_timestamp(ts: &str) -> anyhow::Result<UnixNanos> {
-    let dt = NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S%.f")
-        .or_else(|_| NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S"))?;
-    // Taiwan is UTC+8
-    let utc = dt - chrono::TimeDelta::hours(8);
-    let nanos = utc
-        .and_utc()
-        .timestamp_nanos_opt()
-        .ok_or_else(|| anyhow::anyhow!("Timestamp overflow: {ts}"))?;
-    Ok(UnixNanos::from(nanos as u64))
+    let dt = chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S%.f")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S"))?;
+    taiwan_naive_to_unix_nanos(dt)
 }
 
 /// Parses a WS tick message into a `TradeTick`.

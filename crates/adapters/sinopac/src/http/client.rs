@@ -97,9 +97,10 @@ impl SinopacHttpClient {
         serde_json::from_slice(&response.body).map_err(SinopacHttpError::from)
     }
 
-    /// Sends a POST request with a JSON body and deserializes the JSON response.
-    async fn post<T: DeserializeOwned, B: Serialize>(
+    /// Sends an HTTP request with a JSON body and deserializes the JSON response.
+    async fn send_json<T: DeserializeOwned, B: Serialize>(
         &self,
+        method: Method,
         path: &str,
         body: &B,
     ) -> Result<T, SinopacHttpError> {
@@ -110,75 +111,7 @@ impl SinopacHttpClient {
         let response = self
             .client
             .request(
-                Method::POST,
-                url,
-                None,
-                Some(headers),
-                Some(body_bytes),
-                None,
-                None,
-            )
-            .await?;
-
-        if response.status.as_u16() >= 400 {
-            let body = String::from_utf8_lossy(&response.body).to_string();
-            return Err(SinopacHttpError::GatewayError {
-                status: response.status.as_u16(),
-                body,
-            });
-        }
-
-        serde_json::from_slice(&response.body).map_err(SinopacHttpError::from)
-    }
-
-    /// Sends a PUT request with a JSON body and deserializes the JSON response.
-    async fn put<T: DeserializeOwned, B: Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-    ) -> Result<T, SinopacHttpError> {
-        let url = format!("{}{path}", self.base_url);
-        let body_bytes = serde_json::to_vec(body)?;
-        let mut headers = HashMap::new();
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
-        let response = self
-            .client
-            .request(
-                Method::PUT,
-                url,
-                None,
-                Some(headers),
-                Some(body_bytes),
-                None,
-                None,
-            )
-            .await?;
-
-        if response.status.as_u16() >= 400 {
-            let body = String::from_utf8_lossy(&response.body).to_string();
-            return Err(SinopacHttpError::GatewayError {
-                status: response.status.as_u16(),
-                body,
-            });
-        }
-
-        serde_json::from_slice(&response.body).map_err(SinopacHttpError::from)
-    }
-
-    /// Sends a DELETE request with a JSON body and deserializes the JSON response.
-    async fn delete<T: DeserializeOwned, B: Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-    ) -> Result<T, SinopacHttpError> {
-        let url = format!("{}{path}", self.base_url);
-        let body_bytes = serde_json::to_vec(body)?;
-        let mut headers = HashMap::new();
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
-        let response = self
-            .client
-            .request(
-                Method::DELETE,
+                method,
                 url,
                 None,
                 Some(headers),
@@ -201,12 +134,13 @@ impl SinopacHttpClient {
 
     /// Sends a login request to the gateway.
     pub async fn login(&self, request: &LoginRequest) -> Result<LoginResponse, SinopacHttpError> {
-        self.post("/auth/login", request).await
+        self.send_json(Method::POST, "/auth/login", request).await
     }
 
     /// Sends a logout request to the gateway.
     pub async fn logout(&self) -> Result<MessageResponse, SinopacHttpError> {
-        self.post(
+        self.send_json(
+            Method::POST,
             "/auth/logout",
             &serde_json::Value::Object(Default::default()),
         )
@@ -261,7 +195,7 @@ impl SinopacHttpClient {
         &self,
         request: &PlaceOrderRequest,
     ) -> Result<PlaceOrderResponse, SinopacHttpError> {
-        self.post("/orders/place", request).await
+        self.send_json(Method::POST, "/orders/place", request).await
     }
 
     /// Modifies an existing order on the gateway.
@@ -269,7 +203,7 @@ impl SinopacHttpClient {
         &self,
         request: &UpdateOrderRequest,
     ) -> Result<TradeIdResponse, SinopacHttpError> {
-        self.put("/orders/update", request).await
+        self.send_json(Method::PUT, "/orders/update", request).await
     }
 
     /// Cancels an order on the gateway.
@@ -277,7 +211,8 @@ impl SinopacHttpClient {
         &self,
         request: &CancelOrderRequest,
     ) -> Result<TradeIdResponse, SinopacHttpError> {
-        self.delete("/orders/cancel", request).await
+        self.send_json(Method::DELETE, "/orders/cancel", request)
+            .await
     }
 
     /// Fetches all active trades from the gateway.

@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 from nautilus_trader.common.providers import InstrumentProvider
@@ -10,10 +11,10 @@ from nautilus_trader.model.instruments import instruments_from_pyo3
 
 class SinopacInstrumentProvider(InstrumentProvider):
     """
-    Provides Nautilus instrument definitions from Sinopac (SinoPac) gateway.
+    Provide Nautilus instrument definitions from Sinopac (SinoPac) gateway.
 
-    Loads stocks, futures, and options contracts via the Rust HTTP client
-    and converts them to Nautilus instrument types.
+    Load stocks, futures, and options contracts via the Rust HTTP client
+    and convert them to Nautilus instrument types.
 
     Parameters
     ----------
@@ -45,6 +46,33 @@ class SinopacInstrumentProvider(InstrumentProvider):
         """
         return self._instruments_pyo3
 
+    async def _fetch_all_instruments(self) -> list[Any]:
+        """
+        Fetch stocks, futures, and options concurrently from the gateway.
+
+        Returns
+        -------
+        list[Any]
+
+        """
+        results = await asyncio.gather(
+            self._client.request_stock_instruments(),
+            self._client.request_futures_instruments(),
+            self._client.request_options_instruments(),
+            return_exceptions=True,
+        )
+
+        all_instruments: list[Any] = []
+        labels = ("stocks", "futures", "options")
+        for label, result in zip(labels, results):
+            if isinstance(result, BaseException):
+                self._log.error(f"Failed to load {label}: {result}")
+            else:
+                all_instruments.extend(result)
+                self._log.info(f"Loaded {len(result)} {label} instruments")
+
+        return all_instruments
+
     async def load_all_async(self, filters: dict | None = None) -> None:
         """
         Load all instruments from the Sinopac gateway.
@@ -55,35 +83,9 @@ class SinopacInstrumentProvider(InstrumentProvider):
             Not implemented for Sinopac (all contracts are loaded).
 
         """
-        all_pyo3_instruments: list[Any] = []
-
-        # Load stocks
-        try:
-            stocks = await self._client.request_stock_instruments()
-            all_pyo3_instruments.extend(stocks)
-            self._log.info(f"Loaded {len(stocks)} stock instruments")
-        except Exception as e:
-            self._log.error(f"Failed to load stocks: {e}")
-
-        # Load futures
-        try:
-            futures = await self._client.request_futures_instruments()
-            all_pyo3_instruments.extend(futures)
-            self._log.info(f"Loaded {len(futures)} futures instruments")
-        except Exception as e:
-            self._log.error(f"Failed to load futures: {e}")
-
-        # Load options
-        try:
-            options = await self._client.request_options_instruments()
-            all_pyo3_instruments.extend(options)
-            self._log.info(f"Loaded {len(options)} options instruments")
-        except Exception as e:
-            self._log.error(f"Failed to load options: {e}")
-
+        all_pyo3_instruments = await self._fetch_all_instruments()
         self._instruments_pyo3 = all_pyo3_instruments
 
-        # Convert pyo3 instruments to Python Nautilus instruments
         instruments = instruments_from_pyo3(all_pyo3_instruments)
         for instrument in instruments:
             self.add(instrument=instrument)
@@ -114,26 +116,7 @@ class SinopacInstrumentProvider(InstrumentProvider):
             return
 
         # Sinopac doesn't support per-instrument queries, load all and filter
-        all_pyo3_instruments: list[Any] = []
-
-        try:
-            stocks = await self._client.request_stock_instruments()
-            all_pyo3_instruments.extend(stocks)
-        except Exception as e:
-            self._log.error(f"Failed to load stocks: {e}")
-
-        try:
-            futures = await self._client.request_futures_instruments()
-            all_pyo3_instruments.extend(futures)
-        except Exception as e:
-            self._log.error(f"Failed to load futures: {e}")
-
-        try:
-            options = await self._client.request_options_instruments()
-            all_pyo3_instruments.extend(options)
-        except Exception as e:
-            self._log.error(f"Failed to load options: {e}")
-
+        all_pyo3_instruments = await self._fetch_all_instruments()
         self._instruments_pyo3 = all_pyo3_instruments
 
         instruments = instruments_from_pyo3(all_pyo3_instruments)

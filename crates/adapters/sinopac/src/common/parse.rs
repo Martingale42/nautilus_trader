@@ -15,6 +15,7 @@
 
 //! Shared parsing helpers for Sinopac adapter.
 
+use nautilus_core::UnixNanos;
 use nautilus_model::{enums::OrderSide, identifiers::InstrumentId};
 
 use super::consts::SINOPAC;
@@ -24,6 +25,16 @@ use super::consts::SINOPAC;
 /// Example: `"2330"` → `InstrumentId("2330.SINOPAC")`
 pub fn parse_instrument_id(code: &str) -> anyhow::Result<InstrumentId> {
     InstrumentId::from_as_ref(format!("{code}.{SINOPAC}"))
+}
+
+/// Converts a Taiwan local time (UTC+8) `NaiveDateTime` to `UnixNanos`.
+pub fn taiwan_naive_to_unix_nanos(dt: chrono::NaiveDateTime) -> anyhow::Result<UnixNanos> {
+    let utc = dt - chrono::TimeDelta::hours(8);
+    let nanos = utc
+        .and_utc()
+        .timestamp_nanos_opt()
+        .ok_or_else(|| anyhow::anyhow!("Timestamp overflow for {dt}"))?;
+    Ok(UnixNanos::from(nanos as u64))
 }
 
 /// Maps a Sinopac action string to a Nautilus `OrderSide`.

@@ -35,7 +35,7 @@ use crate::common::{
     instrument::{
         CONTRACT_LOT_SIZE, SIZE_PRECISION, STOCK_LOT_SIZE, futures_multiplier, options_multiplier,
     },
-    parse::parse_instrument_id,
+    parse::{parse_instrument_id, taiwan_naive_to_unix_nanos},
     tick_size::{futures_tick_size, options_tick_size, twse_stock_tick_size},
 };
 
@@ -308,13 +308,7 @@ fn parse_date_to_nanos(date_str: &str) -> anyhow::Result<UnixNanos> {
     let datetime = date
         .and_hms_opt(0, 0, 0)
         .ok_or_else(|| anyhow::anyhow!("Invalid date: {date_str}"))?;
-    // Taiwan is UTC+8, so midnight local = 16:00 previous day UTC
-    let utc = datetime - chrono::TimeDelta::hours(8);
-    let timestamp_ns = utc
-        .and_utc()
-        .timestamp_nanos_opt()
-        .ok_or_else(|| anyhow::anyhow!("Timestamp overflow for {date_str}"))?;
-    Ok(UnixNanos::from(timestamp_ns as u64))
+    taiwan_naive_to_unix_nanos(datetime)
 }
 
 #[cfg(test)]
