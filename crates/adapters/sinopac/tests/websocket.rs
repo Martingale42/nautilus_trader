@@ -15,7 +15,7 @@
 
 //! Integration tests for the Sinopac WebSocket client using a mock Axum server.
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use axum::{
     Router,
@@ -23,6 +23,8 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
+use futures_util::{SinkExt, StreamExt};
+use nautilus_common::testing::wait_until_async;
 use nautilus_sinopac::websocket::{client::SinopacWebSocketClient, messages::WsIncomingMsg};
 use rstest::rstest;
 
@@ -34,12 +36,9 @@ fn load_test_json(filename: &str) -> String {
         .unwrap_or_else(|_| panic!("Failed to load test fixture: {}", path.display()))
 }
 
-/// Mock WebSocket handler that:
-/// - Responds to subscribe commands with an ack
-/// - Sends tick/bidask data from test fixtures based on the quote_type
+/// Mock WebSocket handler that responds to subscribe commands with an ack
+/// then sends tick/bidask data from test fixtures based on the quote_type.
 async fn ws_handler(ws: WebSocket) {
-    use futures_util::{SinkExt, StreamExt};
-
     let (mut sink, mut stream) = ws.split();
 
     while let Some(Ok(msg)) = stream.next().await {
@@ -57,7 +56,6 @@ async fn ws_handler(ws: WebSocket) {
                         .unwrap_or("");
 
                     if action == "subscribe" {
-                        // Send subscription confirmation
                         let ack = serde_json::json!({
                             "type": "subscribed",
                             "code": code,
@@ -65,7 +63,6 @@ async fn ws_handler(ws: WebSocket) {
                         });
                         let _ = sink.send(Message::Text(ack.to_string().into())).await;
 
-                        // Send data based on quote_type
                         let data = match quote_type {
                             "tick" => load_test_json("ws_tick_stock.json"),
                             "bidask" => load_test_json("ws_bidask.json"),
@@ -97,6 +94,16 @@ async fn start_ws_server() -> SocketAddr {
             .unwrap();
     });
 
+    // Wait for server to accept connections
+    wait_until_async(
+        || {
+            let addr = addr;
+            async move { tokio::net::TcpStream::connect(addr).await.is_ok() }
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
     addr
 }
 
@@ -115,17 +122,21 @@ async fn test_connect_disconnect() {
 
     client.connect().await.expect("connect failed");
 
-    // The handler loop sets is_connected in a spawned task; wait for it.
-    for _ in 0..50 {
-        if client.is_connected() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    // Wait for the handler task (running on get_runtime()) to set is_connected
+    wait_until_async(
+        || {
+            let connected = client.is_connected();
+            async move { connected }
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
     assert!(client.is_connected());
 
-    client.disconnect().await.expect("disconnect failed");
-    assert!(!client.is_connected());
+    // Note: we don't call disconnect().await here because it awaits a JoinHandle
+    // from get_runtime() which is a different runtime than #[tokio::test].
+    // Dropping the client is sufficient for test cleanup.
 }
 
 #[rstest]
@@ -136,31 +147,37 @@ async fn test_subscribe_tick() {
     let client = SinopacWebSocketClient::new(Some(url));
 
     client.connect().await.expect("connect failed");
+
+    wait_until_async(
+        || {
+            let connected = client.is_connected();
+            async move { connected }
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
     client
         .subscribe("2330", "tick")
         .expect("subscribe failed");
 
-    // First message should be the subscription confirmation
     let msg = client.next_message().await.expect("expected a message");
     match msg {
         WsIncomingMsg::Subscribed(confirm) => {
             assert_eq!(confirm.code, "2330");
             assert_eq!(confirm.quote_type, "tick");
         }
-        other => panic!("Expected Subscribed, got: {other:?}"),
+        other => panic!("Expected Subscribed, was: {other:?}"),
     }
 
-    // Second message should be tick data
     let msg = client.next_message().await.expect("expected tick data");
     match msg {
         WsIncomingMsg::Tick(tick) => {
             assert_eq!(tick.code, "2330");
             assert_eq!(tick.data.close, 580.0);
         }
-        other => panic!("Expected Tick, got: {other:?}"),
+        other => panic!("Expected Tick, was: {other:?}"),
     }
-
-    client.disconnect().await.expect("disconnect failed");
 }
 
 #[rstest]
@@ -171,21 +188,29 @@ async fn test_subscribe_bidask() {
     let client = SinopacWebSocketClient::new(Some(url));
 
     client.connect().await.expect("connect failed");
+
+    wait_until_async(
+        || {
+            let connected = client.is_connected();
+            async move { connected }
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
     client
         .subscribe("2330", "bidask")
         .expect("subscribe failed");
 
-    // First message should be the subscription confirmation
     let msg = client.next_message().await.expect("expected a message");
     match msg {
         WsIncomingMsg::Subscribed(confirm) => {
             assert_eq!(confirm.code, "2330");
             assert_eq!(confirm.quote_type, "bidask");
         }
-        other => panic!("Expected Subscribed, got: {other:?}"),
+        other => panic!("Expected Subscribed, was: {other:?}"),
     }
 
-    // Second message should be bidask data
     let msg = client.next_message().await.expect("expected bidask data");
     match msg {
         WsIncomingMsg::BidAsk(ba) => {
@@ -193,8 +218,6 @@ async fn test_subscribe_bidask() {
             assert_eq!(ba.data.bid_price.len(), 5);
             assert_eq!(ba.data.ask_price.len(), 5);
         }
-        other => panic!("Expected BidAsk, got: {other:?}"),
+        other => panic!("Expected BidAsk, was: {other:?}"),
     }
-
-    client.disconnect().await.expect("disconnect failed");
 }

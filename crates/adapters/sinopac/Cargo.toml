@@ -64,6 +64,8 @@ pyo3-async-runtimes = { workspace = true, optional = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+futures-util = { workspace = true }
+nautilus-common = { workspace = true, features = ["live"] }
 rstest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

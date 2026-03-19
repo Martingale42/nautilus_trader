@@ -17,8 +17,11 @@ import pytest
 
 from nautilus_trader.adapters.sinopac.config import SinopacDataClientConfig
 from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
+from nautilus_trader.adapters.sinopac.constants import SINOPAC
 from nautilus_trader.adapters.sinopac.constants import SINOPAC_VENUE
+from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import Venue
+from nautilus_trader.test_kit.stubs.identifiers import TestIdStubs
 
 
 @pytest.fixture
@@ -37,20 +40,20 @@ def venue() -> Venue:
 
 
 @pytest.fixture
+def instrument():
+    return None
+
+
+@pytest.fixture
 def data_client():
-    pass
+    return None
 
 
 @pytest.fixture
 def exec_client():
-    pass
-
-
-@pytest.fixture
-def instrument():
-    pass
+    return None
 
 
 @pytest.fixture
 def account_state():
-    pass
+    return None

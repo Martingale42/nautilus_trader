@@ -15,9 +15,10 @@
 
 //! Integration tests for the Sinopac HTTP client using a mock Axum server.
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use axum::{Router, routing::get};
+use nautilus_common::testing::wait_until_async;
 use nautilus_sinopac::http::{client::SinopacHttpClient, query::SnapshotsQuery};
 use rstest::rstest;
 
@@ -64,6 +65,16 @@ async fn start_test_server() -> SocketAddr {
             .await
             .unwrap();
     });
+
+    // Wait for server to accept connections
+    wait_until_async(
+        || {
+            let addr = addr;
+            async move { tokio::net::TcpStream::connect(addr).await.is_ok() }
+        },
+        Duration::from_secs(5),
+    )
+    .await;
 
     addr
 }
