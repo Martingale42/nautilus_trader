@@ -14,20 +14,14 @@
 // -------------------------------------------------------------------------------------------------
 //! Python bindings for the Sinopac WebSocket client.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use nautilus_common::live::get_runtime;
-
-use nautilus_core::UnixNanos;
-use nautilus_core::python::to_pyruntime_err;
+use nautilus_core::{UnixNanos, python::to_pyruntime_err};
 use nautilus_model::{
     data::Data,
     instruments::Instrument,
-    python::{
-        data::data_to_pycapsule,
-        instruments::pyobject_to_instrument_any,
-    },
+    python::{data::data_to_pycapsule, instruments::pyobject_to_instrument_any},
 };
 use pyo3::prelude::*;
 
@@ -35,11 +29,7 @@ use crate::websocket::{
     client::SinopacWebSocketClient,
     messages::WsIncomingMsg,
     order_parse::order_event_to_pydict,
-    parse::{
-        parse_taiwan_timestamp,
-        parse_ws_bidask_to_quote_tick,
-        parse_ws_tick_to_trade_tick,
-    },
+    parse::{parse_taiwan_timestamp, parse_ws_bidask_to_quote_tick, parse_ws_tick_to_trade_tick},
 };
 
 #[pymethods]
@@ -66,7 +56,8 @@ impl SinopacWebSocketClient {
     /// Unsubscribes from quote data for a contract.
     #[pyo3(name = "unsubscribe")]
     fn py_unsubscribe(&self, code: String, quote_type: String) -> PyResult<()> {
-        self.unsubscribe(&code, &quote_type).map_err(to_pyruntime_err)
+        self.unsubscribe(&code, &quote_type)
+            .map_err(to_pyruntime_err)
     }
 
     /// Connect to the gateway WS and start the message processing loop.
@@ -112,24 +103,20 @@ impl SinopacWebSocketClient {
                         match msg {
                             WsIncomingMsg::Tick(ref tick_msg) => {
                                 let Some(inst) = instruments.get(&tick_msg.code) else {
-                                    log::debug!(
-                                        "Tick for unknown code: {}",
-                                        tick_msg.code
-                                    );
+                                    log::debug!("Tick for unknown code: {}", tick_msg.code);
                                     continue;
                                 };
-                                let ts_event = match parse_taiwan_timestamp(
-                                    &tick_msg.data.timestamp,
-                                ) {
-                                    Ok(ts) => ts,
-                                    Err(e) => {
-                                        log::warn!(
-                                            "Bad timestamp for tick {}: {e}",
-                                            tick_msg.code
-                                        );
-                                        continue;
-                                    }
-                                };
+                                let ts_event =
+                                    match parse_taiwan_timestamp(&tick_msg.data.timestamp) {
+                                        Ok(ts) => ts,
+                                        Err(e) => {
+                                            log::warn!(
+                                                "Bad timestamp for tick {}: {e}",
+                                                tick_msg.code
+                                            );
+                                            continue;
+                                        }
+                                    };
                                 let ts_init = UnixNanos::default();
 
                                 match parse_ws_tick_to_trade_tick(
@@ -141,8 +128,7 @@ impl SinopacWebSocketClient {
                                     ts_init,
                                 ) {
                                     Ok(trade) => Python::attach(|py| {
-                                        let capsule =
-                                            data_to_pycapsule(py, Data::Trade(trade));
+                                        let capsule = data_to_pycapsule(py, Data::Trade(trade));
                                         call_python(py, &callback, capsule);
                                     }),
                                     Err(e) => {
@@ -155,21 +141,14 @@ impl SinopacWebSocketClient {
                             }
                             WsIncomingMsg::BidAsk(ref ba_msg) => {
                                 let Some(inst) = instruments.get(&ba_msg.code) else {
-                                    log::debug!(
-                                        "BidAsk for unknown code: {}",
-                                        ba_msg.code
-                                    );
+                                    log::debug!("BidAsk for unknown code: {}", ba_msg.code);
                                     continue;
                                 };
-                                let ts_event = match parse_taiwan_timestamp(
-                                    &ba_msg.data.timestamp,
-                                ) {
+                                let ts_event = match parse_taiwan_timestamp(&ba_msg.data.timestamp)
+                                {
                                     Ok(ts) => ts,
                                     Err(e) => {
-                                        log::warn!(
-                                            "Bad timestamp for bidask {}: {e}",
-                                            ba_msg.code
-                                        );
+                                        log::warn!("Bad timestamp for bidask {}: {e}", ba_msg.code);
                                         continue;
                                     }
                                 };
@@ -184,8 +163,7 @@ impl SinopacWebSocketClient {
                                     ts_init,
                                 ) {
                                     Ok(quote) => Python::attach(|py| {
-                                        let capsule =
-                                            data_to_pycapsule(py, Data::Quote(quote));
+                                        let capsule = data_to_pycapsule(py, Data::Quote(quote));
                                         call_python(py, &callback, capsule);
                                     }),
                                     Err(e) => {
@@ -202,11 +180,7 @@ impl SinopacWebSocketClient {
                                         Python::attach(|py| {
                                             match order_event_to_pydict(py, &event) {
                                                 Ok(dict) => {
-                                                    call_python(
-                                                        py,
-                                                        &callback,
-                                                        dict.into_any(),
-                                                    );
+                                                    call_python(py, &callback, dict.into_any());
                                                 }
                                                 Err(e) => {
                                                     log::error!(
@@ -225,11 +199,7 @@ impl SinopacWebSocketClient {
                                 }
                             }
                             WsIncomingMsg::Subscribed(ref confirm) => {
-                                log::info!(
-                                    "Subscribed: {} ({})",
-                                    confirm.code,
-                                    confirm.quote_type
-                                );
+                                log::info!("Subscribed: {} ({})", confirm.code, confirm.quote_type);
                             }
                             WsIncomingMsg::Unsubscribed(ref confirm) => {
                                 log::info!(
@@ -244,9 +214,7 @@ impl SinopacWebSocketClient {
                         }
                     }
 
-                    log::warn!(
-                        "Sinopac WS callback loop ended after {msg_count} messages"
-                    );
+                    log::warn!("Sinopac WS callback loop ended after {msg_count} messages");
                 }
             });
 

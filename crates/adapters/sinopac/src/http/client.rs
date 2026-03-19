@@ -105,10 +105,7 @@ impl SinopacHttpClient {
         let url = format!("{}{path}", self.base_url);
         let body_bytes = serde_json::to_vec(body)?;
         let mut headers = HashMap::new();
-        headers.insert(
-            "Content-Type".to_string(),
-            "application/json".to_string(),
-        );
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
         let response = self
             .client
             .request(
@@ -142,10 +139,7 @@ impl SinopacHttpClient {
         let url = format!("{}{path}", self.base_url);
         let body_bytes = serde_json::to_vec(body)?;
         let mut headers = HashMap::new();
-        headers.insert(
-            "Content-Type".to_string(),
-            "application/json".to_string(),
-        );
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
         let response = self
             .client
             .request(
@@ -179,10 +173,7 @@ impl SinopacHttpClient {
         let url = format!("{}{path}", self.base_url);
         let body_bytes = serde_json::to_vec(body)?;
         let mut headers = HashMap::new();
-        headers.insert(
-            "Content-Type".to_string(),
-            "application/json".to_string(),
-        );
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
         let response = self
             .client
             .request(
@@ -207,7 +198,6 @@ impl SinopacHttpClient {
         serde_json::from_slice(&response.body).map_err(SinopacHttpError::from)
     }
 
-
     /// Sends a login request to the gateway.
     pub async fn login(&self, request: &LoginRequest) -> Result<LoginResponse, SinopacHttpError> {
         self.post("/auth/login", request).await
@@ -215,15 +205,17 @@ impl SinopacHttpClient {
 
     /// Sends a logout request to the gateway.
     pub async fn logout(&self) -> Result<MessageResponse, SinopacHttpError> {
-        self.post("/auth/logout", &serde_json::Value::Object(Default::default()))
-            .await
+        self.post(
+            "/auth/logout",
+            &serde_json::Value::Object(Default::default()),
+        )
+        .await
     }
 
     /// Queries the gateway connection status.
     pub async fn status(&self) -> Result<StatusResponse, SinopacHttpError> {
         self.get("/auth/status").await
     }
-
 
     /// Fetches all stock contracts from the gateway.
     pub async fn list_stocks(&self) -> Result<Vec<StockContract>, SinopacHttpError> {
@@ -245,7 +237,6 @@ impl SinopacHttpClient {
         self.get("/contracts/options").await
     }
 
-
     /// Fetches market snapshots for the given codes.
     pub async fn snapshots(
         &self,
@@ -263,7 +254,6 @@ impl SinopacHttpClient {
     pub async fn kbars(&self, query: &KBarsQuery) -> Result<KBarsResponse, SinopacHttpError> {
         self.get_with_params("/market/kbars", query).await
     }
-
 
     /// Submits a new order to the gateway.
     pub async fn place_order(
@@ -293,7 +283,6 @@ impl SinopacHttpClient {
     pub async fn list_trades(&self) -> Result<Vec<TradeInfo>, SinopacHttpError> {
         self.get("/orders/trades").await
     }
-
 
     /// Fetches positions for the given market type.
     pub async fn list_positions(

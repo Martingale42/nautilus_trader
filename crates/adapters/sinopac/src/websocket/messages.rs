@@ -16,7 +16,6 @@
 
 use serde::{Deserialize, Serialize};
 
-
 /// WebSocket subscribe/unsubscribe command message.
 #[derive(Debug, Serialize)]
 pub struct WsSubscribeMsg {
@@ -24,7 +23,6 @@ pub struct WsSubscribeMsg {
     pub contract_code: String,
     pub quote_type: String,
 }
-
 
 /// Raw WS message envelope. The `type` field determines the payload shape.
 #[derive(Debug, Deserialize)]
@@ -43,7 +41,6 @@ pub enum WsIncomingMsg {
     #[serde(rename = "error")]
     Error(WsErrorMsg),
 }
-
 
 /// WebSocket tick message.
 #[derive(Debug, Clone, Deserialize)]
@@ -90,7 +87,6 @@ pub struct WsBidAskData {
     pub timestamp: String,
 }
 
-
 /// Raw order update envelope. The `event` field discriminates the data type.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsOrderUpdateMsg {
@@ -131,7 +127,6 @@ pub enum OrderEvent {
     FuturesOrder(FuturesOrderEventData),
     FuturesDeal(FuturesDealEventData),
 }
-
 
 /// Operation information for order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -175,7 +170,6 @@ pub struct FuturesContractInfo {
     pub option_right: Option<String>,
 }
 
-
 /// Stock order information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockOrderInfo {
@@ -192,7 +186,6 @@ pub struct StockOrderInfo {
     #[serde(default)]
     pub order_lot: Option<String>,
 }
-
 
 /// Futures order information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -212,7 +205,6 @@ pub struct FuturesOrderInfo {
     #[serde(default)]
     pub combo: Option<bool>,
 }
-
 
 /// Stock order event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -275,7 +267,6 @@ pub struct FuturesDealEventData {
     #[serde(default)]
     pub combo: Option<bool>,
 }
-
 
 /// WebSocket subscription confirmation message.
 #[derive(Debug, Clone, Deserialize)]
@@ -373,7 +364,6 @@ mod tests {
             _ => panic!("Expected Error message"),
         }
     }
-
 
     #[rstest]
     fn test_parse_order_event_stock_order() {

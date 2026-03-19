@@ -58,11 +58,7 @@ pub fn futures_tick_size(symbol: &str) -> (f64, u8) {
 /// TXO (台指選擇權): premium < 10 -> tick 0.1, premium >= 10 -> tick 1.0.
 /// Uses reference price as proxy for current premium level.
 pub fn options_tick_size(reference: f64) -> (f64, u8) {
-    if reference < 10.0 {
-        (0.1, 1)
-    } else {
-        (1.0, 0)
-    }
+    if reference < 10.0 { (0.1, 1) } else { (1.0, 0) }
 }
 
 #[cfg(test)]

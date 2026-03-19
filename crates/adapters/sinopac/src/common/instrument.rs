@@ -38,7 +38,7 @@ pub fn futures_multiplier(symbol: &str) -> f64 {
         "XIF" => 200.0,  // 非金電期貨
         "ZEF" => 4000.0, // 電子期: 4000 TWD per point
         "ZFF" => 1000.0, // 金融期: 1000 TWD per point
-        _ => 2000.0,      // Stock/commodity futures default
+        _ => 2000.0,     // Stock/commodity futures default
     }
 }
 
@@ -48,7 +48,7 @@ pub fn futures_multiplier(symbol: &str) -> f64 {
 pub fn options_multiplier(symbol: &str) -> f64 {
     match symbol {
         "TXO" => 50.0, // 台指選: 50 TWD per point
-        _ => 2000.0,    // Stock options default
+        _ => 2000.0,   // Stock options default
     }
 }
 
@@ -66,7 +66,9 @@ pub fn options_multiplier(symbol: &str) -> f64 {
 /// Delivery codes like "TXFC6" have a single-letter month code (A-L) before
 /// the year digit, so we look for the first digit to find the boundary.
 pub fn extract_root_symbol(code: &str) -> &str {
-    let first_digit = code.find(|c: char| c.is_ascii_digit()).unwrap_or(code.len());
+    let first_digit = code
+        .find(|c: char| c.is_ascii_digit())
+        .unwrap_or(code.len());
     // Cap at 3 since TAIFEX roots are at most 3 chars; month code comes after
     let end = first_digit.min(3);
     &code[..end]

@@ -102,8 +102,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::common::testing::load_test_json_as;
-    use crate::websocket::messages::WsIncomingMsg;
+    use crate::{common::testing::load_test_json_as, websocket::messages::WsIncomingMsg};
 
     #[rstest]
     fn test_parse_taiwan_timestamp_with_microseconds() {
@@ -161,8 +160,7 @@ mod tests {
     fn test_parse_ws_tick_futures_no_aggressor() {
         let msg: WsIncomingMsg = load_test_json_as("ws_tick_futures.json");
         if let WsIncomingMsg::Tick(tick) = msg {
-            let instrument_id =
-                InstrumentId::new(Symbol::new("TXFC6"), Venue::new("SINOPAC"));
+            let instrument_id = InstrumentId::new(Symbol::new("TXFC6"), Venue::new("SINOPAC"));
             let trade = parse_ws_tick_to_trade_tick(
                 &tick,
                 instrument_id,

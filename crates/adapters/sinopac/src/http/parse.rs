@@ -30,11 +30,13 @@ use ustr::Ustr;
 use super::models::{
     FuturesContract, KBarsResponse, OptionsContract, SnapshotData, StockContract, TicksResponse,
 };
-use crate::common::instrument::{
-    futures_multiplier, options_multiplier, CONTRACT_LOT_SIZE, SIZE_PRECISION, STOCK_LOT_SIZE,
+use crate::common::{
+    instrument::{
+        CONTRACT_LOT_SIZE, SIZE_PRECISION, STOCK_LOT_SIZE, futures_multiplier, options_multiplier,
+    },
+    parse::parse_instrument_id,
+    tick_size::{futures_tick_size, options_tick_size, twse_stock_tick_size},
 };
-use crate::common::parse::parse_instrument_id;
-use crate::common::tick_size::{futures_tick_size, options_tick_size, twse_stock_tick_size};
 
 /// Parse a `SnapshotData` into a `QuoteTick` (top-of-book bid/ask).
 pub fn parse_snapshot_to_quote_tick(
@@ -316,16 +318,19 @@ fn parse_date_to_nanos(date_str: &str) -> anyhow::Result<UnixNanos> {
 
 #[cfg(test)]
 mod tests {
-    use nautilus_model::data::BarSpecification;
-    use nautilus_model::enums::{AggregationSource, BarAggregation, PriceType};
-    use nautilus_model::identifiers::Symbol;
-    use nautilus_model::identifiers::Venue;
-    use nautilus_model::instruments::Instrument;
+    use nautilus_model::{
+        data::BarSpecification,
+        enums::{AggregationSource, BarAggregation, PriceType},
+        identifiers::{Symbol, Venue},
+        instruments::Instrument,
+    };
     use rstest::rstest;
 
     use super::*;
-    use crate::common::testing::load_test_json_as;
-    use crate::http::models::{FuturesContract, OptionsContract};
+    use crate::{
+        common::testing::load_test_json_as,
+        http::models::{FuturesContract, OptionsContract},
+    };
 
     fn test_instrument_id() -> InstrumentId {
         InstrumentId::new(Symbol::new("2330"), Venue::new("SINOPAC"))
@@ -351,14 +356,8 @@ mod tests {
     #[rstest]
     fn test_parse_ticks_response() {
         let ticks: TicksResponse = load_test_json_as("market_ticks.json");
-        let trades = parse_ticks_response(
-            &ticks,
-            test_instrument_id(),
-            1,
-            0,
-            UnixNanos::default(),
-        )
-        .unwrap();
+        let trades =
+            parse_ticks_response(&ticks, test_instrument_id(), 1, 0, UnixNanos::default()).unwrap();
 
         assert_eq!(trades.len(), 2);
         assert_eq!(trades[0].price, Price::new(580.0, 1));
@@ -375,8 +374,7 @@ mod tests {
             BarSpecification::new(1, BarAggregation::Minute, PriceType::Last),
             AggregationSource::External,
         );
-        let bars =
-            parse_kbars_response(&kbars, bar_type, 1, 0, UnixNanos::default());
+        let bars = parse_kbars_response(&kbars, bar_type, 1, 0, UnixNanos::default());
 
         assert_eq!(bars.len(), 2);
         assert_eq!(bars[0].open, Price::new(578.0, 1));

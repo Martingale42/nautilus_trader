@@ -16,26 +16,26 @@
 
 use std::str::FromStr;
 
-use nautilus_core::UnixNanos;
-use nautilus_core::python::to_pyruntime_err;
-use nautilus_model::{
-    data::BarType,
-    python::instruments::instrument_any_to_pyobject,
+use nautilus_core::{UnixNanos, python::to_pyruntime_err};
+use nautilus_model::{data::BarType, python::instruments::instrument_any_to_pyobject};
+use pyo3::{
+    conversion::IntoPyObjectExt,
+    prelude::*,
+    types::{PyDict, PyList},
 };
-use pyo3::{conversion::IntoPyObjectExt, prelude::*, types::{PyDict, PyList}};
 
-use crate::http::{
-    client::SinopacHttpClient,
-    models::{
-        CancelOrderRequest, LoginRequest, PlaceOrderRequest, UpdateOrderRequest,
+use crate::{
+    common::parse::parse_instrument_id,
+    http::{
+        client::SinopacHttpClient,
+        models::{CancelOrderRequest, LoginRequest, PlaceOrderRequest, UpdateOrderRequest},
+        parse::{
+            parse_futures_to_contract, parse_kbars_response, parse_options_to_contract,
+            parse_stock_to_equity, parse_ticks_response,
+        },
+        query::{KBarsQuery, PositionsQuery, TicksQuery},
     },
-    parse::{
-        parse_futures_to_contract, parse_kbars_response, parse_options_to_contract,
-        parse_stock_to_equity, parse_ticks_response,
-    },
-    query::{KBarsQuery, PositionsQuery, TicksQuery},
 };
-use crate::common::parse::parse_instrument_id;
 
 #[pymethods]
 impl SinopacHttpClient {
@@ -106,10 +106,7 @@ impl SinopacHttpClient {
 
     /// Fetch all stock contracts and return as Nautilus Equity instruments.
     #[pyo3(name = "request_stock_instruments")]
-    fn py_request_stock_instruments<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn py_request_stock_instruments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let contracts = client.list_stocks().await.map_err(to_pyruntime_err)?;
@@ -134,10 +131,7 @@ impl SinopacHttpClient {
 
     /// Fetch all futures contracts and return as Nautilus FuturesContract instruments.
     #[pyo3(name = "request_futures_instruments")]
-    fn py_request_futures_instruments<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn py_request_futures_instruments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let contracts = client.list_futures().await.map_err(to_pyruntime_err)?;
@@ -162,10 +156,7 @@ impl SinopacHttpClient {
 
     /// Fetch all options contracts and return as Nautilus OptionContract instruments.
     #[pyo3(name = "request_options_instruments")]
-    fn py_request_options_instruments<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn py_request_options_instruments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let contracts = client.list_options().await.map_err(to_pyruntime_err)?;
@@ -223,14 +214,9 @@ impl SinopacHttpClient {
             .map_err(to_pyruntime_err)?;
 
             Python::attach(|py| {
-                let py_trades: PyResult<Vec<Py<PyAny>>> = trades
-                    .into_iter()
-                    .map(|t| t.into_py_any(py))
-                    .collect();
-                let pylist = PyList::new(py, py_trades?)
-                    .unwrap()
-                    .into_any()
-                    .unbind();
+                let py_trades: PyResult<Vec<Py<PyAny>>> =
+                    trades.into_iter().map(|t| t.into_py_any(py)).collect();
+                let pylist = PyList::new(py, py_trades?).unwrap().into_any().unbind();
                 Ok(pylist)
             })
         })
@@ -273,19 +259,13 @@ impl SinopacHttpClient {
             );
 
             Python::attach(|py| {
-                let py_bars: PyResult<Vec<Py<PyAny>>> = bars
-                    .into_iter()
-                    .map(|b| b.into_py_any(py))
-                    .collect();
-                let pylist = PyList::new(py, py_bars?)
-                    .unwrap()
-                    .into_any()
-                    .unbind();
+                let py_bars: PyResult<Vec<Py<PyAny>>> =
+                    bars.into_iter().map(|b| b.into_py_any(py)).collect();
+                let pylist = PyList::new(py, py_bars?).unwrap().into_any().unbind();
                 Ok(pylist)
             })
         })
     }
-
 
     /// Place an order via the gateway.
     #[pyo3(name = "place_order")]
@@ -316,7 +296,10 @@ impl SinopacHttpClient {
             market: market.to_string(),
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let resp = client.place_order(&request).await.map_err(to_pyruntime_err)?;
+            let resp = client
+                .place_order(&request)
+                .await
+                .map_err(to_pyruntime_err)?;
             Python::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("trade_id", resp.trade_id)?;
@@ -345,7 +328,10 @@ impl SinopacHttpClient {
             quantity,
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let resp = client.update_order(&request).await.map_err(to_pyruntime_err)?;
+            let resp = client
+                .update_order(&request)
+                .await
+                .map_err(to_pyruntime_err)?;
             Python::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("status", resp.status)?;
@@ -365,7 +351,10 @@ impl SinopacHttpClient {
         let client = self.clone();
         let request = CancelOrderRequest { trade_id };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let resp = client.cancel_order(&request).await.map_err(to_pyruntime_err)?;
+            let resp = client
+                .cancel_order(&request)
+                .await
+                .map_err(to_pyruntime_err)?;
             Python::attach(|py| {
                 let dict = PyDict::new(py);
                 dict.set_item("status", resp.status)?;
@@ -400,21 +389,19 @@ impl SinopacHttpClient {
         })
     }
 
-
     /// Get account positions.
     #[pyo3(name = "list_positions")]
     #[pyo3(signature = (market="stock"))]
-    fn py_list_positions<'py>(
-        &self,
-        py: Python<'py>,
-        market: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn py_list_positions<'py>(&self, py: Python<'py>, market: &str) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let query = PositionsQuery {
             market: Some(market.to_string()),
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let positions = client.list_positions(&query).await.map_err(to_pyruntime_err)?;
+            let positions = client
+                .list_positions(&query)
+                .await
+                .map_err(to_pyruntime_err)?;
             Python::attach(|py| {
                 let list = PyList::empty(py);
                 for p in &positions {

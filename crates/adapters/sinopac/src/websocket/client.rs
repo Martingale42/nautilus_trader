@@ -22,12 +22,7 @@ use std::sync::{
 use nautilus_common::live::get_runtime;
 use tokio::sync::mpsc;
 
-use super::{
-    error::SinopacWsError,
-    handler::ws_handler_loop,
-    messages::WsIncomingMsg,
-    WsCommand,
-};
+use super::{WsCommand, error::SinopacWsError, handler::ws_handler_loop, messages::WsIncomingMsg};
 use crate::common::consts::SINOPAC_GATEWAY_WS_URL;
 
 /// WebSocket client for streaming market data and order updates
@@ -148,8 +143,13 @@ impl SinopacWebSocketClient {
 
     /// Reads the next parsed message from the WebSocket.
     pub async fn next_message(&self) -> Option<WsIncomingMsg> {
-        let mut guard = self.msg_rx.lock().unwrap();
-        let rx = guard.as_mut()?;
-        rx.recv().await
+        let rx = {
+            let mut guard = self.msg_rx.lock().unwrap();
+            guard.take()
+        };
+        let mut rx = rx?;
+        let msg = rx.recv().await;
+        self.msg_rx.lock().unwrap().replace(rx);
+        msg
     }
 }

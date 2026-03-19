@@ -16,7 +16,6 @@
 
 use serde::{Deserialize, Serialize};
 
-
 /// Login request payload.
 #[derive(Debug, Serialize)]
 pub struct LoginRequest {
@@ -62,7 +61,6 @@ pub struct TradeIdResponse {
     pub status: String,
     pub trade_id: String,
 }
-
 
 /// Stock contract from the gateway.
 #[derive(Debug, Clone, Deserialize)]
@@ -113,7 +111,6 @@ pub struct OptionsContract {
     pub update_date: String,
 }
 
-
 /// Market snapshot data from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SnapshotData {
@@ -157,7 +154,6 @@ pub struct KBarsResponse {
     pub close: Vec<f64>,
     pub volume: Vec<i64>,
 }
-
 
 /// Place order request payload.
 #[derive(Debug, Serialize)]
@@ -210,7 +206,6 @@ pub struct TradeInfo {
     pub order_type: String,
     pub price_type: String,
 }
-
 
 /// Account position from the gateway.
 #[derive(Debug, Clone, Deserialize)]

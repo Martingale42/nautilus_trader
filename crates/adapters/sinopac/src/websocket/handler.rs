@@ -23,7 +23,10 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsFrame;
 
-use super::{messages::{WsIncomingMsg, WsSubscribeMsg}, WsCommand};
+use super::{
+    WsCommand,
+    messages::{WsIncomingMsg, WsSubscribeMsg},
+};
 
 /// Background task that manages the WebSocket connection.
 ///

@@ -14,8 +14,7 @@
 // -------------------------------------------------------------------------------------------------
 //! Parsers for Sinopac WebSocket order events.
 
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{prelude::*, types::PyDict};
 
 use super::messages::OrderEvent;
 
