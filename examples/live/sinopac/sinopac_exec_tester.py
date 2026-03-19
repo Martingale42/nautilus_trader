@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Example: Shioaji execution client tester.
+Example: Sinopac execution client tester.
 
 Tests order submission, modification, and cancellation for Taiwan instruments
-using the Shioaji gateway adapter.
+using the Sinopac gateway adapter.
 
 Prerequisites:
-    1. Shioaji gateway running: ``uvicorn shioaji_server.main:app --port 8000``
+    1. Sinopac gateway running: ``uvicorn sinopac_server.main:app --port 8000``
     2. Gateway logged in with CA activated for order placement
     3. Use simulation=True in gateway for testing
 
@@ -15,11 +15,11 @@ CAUTION: Set dry_run=True to prevent actual order placement.
 
 from decimal import Decimal
 
-from nautilus_trader.adapters.shioaji.config import ShioajiDataClientConfig
-from nautilus_trader.adapters.shioaji.config import ShioajiExecClientConfig
-from nautilus_trader.adapters.shioaji.constants import SINOPAC
-from nautilus_trader.adapters.shioaji.factories import ShioajiLiveDataClientFactory
-from nautilus_trader.adapters.shioaji.factories import ShioajiLiveExecClientFactory
+from nautilus_trader.adapters.sinopac.config import SinopacDataClientConfig
+from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
+from nautilus_trader.adapters.sinopac.constants import SINOPAC
+from nautilus_trader.adapters.sinopac.factories import SinopacLiveDataClientFactory
+from nautilus_trader.adapters.sinopac.factories import SinopacLiveExecClientFactory
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LiveExecEngineConfig
@@ -37,7 +37,7 @@ from nautilus_trader.test_kit.strategies.tester_exec import ExecTesterConfig
 instrument_id = InstrumentId.from_str("2330.SINOPAC")  # TSMC
 trade_size = Decimal(1)  # 1 lot (= 1000 shares for common stocks)
 offset_ticks = 10  # Offset from market price for limit orders
-shioaji_account_id = None  # Set to your account ID, or use SHIOAJI_ACCOUNT_ID env var
+sinopac_account_id = None  # Set to your account ID, or use SINOPAC_ACCOUNT_ID env var
 gateway_host = "localhost"
 gateway_port = 8000
 dry_run = True  # Set to False to enable actual order placement (CAUTION!)
@@ -54,17 +54,17 @@ config_node = TradingNodeConfig(
         buffer_interval_ms=100,
     ),
     data_clients={
-        SINOPAC: ShioajiDataClientConfig(
+        SINOPAC: SinopacDataClientConfig(
             gateway_host=gateway_host,
             gateway_port=gateway_port,
             instrument_provider=InstrumentProviderConfig(load_all=True),
         ),
     },
     exec_clients={
-        SINOPAC: ShioajiExecClientConfig(
+        SINOPAC: SinopacExecClientConfig(
             gateway_host=gateway_host,
             gateway_port=gateway_port,
-            account_id=shioaji_account_id,
+            account_id=sinopac_account_id,
             instrument_provider=InstrumentProviderConfig(load_all=True),
         ),
     },
@@ -84,9 +84,9 @@ config_tester = ExecTesterConfig(
     tob_offset_ticks=offset_ticks,
     subscribe_quotes=True,
     subscribe_trades=True,
-    enable_stop_buys=False,   # Shioaji doesn't support stop orders natively
+    enable_stop_buys=False,   # Sinopac doesn't support stop orders natively
     enable_stop_sells=False,
-    enable_brackets=False,     # Shioaji doesn't support bracket orders
+    enable_brackets=False,     # Sinopac doesn't support bracket orders
     use_post_only=False,       # Not applicable to Taiwan exchange
     close_positions_time_in_force=TimeInForce.DAY,  # Taiwan uses ROD (rest of day)
     dry_run=dry_run,
@@ -95,8 +95,8 @@ config_tester = ExecTesterConfig(
 strategy = ExecTester(config=config_tester)
 node.trader.add_strategy(strategy)
 
-node.add_data_client_factory(SINOPAC, ShioajiLiveDataClientFactory)
-node.add_exec_client_factory(SINOPAC, ShioajiLiveExecClientFactory)
+node.add_data_client_factory(SINOPAC, SinopacLiveDataClientFactory)
+node.add_exec_client_factory(SINOPAC, SinopacLiveExecClientFactory)
 node.build()
 
 if __name__ == "__main__":

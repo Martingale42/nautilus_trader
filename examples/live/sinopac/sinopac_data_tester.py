@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Example: Shioaji data client tester.
+Example: Sinopac data client tester.
 
 Subscribes to trade ticks and/or quote ticks for Taiwan instruments
-using the Shioaji gateway adapter.
+using the Sinopac gateway adapter.
 
 Prerequisites:
-    1. Shioaji gateway running: ``uvicorn shioaji_server.main:app --port 8000``
+    1. Sinopac gateway running: ``uvicorn sinopac_server.main:app --port 8000``
     2. Gateway logged in: ``curl -X POST http://localhost:8000/auth/login -d '...'``
 """
 
-from nautilus_trader.adapters.shioaji.config import ShioajiDataClientConfig
-from nautilus_trader.adapters.shioaji.constants import SINOPAC
-from nautilus_trader.adapters.shioaji.factories import ShioajiLiveDataClientFactory
+from nautilus_trader.adapters.sinopac.config import SinopacDataClientConfig
+from nautilus_trader.adapters.sinopac.constants import SINOPAC
+from nautilus_trader.adapters.sinopac.factories import SinopacLiveDataClientFactory
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.config import TradingNodeConfig
@@ -31,7 +31,7 @@ config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
     logging=LoggingConfig(log_level="INFO", use_pyo3=True),
     data_clients={
-        SINOPAC: ShioajiDataClientConfig(
+        SINOPAC: SinopacDataClientConfig(
             gateway_host=gateway_host,
             gateway_port=gateway_port,
             instrument_provider=InstrumentProviderConfig(load_all=True),
@@ -59,7 +59,7 @@ config_tester = DataTesterConfig(
 data_tester = DataTester(config=config_tester)
 node.trader.add_actor(data_tester)
 
-node.add_data_client_factory(SINOPAC, ShioajiLiveDataClientFactory)
+node.add_data_client_factory(SINOPAC, SinopacLiveDataClientFactory)
 node.build()
 
 if __name__ == "__main__":
