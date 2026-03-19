@@ -95,7 +95,7 @@ pub struct WsOrderUpdateMsg {
 }
 
 impl WsOrderUpdateMsg {
-    /// Parse the data field into a typed event based on the event string.
+    /// Parses the data field into a typed event based on the event string.
     pub fn parse_event(&self) -> anyhow::Result<OrderEvent> {
         match self.event.as_str() {
             "OrderState.StockOrder" => {

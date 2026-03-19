@@ -232,7 +232,7 @@ impl SinopacWebSocketClient {
         })
     }
 
-    /// Wait until the WS connection is active.
+    /// Waits until the WS connection is active.
     #[pyo3(name = "wait_until_active")]
     fn py_wait_until_active<'py>(
         &self,

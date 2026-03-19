@@ -18,7 +18,7 @@ use pyo3::{prelude::*, types::PyDict};
 
 use super::messages::OrderEvent;
 
-/// Convert an [`OrderEvent`] to a Python dict for the execution client to process.
+/// Converts an [`OrderEvent`] to a Python dict for the execution client to process.
 pub fn order_event_to_pydict(py: Python<'_>, event: &OrderEvent) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
 

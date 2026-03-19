@@ -104,7 +104,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// Fetch all stock contracts and return as Nautilus Equity instruments.
+    /// Fetches all stock contracts and return as Nautilus Equity instruments.
     #[pyo3(name = "request_stock_instruments")]
     fn py_request_stock_instruments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
@@ -129,7 +129,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// Fetch all futures contracts and return as Nautilus FuturesContract instruments.
+    /// Fetches all futures contracts and return as Nautilus FuturesContract instruments.
     #[pyo3(name = "request_futures_instruments")]
     fn py_request_futures_instruments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
@@ -154,7 +154,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// Fetch all options contracts and return as Nautilus OptionContract instruments.
+    /// Fetches all options contracts and return as Nautilus OptionContract instruments.
     #[pyo3(name = "request_options_instruments")]
     fn py_request_options_instruments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
@@ -179,7 +179,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// Fetch historical ticks for a contract on a given date.
+    /// Fetches historical ticks for a contract on a given date.
     ///
     /// Returns a list of TradeTick pyo3 objects.
     #[pyo3(name = "request_trade_ticks")]
@@ -222,7 +222,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// Fetch historical OHLCV bars for a contract in a date range.
+    /// Fetches historical OHLCV bars for a contract in a date range.
     ///
     /// Returns a list of Bar pyo3 objects.
     #[pyo3(name = "request_bars")]
@@ -267,7 +267,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// Place an order via the gateway.
+    /// Places an order via the gateway.
     #[pyo3(name = "place_order")]
     #[pyo3(signature = (code, action, price, quantity, price_type="LMT", order_type="ROD", order_cond="Cash", order_lot="Common", market="stock"))]
     fn py_place_order<'py>(
@@ -311,7 +311,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// Update (modify) an existing order.
+    /// Updates (modifies) an existing order.
     #[pyo3(name = "update_order")]
     #[pyo3(signature = (trade_id, price=None, quantity=None))]
     fn py_update_order<'py>(
@@ -341,7 +341,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// Cancel an existing order.
+    /// Cancels an existing order.
     #[pyo3(name = "cancel_order")]
     fn py_cancel_order<'py>(
         &self,
@@ -364,7 +364,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// List all trades (orders) from the gateway.
+    /// Lists all trades (orders) from the gateway.
     #[pyo3(name = "list_trades")]
     fn py_list_trades<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
@@ -389,7 +389,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// Get account positions.
+    /// Returns the account positions.
     #[pyo3(name = "list_positions")]
     #[pyo3(signature = (market="stock"))]
     fn py_list_positions<'py>(&self, py: Python<'py>, market: &str) -> PyResult<Bound<'py, PyAny>> {
@@ -420,7 +420,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// Get account balance.
+    /// Returns the account balance.
     #[pyo3(name = "account_balance")]
     fn py_account_balance<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
@@ -435,7 +435,7 @@ impl SinopacHttpClient {
         })
     }
 
-    /// Get margin info.
+    /// Returns margin info.
     #[pyo3(name = "margin")]
     fn py_margin<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();

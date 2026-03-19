@@ -38,7 +38,7 @@ use crate::common::{
     tick_size::{futures_tick_size, options_tick_size, twse_stock_tick_size},
 };
 
-/// Parse a `SnapshotData` into a `QuoteTick` (top-of-book bid/ask).
+/// Parses a `SnapshotData` into a `QuoteTick` (top-of-book bid/ask).
 pub fn parse_snapshot_to_quote_tick(
     snapshot: &SnapshotData,
     instrument_id: InstrumentId,
@@ -57,7 +57,7 @@ pub fn parse_snapshot_to_quote_tick(
     )
 }
 
-/// Parse a gateway `TicksResponse` into `Vec<TradeTick>`.
+/// Parses a gateway `TicksResponse` into `Vec<TradeTick>`.
 ///
 /// Iterates parallel arrays: ts, close, volume, tick_type.
 /// `tick_type`: 1 = Buy (aggressor = buyer), 2 = Sell (aggressor = seller), 0 = unknown.
@@ -93,7 +93,7 @@ pub fn parse_ticks_response(
     Ok(result)
 }
 
-/// Parse a gateway `KBarsResponse` into `Vec<Bar>`.
+/// Parses a gateway `KBarsResponse` into `Vec<Bar>`.
 ///
 /// Iterates parallel arrays: ts, open, high, low, close, volume.
 pub fn parse_kbars_response(
@@ -123,7 +123,7 @@ pub fn parse_kbars_response(
     result
 }
 
-/// Parse a gateway `StockContract` into a Nautilus `Equity` instrument.
+/// Parses a gateway `StockContract` into a Nautilus `Equity` instrument.
 ///
 /// - `InstrumentId` = `{code}.SINOPAC`
 /// - Tick size and precision derived from reference price via TWSE schedule
@@ -168,7 +168,7 @@ pub fn parse_stock_to_equity(
     Ok(InstrumentAny::Equity(equity))
 }
 
-/// Parse a gateway `FuturesContract` into a Nautilus `FuturesContract` instrument.
+/// Parses a gateway `FuturesContract` into a Nautilus `FuturesContract` instrument.
 ///
 /// - Root symbol and multiplier derived from `category` field
 /// - Tick size from `futures_tick_size()` lookup
@@ -228,7 +228,7 @@ pub fn parse_futures_to_contract(
     Ok(InstrumentAny::FuturesContract(futures))
 }
 
-/// Parse a gateway `OptionsContract` into a Nautilus `OptionContract` instrument.
+/// Parses a gateway `OptionsContract` into a Nautilus `OptionContract` instrument.
 ///
 /// - Root symbol and multiplier derived from `category` field
 /// - Tick size from `options_tick_size()` based on reference premium
@@ -298,7 +298,7 @@ pub fn parse_options_to_contract(
     Ok(InstrumentAny::OptionContract(option))
 }
 
-/// Parse a date string like "2026/06/17" or "2026-06-17" to `UnixNanos`.
+/// Parses a date string like "2026/06/17" or "2026-06-17" to `UnixNanos`.
 ///
 /// Treats the date as midnight in Taiwan time (UTC+8).
 fn parse_date_to_nanos(date_str: &str) -> anyhow::Result<UnixNanos> {

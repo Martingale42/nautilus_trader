@@ -25,7 +25,7 @@ use nautilus_model::{
 
 use super::messages::{WsBidAskMsg, WsTickMsg};
 
-/// Parse a Taiwan local-time timestamp string to `UnixNanos`.
+/// Parses a Taiwan local-time timestamp string to `UnixNanos`.
 ///
 /// Format: "YYYY-MM-DD HH:MM:SS.ffffff" (UTC+8)
 /// The fractional seconds part is optional.
@@ -41,7 +41,7 @@ pub fn parse_taiwan_timestamp(ts: &str) -> anyhow::Result<UnixNanos> {
     Ok(UnixNanos::from(nanos as u64))
 }
 
-/// Parse a WS tick message into a `TradeTick`.
+/// Parses a WS tick message into a `TradeTick`.
 ///
 /// `tick_type`: 1 = Buy (aggressor = buyer), 2 = Sell (aggressor = seller).
 /// For futures/options where `tick_type` is absent, defaults to `NoAggressor`.
@@ -70,7 +70,7 @@ pub fn parse_ws_tick_to_trade_tick(
     )
 }
 
-/// Parse a WS bidask message into a `QuoteTick` (top of book).
+/// Parses a WS bidask message into a `QuoteTick` (top of book).
 ///
 /// Uses `bid_price[0]`/`bid_volume[0]` and `ask_price[0]`/`ask_volume[0]`.
 pub fn parse_ws_bidask_to_quote_tick(
