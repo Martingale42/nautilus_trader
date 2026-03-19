@@ -63,4 +63,7 @@ pyo3 = { workspace = true, optional = true }
 pyo3-async-runtimes = { workspace = true, optional = true }
 
 [dev-dependencies]
+axum = { workspace = true }
 rstest = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

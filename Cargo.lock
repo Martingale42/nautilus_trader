@@ -5915,8 +5915,10 @@ name = "nautilus-sinopac"
 version = "0.54.0"
 dependencies = [
  "anyhow",
+ "axum",
  "chrono",
  "futures-util",
+ "log",
  "nautilus-common",
  "nautilus-core",
  "nautilus-model",
@@ -5929,7 +5931,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
- "tracing",
  "ustr",
 ]
 
