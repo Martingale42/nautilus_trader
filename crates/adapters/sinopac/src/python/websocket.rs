@@ -1,5 +1,23 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+//! Python bindings for the Sinopac WebSocket client.
+
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use nautilus_common::live::get_runtime;
 
 use nautilus_core::UnixNanos;
 use nautilus_core::python::to_pyruntime_err;
@@ -26,22 +44,26 @@ use crate::websocket::{
 
 #[pymethods]
 impl SinopacWebSocketClient {
+    /// Creates a new Sinopac WebSocket client.
     #[new]
     #[pyo3(signature = (url=None))]
     fn py_new(url: Option<String>) -> Self {
         Self::new(url)
     }
 
+    /// Returns whether the client is currently connected.
     #[pyo3(name = "is_connected")]
     fn py_is_connected(&self) -> bool {
         self.is_connected()
     }
 
+    /// Subscribes to quote data for a contract.
     #[pyo3(name = "subscribe")]
     fn py_subscribe(&self, code: String, quote_type: String) -> PyResult<()> {
         self.subscribe(&code, &quote_type).map_err(to_pyruntime_err)
     }
 
+    /// Unsubscribes from quote data for a contract.
     #[pyo3(name = "unsubscribe")]
     fn py_unsubscribe(&self, code: String, quote_type: String) -> PyResult<()> {
         self.unsubscribe(&code, &quote_type).map_err(to_pyruntime_err)
@@ -77,12 +99,12 @@ impl SinopacWebSocketClient {
             let msg_rx = client.take_msg_rx();
 
             // Spawn background message processing task
-            tokio::spawn(async move {
+            get_runtime().spawn(async move {
                 // Keep client alive for the entire task lifetime
                 let _client_guard = client;
 
                 if let Some(mut rx) = msg_rx {
-                    tracing::info!("Sinopac WS callback loop started");
+                    log::info!("Sinopac WS callback loop started");
                     let mut msg_count: u64 = 0;
 
                     while let Some(msg) = rx.recv().await {
@@ -90,7 +112,7 @@ impl SinopacWebSocketClient {
                         match msg {
                             WsIncomingMsg::Tick(ref tick_msg) => {
                                 let Some(inst) = instruments.get(&tick_msg.code) else {
-                                    tracing::debug!(
+                                    log::debug!(
                                         "Tick for unknown code: {}",
                                         tick_msg.code
                                     );
@@ -101,7 +123,7 @@ impl SinopacWebSocketClient {
                                 ) {
                                     Ok(ts) => ts,
                                     Err(e) => {
-                                        tracing::warn!(
+                                        log::warn!(
                                             "Bad timestamp for tick {}: {e}",
                                             tick_msg.code
                                         );
@@ -124,7 +146,7 @@ impl SinopacWebSocketClient {
                                         call_python(py, &callback, capsule);
                                     }),
                                     Err(e) => {
-                                        tracing::warn!(
+                                        log::warn!(
                                             "Failed to parse tick for {}: {e}",
                                             tick_msg.code
                                         );
@@ -133,7 +155,7 @@ impl SinopacWebSocketClient {
                             }
                             WsIncomingMsg::BidAsk(ref ba_msg) => {
                                 let Some(inst) = instruments.get(&ba_msg.code) else {
-                                    tracing::debug!(
+                                    log::debug!(
                                         "BidAsk for unknown code: {}",
                                         ba_msg.code
                                     );
@@ -144,7 +166,7 @@ impl SinopacWebSocketClient {
                                 ) {
                                     Ok(ts) => ts,
                                     Err(e) => {
-                                        tracing::warn!(
+                                        log::warn!(
                                             "Bad timestamp for bidask {}: {e}",
                                             ba_msg.code
                                         );
@@ -167,7 +189,7 @@ impl SinopacWebSocketClient {
                                         call_python(py, &callback, capsule);
                                     }),
                                     Err(e) => {
-                                        tracing::warn!(
+                                        log::warn!(
                                             "Failed to parse bidask for {}: {e}",
                                             ba_msg.code
                                         );
@@ -187,7 +209,7 @@ impl SinopacWebSocketClient {
                                                     );
                                                 }
                                                 Err(e) => {
-                                                    tracing::error!(
+                                                    log::error!(
                                                         "Failed to convert order event to dict: {e}"
                                                     );
                                                 }
@@ -195,7 +217,7 @@ impl SinopacWebSocketClient {
                                         });
                                     }
                                     Err(e) => {
-                                        tracing::warn!(
+                                        log::warn!(
                                             "Failed to parse order event '{}': {e}",
                                             order_msg.event
                                         );
@@ -203,26 +225,26 @@ impl SinopacWebSocketClient {
                                 }
                             }
                             WsIncomingMsg::Subscribed(ref confirm) => {
-                                tracing::info!(
+                                log::info!(
                                     "Subscribed: {} ({})",
                                     confirm.code,
                                     confirm.quote_type
                                 );
                             }
                             WsIncomingMsg::Unsubscribed(ref confirm) => {
-                                tracing::info!(
+                                log::info!(
                                     "Unsubscribed: {} ({})",
                                     confirm.code,
                                     confirm.quote_type
                                 );
                             }
                             WsIncomingMsg::Error(ref err) => {
-                                tracing::error!("WS error: {}", err.detail);
+                                log::error!("WS error: {}", err.detail);
                             }
                         }
                     }
 
-                    tracing::warn!(
+                    log::warn!(
                         "Sinopac WS callback loop ended after {msg_count} messages"
                     );
                 }
@@ -268,6 +290,6 @@ impl SinopacWebSocketClient {
 
 fn call_python(py: Python, callback: &Py<PyAny>, py_obj: Py<PyAny>) {
     if let Err(e) = callback.call1(py, (py_obj,)) {
-        tracing::error!("Error calling Python callback: {e}");
+        log::error!("Error calling Python callback: {e}");
     }
 }

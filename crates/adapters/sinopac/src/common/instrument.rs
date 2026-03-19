@@ -1,3 +1,19 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+//! Instrument helpers for Taiwan market contracts.
+
 /// Default stock lot size for Common orders (1000 shares = 1 lot in Taiwan market).
 pub const STOCK_LOT_SIZE: f64 = 1000.0;
 
@@ -58,49 +74,51 @@ pub fn extract_root_symbol(code: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
+    #[rstest]
     fn test_futures_multiplier_txf() {
         assert_eq!(futures_multiplier("TXF"), 200.0);
     }
 
-    #[test]
+    #[rstest]
     fn test_futures_multiplier_mxf() {
         assert_eq!(futures_multiplier("MXF"), 50.0);
     }
 
-    #[test]
+    #[rstest]
     fn test_futures_multiplier_unknown_defaults_to_stock() {
         assert_eq!(futures_multiplier("ABC"), 2000.0);
     }
 
-    #[test]
+    #[rstest]
     fn test_options_multiplier_txo() {
         assert_eq!(options_multiplier("TXO"), 50.0);
     }
 
-    #[test]
+    #[rstest]
     fn test_extract_root_symbol_futures_delivery() {
         assert_eq!(extract_root_symbol("TXFC6"), "TXF");
     }
 
-    #[test]
+    #[rstest]
     fn test_extract_root_symbol_futures_continuous() {
         assert_eq!(extract_root_symbol("TXFR1"), "TXF");
     }
 
-    #[test]
+    #[rstest]
     fn test_extract_root_symbol_futures_yyyymm() {
         assert_eq!(extract_root_symbol("TXF202406"), "TXF");
     }
 
-    #[test]
+    #[rstest]
     fn test_extract_root_symbol_bare() {
         assert_eq!(extract_root_symbol("MXF"), "MXF");
     }
 
-    #[test]
+    #[rstest]
     fn test_extract_root_symbol_options() {
         assert_eq!(extract_root_symbol("TXO20000C6"), "TXO");
     }

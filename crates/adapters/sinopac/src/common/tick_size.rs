@@ -1,3 +1,19 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+//! Tick size rules for TWSE/TAIFEX instruments.
+
 /// Returns the TWSE tick size and price precision for a given stock reference price.
 ///
 /// Official TWSE tick size schedule (as of 2020 revision):
@@ -51,60 +67,62 @@ pub fn options_tick_size(reference: f64) -> (f64, u8) {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
+    #[rstest]
     fn test_twse_tick_size_under_10() {
         assert_eq!(twse_stock_tick_size(5.0), (0.01, 2));
     }
 
-    #[test]
+    #[rstest]
     fn test_twse_tick_size_10_to_50() {
         assert_eq!(twse_stock_tick_size(25.0), (0.05, 2));
     }
 
-    #[test]
+    #[rstest]
     fn test_twse_tick_size_50_to_100() {
         assert_eq!(twse_stock_tick_size(75.0), (0.10, 2));
     }
 
-    #[test]
+    #[rstest]
     fn test_twse_tick_size_100_to_500() {
         assert_eq!(twse_stock_tick_size(300.0), (0.50, 2));
     }
 
-    #[test]
+    #[rstest]
     fn test_twse_tick_size_500_to_1000() {
         assert_eq!(twse_stock_tick_size(750.0), (1.0, 1));
     }
 
-    #[test]
+    #[rstest]
     fn test_twse_tick_size_above_1000() {
         assert_eq!(twse_stock_tick_size(1500.0), (5.0, 1));
     }
 
-    #[test]
+    #[rstest]
     fn test_twse_tick_size_boundary_at_10() {
         assert_eq!(twse_stock_tick_size(10.0), (0.05, 2));
     }
 
-    #[test]
+    #[rstest]
     fn test_twse_tick_size_tsmc_reference() {
         // TSMC at ~580 TWD
         assert_eq!(twse_stock_tick_size(580.0), (1.0, 1));
     }
 
-    #[test]
+    #[rstest]
     fn test_futures_tick_size_txf() {
         assert_eq!(futures_tick_size("TXF"), (1.0, 0));
     }
 
-    #[test]
+    #[rstest]
     fn test_options_tick_size_low_premium() {
         assert_eq!(options_tick_size(5.0), (0.1, 1));
     }
 
-    #[test]
+    #[rstest]
     fn test_options_tick_size_high_premium() {
         assert_eq!(options_tick_size(50.0), (1.0, 0));
     }

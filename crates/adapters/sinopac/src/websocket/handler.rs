@@ -1,3 +1,19 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+//! WebSocket message handler loop for the Sinopac adapter.
+
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -6,7 +22,6 @@ use std::sync::{
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsFrame;
-use tracing::{debug, error, warn};
 
 use super::{messages::{WsIncomingMsg, WsSubscribeMsg}, WsCommand};
 
@@ -28,7 +43,7 @@ pub(crate) async fn ws_handler_loop<S>(
 {
     let (mut sink, mut stream) = ws_stream.split();
     is_connected.store(true, Ordering::SeqCst);
-    debug!("WebSocket handler loop started");
+    log::debug!("WebSocket handler loop started");
 
     loop {
         tokio::select! {
@@ -39,32 +54,32 @@ pub(crate) async fn ws_handler_loop<S>(
                         match serde_json::from_str::<WsIncomingMsg>(&text) {
                             Ok(msg) => {
                                 if msg_tx.send(msg).is_err() {
-                                    debug!("Message receiver dropped, shutting down");
+                                    log::debug!("Message receiver dropped, shutting down");
                                     break;
                                 }
                             }
                             Err(e) => {
-                                warn!("Failed to deserialize WS message: {e}, raw: {text}");
+                                log::warn!("Failed to deserialize WS message: {e}, raw: {text}");
                             }
                         }
                     }
                     Some(Ok(WsFrame::Close(_))) => {
-                        debug!("Received WS close frame");
+                        log::debug!("Received WS close frame");
                         break;
                     }
                     Some(Ok(WsFrame::Ping(data))) => {
                         if let Err(e) = sink.send(WsFrame::Pong(data)).await {
-                            error!("Failed to send pong: {e}");
+                            log::error!("Failed to send pong: {e}");
                             break;
                         }
                     }
                     Some(Ok(_)) => {} // Ignore other frame types
                     Some(Err(e)) => {
-                        error!("WebSocket error: {e}");
+                        log::error!("WebSocket error: {e}");
                         break;
                     }
                     None => {
-                        debug!("WebSocket stream ended");
+                        log::debug!("WebSocket stream ended");
                         break;
                     }
                 }
@@ -81,7 +96,7 @@ pub(crate) async fn ws_handler_loop<S>(
                         };
                         let text = serde_json::to_string(&msg).expect("serialize subscribe");
                         if let Err(e) = sink.send(WsFrame::Text(text.into())).await {
-                            error!("Failed to send subscribe: {e}");
+                            log::error!("Failed to send subscribe: {e}");
                             break;
                         }
                     }
@@ -93,12 +108,12 @@ pub(crate) async fn ws_handler_loop<S>(
                         };
                         let text = serde_json::to_string(&msg).expect("serialize unsubscribe");
                         if let Err(e) = sink.send(WsFrame::Text(text.into())).await {
-                            error!("Failed to send unsubscribe: {e}");
+                            log::error!("Failed to send unsubscribe: {e}");
                             break;
                         }
                     }
                     Some(WsCommand::Close) | None => {
-                        debug!("Close command received");
+                        log::debug!("Close command received");
                         let _ = sink.send(WsFrame::Close(None)).await;
                         break;
                     }
@@ -108,5 +123,5 @@ pub(crate) async fn ws_handler_loop<S>(
     }
 
     is_connected.store(false, Ordering::SeqCst);
-    debug!("WebSocket handler loop ended");
+    log::debug!("WebSocket handler loop ended");
 }

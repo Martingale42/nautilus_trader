@@ -1,3 +1,19 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+//! Parsers for Sinopac WebSocket market data messages.
+
 use chrono::NaiveDateTime;
 use nautilus_core::UnixNanos;
 use nautilus_model::{
@@ -83,24 +99,25 @@ pub fn parse_ws_bidask_to_quote_tick(
 #[cfg(test)]
 mod tests {
     use nautilus_model::identifiers::{Symbol, Venue};
+    use rstest::rstest;
 
     use super::*;
     use crate::common::testing::load_test_json_as;
     use crate::websocket::messages::WsIncomingMsg;
 
-    #[test]
+    #[rstest]
     fn test_parse_taiwan_timestamp_with_microseconds() {
         let ts = parse_taiwan_timestamp("2026-03-02 09:30:00.123456").unwrap();
         assert!(ts.as_u64() > 0);
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_taiwan_timestamp_without_fractional() {
         let ts = parse_taiwan_timestamp("2026-03-02 09:30:00").unwrap();
         assert!(ts.as_u64() > 0);
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_taiwan_timestamp_utc_offset() {
         // 2026-03-02 00:00:00 Taiwan = 2026-03-01 16:00:00 UTC
         let ts = parse_taiwan_timestamp("2026-03-02 00:00:00").unwrap();
@@ -118,7 +135,7 @@ mod tests {
         InstrumentId::new(Symbol::new("2330"), Venue::new("SINOPAC"))
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_ws_tick_buy_aggressor() {
         let msg: WsIncomingMsg = load_test_json_as("ws_tick_stock.json");
         if let WsIncomingMsg::Tick(tick) = msg {
@@ -140,7 +157,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_ws_tick_futures_no_aggressor() {
         let msg: WsIncomingMsg = load_test_json_as("ws_tick_futures.json");
         if let WsIncomingMsg::Tick(tick) = msg {
@@ -163,7 +180,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_ws_bidask_top_of_book() {
         let msg: WsIncomingMsg = load_test_json_as("ws_bidask.json");
         if let WsIncomingMsg::BidAsk(ba) = msg {

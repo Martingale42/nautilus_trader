@@ -1,3 +1,19 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+//! Parsers that convert Sinopac REST responses to Nautilus domain types.
+
 use nautilus_core::UnixNanos;
 use nautilus_model::{
     data::{Bar, BarType, QuoteTick, TradeTick},
@@ -305,6 +321,7 @@ mod tests {
     use nautilus_model::identifiers::Symbol;
     use nautilus_model::identifiers::Venue;
     use nautilus_model::instruments::Instrument;
+    use rstest::rstest;
 
     use super::*;
     use crate::common::testing::load_test_json_as;
@@ -314,7 +331,7 @@ mod tests {
         InstrumentId::new(Symbol::new("2330"), Venue::new("SINOPAC"))
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_snapshot_to_quote_tick() {
         let snapshots: Vec<SnapshotData> = load_test_json_as("market_snapshots.json");
         let quote = parse_snapshot_to_quote_tick(
@@ -331,7 +348,7 @@ mod tests {
         assert_eq!(quote.ask_price, Price::new(581.0, 1));
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_ticks_response() {
         let ticks: TicksResponse = load_test_json_as("market_ticks.json");
         let trades = parse_ticks_response(
@@ -350,7 +367,7 @@ mod tests {
         assert_eq!(trades[1].aggressor_side, AggressorSide::Seller);
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_kbars_response() {
         let kbars: KBarsResponse = load_test_json_as("market_kbars.json");
         let bar_type = BarType::new(
@@ -368,7 +385,7 @@ mod tests {
         assert_eq!(bars[1].open, Price::new(580.0, 1));
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_stock_to_equity_tsmc() {
         let contracts: Vec<StockContract> = load_test_json_as("contracts_stocks.json");
         let equity = parse_stock_to_equity(
@@ -391,7 +408,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_futures_to_contract_txf() {
         let contracts: Vec<FuturesContract> = load_test_json_as("contracts_futures.json");
         let instrument = parse_futures_to_contract(
@@ -414,7 +431,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_options_to_contract_call() {
         let contracts: Vec<OptionsContract> = load_test_json_as("contracts_options.json");
         let instrument = parse_options_to_contract(
@@ -437,21 +454,21 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_date_to_nanos_slash_format() {
         // 2026/06/17 00:00:00 +08:00 = 2026-06-16T16:00:00Z
         let nanos = parse_date_to_nanos("2026/06/17").unwrap();
         assert_eq!(nanos.as_u64(), 1_781_625_600_000_000_000);
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_date_to_nanos_dash_format() {
         // 2026-03-02 00:00:00 +08:00 = 2026-03-01T16:00:00Z
         let nanos = parse_date_to_nanos("2026-03-02").unwrap();
         assert_eq!(nanos.as_u64(), 1_772_380_800_000_000_000);
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_all_instrument_types() {
         // Stocks -> Equity
         let stocks: Vec<StockContract> = load_test_json_as("contracts_stocks.json");
@@ -490,7 +507,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_stock_low_price_different_tick_size() {
         let contract = StockContract {
             code: "9999".to_string(),

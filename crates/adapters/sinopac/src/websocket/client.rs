@@ -1,10 +1,26 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+//! WebSocket client for Sinopac gateway streaming data.
+
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 
+use nautilus_common::live::get_runtime;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
 
 use super::{
     error::SinopacWsError,
@@ -58,7 +74,7 @@ impl SinopacWebSocketClient {
             return Ok(());
         }
 
-        info!("Connecting to WebSocket: {}", self.url);
+        log::info!("Connecting to WebSocket: {}", self.url);
 
         let (ws_stream, _response) = tokio_tungstenite::connect_async(&self.url)
             .await
@@ -68,7 +84,7 @@ impl SinopacWebSocketClient {
         let (msg_tx, msg_rx) = mpsc::unbounded_channel();
         let is_connected = self.is_connected.clone();
 
-        let handle = tokio::spawn(async move {
+        let handle = get_runtime().spawn(async move {
             ws_handler_loop(ws_stream, cmd_rx, msg_tx, is_connected).await;
         });
 
@@ -76,7 +92,7 @@ impl SinopacWebSocketClient {
         *self.msg_rx.lock().unwrap() = Some(msg_rx);
         *self.task_handle.lock().unwrap() = Some(handle);
 
-        debug!("WebSocket connected");
+        log::debug!("WebSocket connected");
         Ok(())
     }
 
@@ -90,7 +106,7 @@ impl SinopacWebSocketClient {
             let _ = handle.await;
         }
         *self.msg_rx.lock().unwrap() = None;
-        debug!("WebSocket disconnected");
+        log::debug!("WebSocket disconnected");
         Ok(())
     }
 

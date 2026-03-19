@@ -1,3 +1,19 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+//! HTTP client for the Sinopac FastAPI gateway.
+
 use std::collections::HashMap;
 
 use nautilus_network::http::{HttpClient, Method};
@@ -191,41 +207,46 @@ impl SinopacHttpClient {
         serde_json::from_slice(&response.body).map_err(SinopacHttpError::from)
     }
 
-    // ─── Auth ────────────────────────────────────
 
+    /// Sends a login request to the gateway.
     pub async fn login(&self, request: &LoginRequest) -> Result<LoginResponse, SinopacHttpError> {
         self.post("/auth/login", request).await
     }
 
+    /// Sends a logout request to the gateway.
     pub async fn logout(&self) -> Result<MessageResponse, SinopacHttpError> {
         self.post("/auth/logout", &serde_json::Value::Object(Default::default()))
             .await
     }
 
+    /// Queries the gateway connection status.
     pub async fn status(&self) -> Result<StatusResponse, SinopacHttpError> {
         self.get("/auth/status").await
     }
 
-    // ─── Contracts ───────────────────────────────
 
+    /// Fetches all stock contracts from the gateway.
     pub async fn list_stocks(&self) -> Result<Vec<StockContract>, SinopacHttpError> {
         self.get("/contracts/stocks").await
     }
 
+    /// Fetches a single stock contract by code.
     pub async fn get_stock(&self, code: &str) -> Result<StockContract, SinopacHttpError> {
         self.get(&format!("/contracts/stocks/{code}")).await
     }
 
+    /// Fetches all futures contracts from the gateway.
     pub async fn list_futures(&self) -> Result<Vec<FuturesContract>, SinopacHttpError> {
         self.get("/contracts/futures").await
     }
 
+    /// Fetches all options contracts from the gateway.
     pub async fn list_options(&self) -> Result<Vec<OptionsContract>, SinopacHttpError> {
         self.get("/contracts/options").await
     }
 
-    // ─── Market Data ─────────────────────────────
 
+    /// Fetches market snapshots for the given codes.
     pub async fn snapshots(
         &self,
         query: &SnapshotsQuery,
@@ -233,16 +254,18 @@ impl SinopacHttpClient {
         self.get_with_params("/market/snapshots", query).await
     }
 
+    /// Fetches historical tick data.
     pub async fn ticks(&self, query: &TicksQuery) -> Result<TicksResponse, SinopacHttpError> {
         self.get_with_params("/market/ticks", query).await
     }
 
+    /// Fetches historical OHLCV bar data.
     pub async fn kbars(&self, query: &KBarsQuery) -> Result<KBarsResponse, SinopacHttpError> {
         self.get_with_params("/market/kbars", query).await
     }
 
-    // ─── Orders ──────────────────────────────────
 
+    /// Submits a new order to the gateway.
     pub async fn place_order(
         &self,
         request: &PlaceOrderRequest,
@@ -250,6 +273,7 @@ impl SinopacHttpClient {
         self.post("/orders/place", request).await
     }
 
+    /// Modifies an existing order on the gateway.
     pub async fn update_order(
         &self,
         request: &UpdateOrderRequest,
@@ -257,6 +281,7 @@ impl SinopacHttpClient {
         self.put("/orders/update", request).await
     }
 
+    /// Cancels an order on the gateway.
     pub async fn cancel_order(
         &self,
         request: &CancelOrderRequest,
@@ -264,12 +289,13 @@ impl SinopacHttpClient {
         self.delete("/orders/cancel", request).await
     }
 
+    /// Fetches all active trades from the gateway.
     pub async fn list_trades(&self) -> Result<Vec<TradeInfo>, SinopacHttpError> {
         self.get("/orders/trades").await
     }
 
-    // ─── Account ─────────────────────────────────
 
+    /// Fetches positions for the given market type.
     pub async fn list_positions(
         &self,
         query: &PositionsQuery,
@@ -277,14 +303,17 @@ impl SinopacHttpClient {
         self.get_with_params("/account/positions", query).await
     }
 
+    /// Fetches the account balance from the gateway.
     pub async fn account_balance(&self) -> Result<AccountBalance, SinopacHttpError> {
         self.get("/account/balance").await
     }
 
+    /// Fetches margin information from the gateway.
     pub async fn margin(&self) -> Result<MarginInfo, SinopacHttpError> {
         self.get("/account/margin").await
     }
 
+    /// Fetches profit and loss records from the gateway.
     pub async fn list_profit_loss(&self) -> Result<Vec<ProfitLoss>, SinopacHttpError> {
         self.get("/account/pnl").await
     }

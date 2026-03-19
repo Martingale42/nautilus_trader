@@ -1,3 +1,19 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+//! Python bindings for the Sinopac HTTP client.
+
 use std::str::FromStr;
 
 use nautilus_core::UnixNanos;
@@ -23,18 +39,21 @@ use crate::common::parse::parse_instrument_id;
 
 #[pymethods]
 impl SinopacHttpClient {
+    /// Creates a new Sinopac HTTP client.
     #[new]
     #[pyo3(signature = (base_url=None))]
     fn py_new(base_url: Option<String>) -> PyResult<Self> {
         Self::new(base_url).map_err(to_pyruntime_err)
     }
 
+    /// Returns the base URL of the gateway.
     #[getter]
     #[pyo3(name = "base_url")]
     fn py_base_url(&self) -> &str {
         self.base_url()
     }
 
+    /// Queries the gateway connection status.
     #[pyo3(name = "status")]
     fn py_status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
@@ -44,6 +63,7 @@ impl SinopacHttpClient {
         })
     }
 
+    /// Sends a login request to the gateway.
     #[pyo3(name = "login")]
     #[pyo3(signature = (api_key, secret_key, ca_path=None, ca_passwd=None, simulation=false))]
     fn py_login<'py>(
@@ -74,6 +94,7 @@ impl SinopacHttpClient {
         })
     }
 
+    /// Sends a logout request to the gateway.
     #[pyo3(name = "logout")]
     fn py_logout<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
@@ -265,7 +286,6 @@ impl SinopacHttpClient {
         })
     }
 
-    // ─── Order Operations ───────────────────────
 
     /// Place an order via the gateway.
     #[pyo3(name = "place_order")]
@@ -380,7 +400,6 @@ impl SinopacHttpClient {
         })
     }
 
-    // ─── Account Operations ─────────────────────
 
     /// Get account positions.
     #[pyo3(name = "list_positions")]

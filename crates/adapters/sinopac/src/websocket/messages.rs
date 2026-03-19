@@ -1,7 +1,23 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+//! WebSocket message types for the Sinopac gateway.
+
 use serde::{Deserialize, Serialize};
 
-// ─── Client → Server ─────────────────────────────
 
+/// WebSocket subscribe/unsubscribe command message.
 #[derive(Debug, Serialize)]
 pub struct WsSubscribeMsg {
     pub action: String,
@@ -9,7 +25,6 @@ pub struct WsSubscribeMsg {
     pub quote_type: String,
 }
 
-// ─── Server → Client (envelope) ──────────────────
 
 /// Raw WS message envelope. The `type` field determines the payload shape.
 #[derive(Debug, Deserialize)]
@@ -29,14 +44,15 @@ pub enum WsIncomingMsg {
     Error(WsErrorMsg),
 }
 
-// ─── Market Data Payloads ────────────────────────
 
+/// WebSocket tick message.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsTickMsg {
     pub code: String,
     pub data: WsTickData,
 }
 
+/// WebSocket tick data payload.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsTickData {
     pub close: f64,
@@ -57,12 +73,14 @@ pub struct WsTickData {
     pub underlying_price: Option<f64>,
 }
 
+/// WebSocket bid/ask message.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsBidAskMsg {
     pub code: String,
     pub data: WsBidAskData,
 }
 
+/// WebSocket bid/ask data payload.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsBidAskData {
     pub bid_price: Vec<f64>,
@@ -72,7 +90,6 @@ pub struct WsBidAskData {
     pub timestamp: String,
 }
 
-// ─── Order Update Payloads ───────────────────────
 
 /// Raw order update envelope. The `event` field discriminates the data type.
 #[derive(Debug, Clone, Deserialize)]
@@ -115,8 +132,8 @@ pub enum OrderEvent {
     FuturesDeal(FuturesDealEventData),
 }
 
-// ─── Shared sub-structs ─────────────────────────
 
+/// Operation information for order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OperationInfo {
     pub op_type: String,
@@ -124,6 +141,7 @@ pub struct OperationInfo {
     pub op_msg: String,
 }
 
+/// Order status information from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OrderStatusInfo {
     pub id: String,
@@ -133,6 +151,7 @@ pub struct OrderStatusInfo {
     pub order_quantity: i64,
 }
 
+/// Stock contract information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockContractInfo {
     pub security_type: String,
@@ -142,6 +161,7 @@ pub struct StockContractInfo {
     pub name: String,
 }
 
+/// Futures contract information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesContractInfo {
     pub security_type: String,
@@ -155,8 +175,8 @@ pub struct FuturesContractInfo {
     pub option_right: Option<String>,
 }
 
-// ─── Stock order fields ─────────────────────────
 
+/// Stock order information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockOrderInfo {
     pub id: String,
@@ -173,8 +193,8 @@ pub struct StockOrderInfo {
     pub order_lot: Option<String>,
 }
 
-// ─── Futures order fields ───────────────────────
 
+/// Futures order information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesOrderInfo {
     pub id: String,
@@ -193,8 +213,8 @@ pub struct FuturesOrderInfo {
     pub combo: Option<bool>,
 }
 
-// ─── The 4 event data types ─────────────────────
 
+/// Stock order event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockOrderEventData {
     pub operation: OperationInfo,
@@ -203,6 +223,7 @@ pub struct StockOrderEventData {
     pub contract: StockContractInfo,
 }
 
+/// Stock deal event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockDealEventData {
     pub trade_id: String,
@@ -223,6 +244,7 @@ pub struct StockDealEventData {
     pub order_lot: Option<String>,
 }
 
+/// Futures order event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesOrderEventData {
     pub operation: OperationInfo,
@@ -231,6 +253,7 @@ pub struct FuturesOrderEventData {
     pub contract: FuturesContractInfo,
 }
 
+/// Futures deal event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesDealEventData {
     pub trade_id: String,
@@ -253,14 +276,15 @@ pub struct FuturesDealEventData {
     pub combo: Option<bool>,
 }
 
-// ─── Confirmation & Error ────────────────────────
 
+/// WebSocket subscription confirmation message.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsConfirmMsg {
     pub code: String,
     pub quote_type: String,
 }
 
+/// WebSocket error message from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsErrorMsg {
     pub detail: String,
@@ -268,10 +292,12 @@ pub struct WsErrorMsg {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
     use crate::common::testing::load_test_json_as;
 
-    #[test]
+    #[rstest]
     fn test_deserialize_ws_tick_stock() {
         let msg: WsIncomingMsg = load_test_json_as("ws_tick_stock.json");
         match msg {
@@ -285,7 +311,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_deserialize_ws_tick_futures() {
         let msg: WsIncomingMsg = load_test_json_as("ws_tick_futures.json");
         match msg {
@@ -298,7 +324,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_deserialize_ws_bidask() {
         let msg: WsIncomingMsg = load_test_json_as("ws_bidask.json");
         match msg {
@@ -313,7 +339,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_deserialize_ws_order_update() {
         let msg: WsIncomingMsg = load_test_json_as("ws_order_update.json");
         match msg {
@@ -325,7 +351,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_deserialize_ws_subscribed() {
         let msg: WsIncomingMsg = load_test_json_as("ws_subscribed.json");
         match msg {
@@ -337,7 +363,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_deserialize_ws_error() {
         let msg: WsIncomingMsg = load_test_json_as("ws_error.json");
         match msg {
@@ -348,9 +374,8 @@ mod tests {
         }
     }
 
-    // ─── Order Event Deserialization Tests ────────
 
-    #[test]
+    #[rstest]
     fn test_parse_order_event_stock_order() {
         let msg: WsIncomingMsg = load_test_json_as("ws_order_stock.json");
         match msg {
@@ -378,7 +403,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_order_event_stock_deal() {
         let msg: WsIncomingMsg = load_test_json_as("ws_deal_stock.json");
         match msg {
@@ -402,7 +427,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_order_event_futures_order() {
         let msg: WsIncomingMsg = load_test_json_as("ws_order_futures.json");
         match msg {
@@ -429,7 +454,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_order_event_futures_deal() {
         let msg: WsIncomingMsg = load_test_json_as("ws_deal_futures.json");
         match msg {
@@ -454,7 +479,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn test_parse_order_event_unknown_type() {
         let msg = WsOrderUpdateMsg {
             event: "OrderState.Unknown".to_string(),
