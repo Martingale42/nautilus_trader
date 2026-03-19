@@ -6,12 +6,12 @@ use serde::{Deserialize, Serialize};
     pyo3::pyclass(
         eq,
         eq_int,
-        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        module = "nautilus_trader.core.nautilus_pyo3.sinopac",
         from_py_object
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ShioajiAction {
+pub enum SinopacAction {
     Buy,
     Sell,
 }
@@ -22,12 +22,12 @@ pub enum ShioajiAction {
     pyo3::pyclass(
         eq,
         eq_int,
-        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        module = "nautilus_trader.core.nautilus_pyo3.sinopac",
         from_py_object
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ShioajiPriceType {
+pub enum SinopacPriceType {
     LMT,
     MKT,
     MKP,
@@ -39,12 +39,12 @@ pub enum ShioajiPriceType {
     pyo3::pyclass(
         eq,
         eq_int,
-        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        module = "nautilus_trader.core.nautilus_pyo3.sinopac",
         from_py_object
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ShioajiOrderType {
+pub enum SinopacOrderType {
     ROD,
     IOC,
     FOK,
@@ -56,12 +56,12 @@ pub enum ShioajiOrderType {
     pyo3::pyclass(
         eq,
         eq_int,
-        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        module = "nautilus_trader.core.nautilus_pyo3.sinopac",
         from_py_object
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ShioajiOrderCond {
+pub enum SinopacOrderCond {
     Cash,
     MarginTrading,
     ShortSelling,
@@ -73,12 +73,12 @@ pub enum ShioajiOrderCond {
     pyo3::pyclass(
         eq,
         eq_int,
-        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        module = "nautilus_trader.core.nautilus_pyo3.sinopac",
         from_py_object
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ShioajiOrderLot {
+pub enum SinopacOrderLot {
     Common,
     Odd,
     IntradayOdd,
@@ -91,13 +91,13 @@ pub enum ShioajiOrderLot {
     pyo3::pyclass(
         eq,
         eq_int,
-        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        module = "nautilus_trader.core.nautilus_pyo3.sinopac",
         from_py_object
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ShioajiQuoteType {
+pub enum SinopacQuoteType {
     Tick,
     BidAsk,
 }
@@ -108,13 +108,13 @@ pub enum ShioajiQuoteType {
     pyo3::pyclass(
         eq,
         eq_int,
-        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        module = "nautilus_trader.core.nautilus_pyo3.sinopac",
         from_py_object
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ShioajiMarket {
+pub enum SinopacMarket {
     Stock,
     Futures,
     Options,
@@ -126,19 +126,19 @@ pub enum ShioajiMarket {
     pyo3::pyclass(
         eq,
         eq_int,
-        module = "nautilus_trader.core.nautilus_pyo3.shioaji",
+        module = "nautilus_trader.core.nautilus_pyo3.sinopac",
         from_py_object
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ShioajiExchange {
+pub enum SinopacExchange {
     TSE,
     OTC,
 }
 
 /// Order update event types from gateway WS.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ShioajiOrderEvent {
+pub enum SinopacOrderEvent {
     #[serde(rename = "OrderState.StockOrder")]
     StockOrder,
     #[serde(rename = "OrderState.StockDeal")]

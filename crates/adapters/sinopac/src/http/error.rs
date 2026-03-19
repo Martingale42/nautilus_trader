@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Clone, Error)]
-pub enum ShioajiHttpError {
+pub enum SinopacHttpError {
     #[error("HTTP request failed: {0}")]
     NetworkError(String),
     #[error("JSON deserialization failed: {0}")]
@@ -12,13 +12,13 @@ pub enum ShioajiHttpError {
     NotConnected,
 }
 
-impl From<serde_json::Error> for ShioajiHttpError {
+impl From<serde_json::Error> for SinopacHttpError {
     fn from(e: serde_json::Error) -> Self {
         Self::JsonError(e.to_string())
     }
 }
 
-impl From<nautilus_network::http::HttpClientError> for ShioajiHttpError {
+impl From<nautilus_network::http::HttpClientError> for SinopacHttpError {
     fn from(e: nautilus_network::http::HttpClientError) -> Self {
         Self::NetworkError(e.to_string())
     }

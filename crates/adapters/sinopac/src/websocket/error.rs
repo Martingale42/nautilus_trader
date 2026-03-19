@@ -1,9 +1,9 @@
 use thiserror::Error;
 
-pub type ShioajiWsResult<T> = Result<T, ShioajiWsError>;
+pub type SinopacWsResult<T> = Result<T, SinopacWsError>;
 
 #[derive(Debug, Clone, Error)]
-pub enum ShioajiWsError {
+pub enum SinopacWsError {
     #[error("WebSocket not connected")]
     NotConnected,
     #[error("Send failed: {0}")]

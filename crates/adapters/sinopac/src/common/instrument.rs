@@ -36,7 +36,7 @@ pub fn options_multiplier(symbol: &str) -> f64 {
     }
 }
 
-/// Extract the root symbol from a Shioaji futures/options contract code.
+/// Extract the root symbol from a Sinopac futures/options contract code.
 ///
 /// Examples:
 ///   "TXFC6"     -> "TXF"  (strip delivery month code)

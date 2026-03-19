@@ -14,7 +14,7 @@ use nautilus_model::{
 use pyo3::prelude::*;
 
 use crate::websocket::{
-    client::ShioajiWebSocketClient,
+    client::SinopacWebSocketClient,
     messages::WsIncomingMsg,
     order_parse::order_event_to_pydict,
     parse::{
@@ -25,7 +25,7 @@ use crate::websocket::{
 };
 
 #[pymethods]
-impl ShioajiWebSocketClient {
+impl SinopacWebSocketClient {
     #[new]
     #[pyo3(signature = (url=None))]
     fn py_new(url: Option<String>) -> Self {
@@ -82,7 +82,7 @@ impl ShioajiWebSocketClient {
                 let _client_guard = client;
 
                 if let Some(mut rx) = msg_rx {
-                    tracing::info!("Shioaji WS callback loop started");
+                    tracing::info!("Sinopac WS callback loop started");
                     let mut msg_count: u64 = 0;
 
                     while let Some(msg) = rx.recv().await {
@@ -223,7 +223,7 @@ impl ShioajiWebSocketClient {
                     }
 
                     tracing::warn!(
-                        "Shioaji WS callback loop ended after {msg_count} messages"
+                        "Sinopac WS callback loop ended after {msg_count} messages"
                     );
                 }
             });

@@ -4,30 +4,30 @@ use nautilus_network::http::{HttpClient, Method};
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{
-    error::ShioajiHttpError,
+    error::SinopacHttpError,
     models::*,
     query::{KBarsQuery, PositionsQuery, SnapshotsQuery, TicksQuery},
 };
-use crate::common::{consts::SHIOAJI_GATEWAY_HTTP_URL, urls::gateway_http_url};
+use crate::common::{consts::SINOPAC_GATEWAY_HTTP_URL, urls::gateway_http_url};
 
-/// HTTP client for communicating with the Shioaji FastAPI gateway.
+/// HTTP client for communicating with the Sinopac FastAPI gateway.
 #[derive(Clone, Debug)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_pyo3.shioaji", skip_from_py_object)
+    pyo3::pyclass(module = "nautilus_pyo3.sinopac", skip_from_py_object)
 )]
-pub struct ShioajiHttpClient {
+pub struct SinopacHttpClient {
     base_url: String,
     client: HttpClient,
 }
 
-impl ShioajiHttpClient {
-    /// Creates a new [`ShioajiHttpClient`].
+impl SinopacHttpClient {
+    /// Creates a new [`SinopacHttpClient`].
     ///
     /// The `base_url` is the raw gateway URL (e.g. `http://localhost:8000`).
     /// The `/api` prefix is appended automatically via [`gateway_http_url`].
-    pub fn new(base_url: Option<String>) -> Result<Self, ShioajiHttpError> {
-        let raw_base = base_url.unwrap_or_else(|| SHIOAJI_GATEWAY_HTTP_URL.to_string());
+    pub fn new(base_url: Option<String>) -> Result<Self, SinopacHttpError> {
+        let raw_base = base_url.unwrap_or_else(|| SINOPAC_GATEWAY_HTTP_URL.to_string());
         let base_url = gateway_http_url(&raw_base);
         let client = HttpClient::new(HashMap::new(), Vec::new(), Vec::new(), None, Some(30), None)?;
         Ok(Self { base_url, client })
@@ -39,7 +39,7 @@ impl ShioajiHttpClient {
     }
 
     /// Sends a GET request and deserializes the JSON response.
-    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ShioajiHttpError> {
+    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, SinopacHttpError> {
         let url = format!("{}{path}", self.base_url);
         let response = self
             .client
@@ -48,13 +48,13 @@ impl ShioajiHttpClient {
 
         if response.status.as_u16() >= 400 {
             let body = String::from_utf8_lossy(&response.body).to_string();
-            return Err(ShioajiHttpError::GatewayError {
+            return Err(SinopacHttpError::GatewayError {
                 status: response.status.as_u16(),
                 body,
             });
         }
 
-        serde_json::from_slice(&response.body).map_err(ShioajiHttpError::from)
+        serde_json::from_slice(&response.body).map_err(SinopacHttpError::from)
     }
 
     /// Sends a GET request with query parameters and deserializes the JSON response.
@@ -62,7 +62,7 @@ impl ShioajiHttpClient {
         &self,
         path: &str,
         params: &P,
-    ) -> Result<T, ShioajiHttpError> {
+    ) -> Result<T, SinopacHttpError> {
         let url = format!("{}{path}", self.base_url);
         let response = self
             .client
@@ -71,13 +71,13 @@ impl ShioajiHttpClient {
 
         if response.status.as_u16() >= 400 {
             let body = String::from_utf8_lossy(&response.body).to_string();
-            return Err(ShioajiHttpError::GatewayError {
+            return Err(SinopacHttpError::GatewayError {
                 status: response.status.as_u16(),
                 body,
             });
         }
 
-        serde_json::from_slice(&response.body).map_err(ShioajiHttpError::from)
+        serde_json::from_slice(&response.body).map_err(SinopacHttpError::from)
     }
 
     /// Sends a POST request with a JSON body and deserializes the JSON response.
@@ -85,7 +85,7 @@ impl ShioajiHttpClient {
         &self,
         path: &str,
         body: &B,
-    ) -> Result<T, ShioajiHttpError> {
+    ) -> Result<T, SinopacHttpError> {
         let url = format!("{}{path}", self.base_url);
         let body_bytes = serde_json::to_vec(body)?;
         let mut headers = HashMap::new();
@@ -108,13 +108,13 @@ impl ShioajiHttpClient {
 
         if response.status.as_u16() >= 400 {
             let body = String::from_utf8_lossy(&response.body).to_string();
-            return Err(ShioajiHttpError::GatewayError {
+            return Err(SinopacHttpError::GatewayError {
                 status: response.status.as_u16(),
                 body,
             });
         }
 
-        serde_json::from_slice(&response.body).map_err(ShioajiHttpError::from)
+        serde_json::from_slice(&response.body).map_err(SinopacHttpError::from)
     }
 
     /// Sends a PUT request with a JSON body and deserializes the JSON response.
@@ -122,7 +122,7 @@ impl ShioajiHttpClient {
         &self,
         path: &str,
         body: &B,
-    ) -> Result<T, ShioajiHttpError> {
+    ) -> Result<T, SinopacHttpError> {
         let url = format!("{}{path}", self.base_url);
         let body_bytes = serde_json::to_vec(body)?;
         let mut headers = HashMap::new();
@@ -145,13 +145,13 @@ impl ShioajiHttpClient {
 
         if response.status.as_u16() >= 400 {
             let body = String::from_utf8_lossy(&response.body).to_string();
-            return Err(ShioajiHttpError::GatewayError {
+            return Err(SinopacHttpError::GatewayError {
                 status: response.status.as_u16(),
                 body,
             });
         }
 
-        serde_json::from_slice(&response.body).map_err(ShioajiHttpError::from)
+        serde_json::from_slice(&response.body).map_err(SinopacHttpError::from)
     }
 
     /// Sends a DELETE request with a JSON body and deserializes the JSON response.
@@ -159,7 +159,7 @@ impl ShioajiHttpClient {
         &self,
         path: &str,
         body: &B,
-    ) -> Result<T, ShioajiHttpError> {
+    ) -> Result<T, SinopacHttpError> {
         let url = format!("{}{path}", self.base_url);
         let body_bytes = serde_json::to_vec(body)?;
         let mut headers = HashMap::new();
@@ -182,45 +182,45 @@ impl ShioajiHttpClient {
 
         if response.status.as_u16() >= 400 {
             let body = String::from_utf8_lossy(&response.body).to_string();
-            return Err(ShioajiHttpError::GatewayError {
+            return Err(SinopacHttpError::GatewayError {
                 status: response.status.as_u16(),
                 body,
             });
         }
 
-        serde_json::from_slice(&response.body).map_err(ShioajiHttpError::from)
+        serde_json::from_slice(&response.body).map_err(SinopacHttpError::from)
     }
 
     // ─── Auth ────────────────────────────────────
 
-    pub async fn login(&self, request: &LoginRequest) -> Result<LoginResponse, ShioajiHttpError> {
+    pub async fn login(&self, request: &LoginRequest) -> Result<LoginResponse, SinopacHttpError> {
         self.post("/auth/login", request).await
     }
 
-    pub async fn logout(&self) -> Result<MessageResponse, ShioajiHttpError> {
+    pub async fn logout(&self) -> Result<MessageResponse, SinopacHttpError> {
         self.post("/auth/logout", &serde_json::Value::Object(Default::default()))
             .await
     }
 
-    pub async fn status(&self) -> Result<StatusResponse, ShioajiHttpError> {
+    pub async fn status(&self) -> Result<StatusResponse, SinopacHttpError> {
         self.get("/auth/status").await
     }
 
     // ─── Contracts ───────────────────────────────
 
-    pub async fn list_stocks(&self) -> Result<Vec<StockContract>, ShioajiHttpError> {
+    pub async fn list_stocks(&self) -> Result<Vec<StockContract>, SinopacHttpError> {
         self.get("/contracts/stocks").await
     }
 
-    pub async fn get_stock(&self, code: &str) -> Result<StockContract, ShioajiHttpError> {
+    pub async fn get_stock(&self, code: &str) -> Result<StockContract, SinopacHttpError> {
         self.get(&format!("/contracts/stocks/{code}")).await
     }
 
-    pub async fn list_futures(&self) -> Result<Vec<FuturesContract>, ShioajiHttpError> {
+    pub async fn list_futures(&self) -> Result<Vec<FuturesContract>, SinopacHttpError> {
         self.get("/contracts/futures").await
     }
 
-    pub async fn list_options(&self) -> Result<Vec<OptionsContract>, ShioajiHttpError> {
+    pub async fn list_options(&self) -> Result<Vec<OptionsContract>, SinopacHttpError> {
         self.get("/contracts/options").await
     }
 
@@ -229,15 +229,15 @@ impl ShioajiHttpClient {
     pub async fn snapshots(
         &self,
         query: &SnapshotsQuery,
-    ) -> Result<Vec<SnapshotData>, ShioajiHttpError> {
+    ) -> Result<Vec<SnapshotData>, SinopacHttpError> {
         self.get_with_params("/market/snapshots", query).await
     }
 
-    pub async fn ticks(&self, query: &TicksQuery) -> Result<TicksResponse, ShioajiHttpError> {
+    pub async fn ticks(&self, query: &TicksQuery) -> Result<TicksResponse, SinopacHttpError> {
         self.get_with_params("/market/ticks", query).await
     }
 
-    pub async fn kbars(&self, query: &KBarsQuery) -> Result<KBarsResponse, ShioajiHttpError> {
+    pub async fn kbars(&self, query: &KBarsQuery) -> Result<KBarsResponse, SinopacHttpError> {
         self.get_with_params("/market/kbars", query).await
     }
 
@@ -246,25 +246,25 @@ impl ShioajiHttpClient {
     pub async fn place_order(
         &self,
         request: &PlaceOrderRequest,
-    ) -> Result<PlaceOrderResponse, ShioajiHttpError> {
+    ) -> Result<PlaceOrderResponse, SinopacHttpError> {
         self.post("/orders/place", request).await
     }
 
     pub async fn update_order(
         &self,
         request: &UpdateOrderRequest,
-    ) -> Result<TradeIdResponse, ShioajiHttpError> {
+    ) -> Result<TradeIdResponse, SinopacHttpError> {
         self.put("/orders/update", request).await
     }
 
     pub async fn cancel_order(
         &self,
         request: &CancelOrderRequest,
-    ) -> Result<TradeIdResponse, ShioajiHttpError> {
+    ) -> Result<TradeIdResponse, SinopacHttpError> {
         self.delete("/orders/cancel", request).await
     }
 
-    pub async fn list_trades(&self) -> Result<Vec<TradeInfo>, ShioajiHttpError> {
+    pub async fn list_trades(&self) -> Result<Vec<TradeInfo>, SinopacHttpError> {
         self.get("/orders/trades").await
     }
 
@@ -273,19 +273,19 @@ impl ShioajiHttpClient {
     pub async fn list_positions(
         &self,
         query: &PositionsQuery,
-    ) -> Result<Vec<Position>, ShioajiHttpError> {
+    ) -> Result<Vec<Position>, SinopacHttpError> {
         self.get_with_params("/account/positions", query).await
     }
 
-    pub async fn account_balance(&self) -> Result<AccountBalance, ShioajiHttpError> {
+    pub async fn account_balance(&self) -> Result<AccountBalance, SinopacHttpError> {
         self.get("/account/balance").await
     }
 
-    pub async fn margin(&self) -> Result<MarginInfo, ShioajiHttpError> {
+    pub async fn margin(&self) -> Result<MarginInfo, SinopacHttpError> {
         self.get("/account/margin").await
     }
 
-    pub async fn list_profit_loss(&self) -> Result<Vec<ProfitLoss>, ShioajiHttpError> {
+    pub async fn list_profit_loss(&self) -> Result<Vec<ProfitLoss>, SinopacHttpError> {
         self.get("/account/pnl").await
     }
 }

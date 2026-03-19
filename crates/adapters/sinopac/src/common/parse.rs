@@ -2,19 +2,19 @@ use nautilus_model::{enums::OrderSide, identifiers::InstrumentId};
 
 use super::consts::SINOPAC;
 
-/// Constructs an `InstrumentId` from a Shioaji contract code.
+/// Constructs an `InstrumentId` from a Sinopac contract code.
 ///
 /// Example: `"2330"` → `InstrumentId("2330.SINOPAC")`
 pub fn parse_instrument_id(code: &str) -> anyhow::Result<InstrumentId> {
     InstrumentId::from_as_ref(format!("{code}.{SINOPAC}"))
 }
 
-/// Maps a Shioaji action string to a Nautilus `OrderSide`.
+/// Maps a Sinopac action string to a Nautilus `OrderSide`.
 pub fn parse_order_side(action: &str) -> anyhow::Result<OrderSide> {
     match action {
         "Buy" => Ok(OrderSide::Buy),
         "Sell" => Ok(OrderSide::Sell),
-        other => anyhow::bail!("Unknown Shioaji action: {other}"),
+        other => anyhow::bail!("Unknown Sinopac action: {other}"),
     }
 }
 

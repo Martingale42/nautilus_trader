@@ -1,12 +1,12 @@
 [package]
-name = "nautilus-shioaji"
+name = "nautilus-sinopac"
 readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Shioaji adapter for the Nautilus trading engine"
+description = "Sinopac adapter for the Nautilus trading engine"
 categories.workspace = true
 keywords.workspace = true
 documentation.workspace = true
@@ -17,7 +17,7 @@ homepage.workspace = true
 workspace = true
 
 [lib]
-name = "nautilus_shioaji"
+name = "nautilus_sinopac"
 crate-type = ["rlib", "cdylib"]
 
 [features]

@@ -7,24 +7,24 @@ use tokio::sync::mpsc;
 use tracing::{debug, info};
 
 use super::{
-    error::ShioajiWsError,
+    error::SinopacWsError,
     handler::ws_handler_loop,
     messages::WsIncomingMsg,
     WsCommand,
 };
-use crate::common::consts::SHIOAJI_GATEWAY_WS_URL;
+use crate::common::consts::SINOPAC_GATEWAY_WS_URL;
 
 /// WebSocket client for streaming market data and order updates
-/// from the Shioaji FastAPI gateway.
+/// from the Sinopac FastAPI gateway.
 ///
 /// Uses interior mutability (`Mutex`) for connection state so that
 /// PyO3 `#[pymethods]` (which receive `&self`) can connect/disconnect.
 #[derive(Clone)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_pyo3.shioaji", skip_from_py_object)
+    pyo3::pyclass(module = "nautilus_pyo3.sinopac", skip_from_py_object)
 )]
-pub struct ShioajiWebSocketClient {
+pub struct SinopacWebSocketClient {
     url: String,
     cmd_tx: Arc<Mutex<Option<mpsc::UnboundedSender<WsCommand>>>>,
     msg_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<WsIncomingMsg>>>>,
@@ -32,11 +32,11 @@ pub struct ShioajiWebSocketClient {
     task_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
-impl ShioajiWebSocketClient {
-    /// Creates a new [`ShioajiWebSocketClient`].
+impl SinopacWebSocketClient {
+    /// Creates a new [`SinopacWebSocketClient`].
     #[must_use]
     pub fn new(url: Option<String>) -> Self {
-        let url = url.unwrap_or_else(|| SHIOAJI_GATEWAY_WS_URL.to_string());
+        let url = url.unwrap_or_else(|| SINOPAC_GATEWAY_WS_URL.to_string());
         Self {
             url,
             cmd_tx: Arc::new(Mutex::new(None)),
@@ -53,7 +53,7 @@ impl ShioajiWebSocketClient {
     }
 
     /// Connects to the gateway WebSocket endpoint.
-    pub async fn connect(&self) -> Result<(), ShioajiWsError> {
+    pub async fn connect(&self) -> Result<(), SinopacWsError> {
         if self.is_connected() {
             return Ok(());
         }
@@ -62,7 +62,7 @@ impl ShioajiWebSocketClient {
 
         let (ws_stream, _response) = tokio_tungstenite::connect_async(&self.url)
             .await
-            .map_err(|e| ShioajiWsError::Connection(e.to_string()))?;
+            .map_err(|e| SinopacWsError::Connection(e.to_string()))?;
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (msg_tx, msg_rx) = mpsc::unbounded_channel();
@@ -81,7 +81,7 @@ impl ShioajiWebSocketClient {
     }
 
     /// Disconnects from the gateway.
-    pub async fn disconnect(&self) -> Result<(), ShioajiWsError> {
+    pub async fn disconnect(&self) -> Result<(), SinopacWsError> {
         if let Some(tx) = self.cmd_tx.lock().unwrap().take() {
             let _ = tx.send(WsCommand::Close);
         }
@@ -101,25 +101,25 @@ impl ShioajiWebSocketClient {
     }
 
     /// Subscribes to quote data for a contract.
-    pub fn subscribe(&self, code: &str, quote_type: &str) -> Result<(), ShioajiWsError> {
+    pub fn subscribe(&self, code: &str, quote_type: &str) -> Result<(), SinopacWsError> {
         let guard = self.cmd_tx.lock().unwrap();
-        let tx = guard.as_ref().ok_or(ShioajiWsError::NotConnected)?;
+        let tx = guard.as_ref().ok_or(SinopacWsError::NotConnected)?;
         tx.send(WsCommand::Subscribe {
             code: code.to_string(),
             quote_type: quote_type.to_string(),
         })
-        .map_err(|e| ShioajiWsError::Send(e.to_string()))
+        .map_err(|e| SinopacWsError::Send(e.to_string()))
     }
 
     /// Unsubscribes from quote data for a contract.
-    pub fn unsubscribe(&self, code: &str, quote_type: &str) -> Result<(), ShioajiWsError> {
+    pub fn unsubscribe(&self, code: &str, quote_type: &str) -> Result<(), SinopacWsError> {
         let guard = self.cmd_tx.lock().unwrap();
-        let tx = guard.as_ref().ok_or(ShioajiWsError::NotConnected)?;
+        let tx = guard.as_ref().ok_or(SinopacWsError::NotConnected)?;
         tx.send(WsCommand::Unsubscribe {
             code: code.to_string(),
             quote_type: quote_type.to_string(),
         })
-        .map_err(|e| ShioajiWsError::Send(e.to_string()))
+        .map_err(|e| SinopacWsError::Send(e.to_string()))
     }
 
     /// Takes the message receiver out of the client.

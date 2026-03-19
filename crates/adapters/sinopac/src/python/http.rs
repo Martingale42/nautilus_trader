@@ -9,7 +9,7 @@ use nautilus_model::{
 use pyo3::{conversion::IntoPyObjectExt, prelude::*, types::{PyDict, PyList}};
 
 use crate::http::{
-    client::ShioajiHttpClient,
+    client::SinopacHttpClient,
     models::{
         CancelOrderRequest, LoginRequest, PlaceOrderRequest, UpdateOrderRequest,
     },
@@ -22,7 +22,7 @@ use crate::http::{
 use crate::common::parse::parse_instrument_id;
 
 #[pymethods]
-impl ShioajiHttpClient {
+impl SinopacHttpClient {
     #[new]
     #[pyo3(signature = (base_url=None))]
     fn py_new(base_url: Option<String>) -> PyResult<Self> {
