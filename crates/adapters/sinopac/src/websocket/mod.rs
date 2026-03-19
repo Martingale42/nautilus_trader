@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! WebSocket module for the Sinopac gateway.
 
 pub mod client;

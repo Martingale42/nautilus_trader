@@ -55,5 +55,10 @@ def exec_client():
 
 
 @pytest.fixture
+def instrument_provider():
+    return None
+
+
+@pytest.fixture
 def account_state():
     return None

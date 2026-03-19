@@ -188,8 +188,7 @@ class SinopacExecutionClient(LiveExecutionClient):
 
     # -- WS message handler ---------------------------------------------------
 
-    def _handle_msg(self, msg) -> None:
-        """Handle incoming messages from Sinopac WS (order events as dicts)."""
+    def _handle_msg(self, msg: object) -> None:
         try:
             if nautilus_pyo3.is_pycapsule(msg):
                 return  # Market data — handled by DataClient
@@ -203,7 +202,6 @@ class SinopacExecutionClient(LiveExecutionClient):
             self._log.exception("Error handling Sinopac exec WS message", e)
 
     def _handle_order_event(self, event: dict) -> None:
-        """Dispatch order event dict to appropriate handler."""
         event_type = event.get("event_type")
         if event_type in ("stock_order", "futures_order"):
             self._handle_order_status_event(event)
@@ -507,7 +505,7 @@ class SinopacExecutionClient(LiveExecutionClient):
         for cancel in command.cancels:
             await self._cancel_order(cancel)
 
-    def _determine_market(self, instrument) -> str:
+    def _determine_market(self, instrument: object) -> str:
         if isinstance(instrument, Equity):
             return "stock"
         elif isinstance(instrument, FuturesContract):

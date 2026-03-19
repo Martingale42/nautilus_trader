@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! WebSocket message types for the Sinopac gateway.
 
 use serde::{Deserialize, Serialize};
@@ -19,8 +20,11 @@ use serde::{Deserialize, Serialize};
 /// WebSocket subscribe/unsubscribe command message.
 #[derive(Debug, Serialize)]
 pub struct WsSubscribeMsg {
+    /// The subscription action (subscribe or unsubscribe).
     pub action: String,
+    /// The contract code to subscribe to.
     pub contract_code: String,
+    /// The quote type (tick or bidask).
     pub quote_type: String,
 }
 
@@ -28,16 +32,22 @@ pub struct WsSubscribeMsg {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum WsIncomingMsg {
+    /// A tick data message.
     #[serde(rename = "tick")]
     Tick(WsTickMsg),
+    /// A bid/ask data message.
     #[serde(rename = "bidask")]
     BidAsk(WsBidAskMsg),
+    /// An order update event message.
     #[serde(rename = "order_update")]
     OrderUpdate(WsOrderUpdateMsg),
+    /// A subscription confirmation message.
     #[serde(rename = "subscribed")]
     Subscribed(WsConfirmMsg),
+    /// An unsubscription confirmation message.
     #[serde(rename = "unsubscribed")]
     Unsubscribed(WsConfirmMsg),
+    /// An error message from the gateway.
     #[serde(rename = "error")]
     Error(WsErrorMsg),
 }
@@ -45,27 +55,43 @@ pub enum WsIncomingMsg {
 /// WebSocket tick message.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsTickMsg {
+    /// The contract code.
     pub code: String,
+    /// The tick data payload.
     pub data: WsTickData,
 }
 
 /// WebSocket tick data payload.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsTickData {
+    /// The closing price.
     pub close: f64,
+    /// The tick volume.
     pub volume: i64,
+    /// The total accumulated volume.
     pub total_volume: i64,
+    /// The opening price.
     pub open: f64,
+    /// The high price.
     pub high: f64,
+    /// The low price.
     pub low: f64,
+    /// The total bid side volume.
     pub bid_side_total_vol: i64,
+    /// The total ask side volume.
     pub ask_side_total_vol: i64,
+    /// The tick timestamp string.
     pub timestamp: String,
+    /// The tick type indicator (stock-only, None for futures/options).
     // Stock-only fields (None for futures/options)
     pub tick_type: Option<i32>,
+    /// The average price (stock-only, None for futures/options).
     pub avg_price: Option<f64>,
+    /// The tick amount (stock-only, None for futures/options).
     pub amount: Option<f64>,
+    /// The percentage change (stock-only, None for futures/options).
     pub pct_chg: Option<f64>,
+    /// The underlying price (futures/options-only).
     // Futures/options-only field
     pub underlying_price: Option<f64>,
 }
@@ -73,24 +99,33 @@ pub struct WsTickData {
 /// WebSocket bid/ask message.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsBidAskMsg {
+    /// The contract code.
     pub code: String,
+    /// The bid/ask data payload.
     pub data: WsBidAskData,
 }
 
 /// WebSocket bid/ask data payload.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsBidAskData {
+    /// The bid prices.
     pub bid_price: Vec<f64>,
+    /// The bid volumes.
     pub bid_volume: Vec<i64>,
+    /// The ask prices.
     pub ask_price: Vec<f64>,
+    /// The ask volumes.
     pub ask_volume: Vec<i64>,
+    /// The quote timestamp string.
     pub timestamp: String,
 }
 
 /// Raw order update envelope. The `event` field discriminates the data type.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsOrderUpdateMsg {
+    /// The order event type string.
     pub event: String,
+    /// The raw order event data as JSON.
     pub data: serde_json::Value,
 }
 
@@ -122,50 +157,73 @@ impl WsOrderUpdateMsg {
 /// Typed order event after parsing the `data` field.
 #[derive(Debug, Clone)]
 pub enum OrderEvent {
+    /// A stock order state event.
     StockOrder(StockOrderEventData),
+    /// A stock deal (fill) event.
     StockDeal(StockDealEventData),
+    /// A futures order state event.
     FuturesOrder(FuturesOrderEventData),
+    /// A futures deal (fill) event.
     FuturesDeal(FuturesDealEventData),
 }
 
 /// Operation information for order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OperationInfo {
+    /// The operation type (New, Cancel, etc.).
     pub op_type: String,
+    /// The operation result code.
     pub op_code: String,
+    /// The operation result message.
     pub op_msg: String,
 }
 
 /// Order status information from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OrderStatusInfo {
+    /// The order status identifier.
     pub id: String,
+    /// The exchange timestamp.
     pub exchange_ts: f64,
+    /// The modified price after amendment.
     pub modified_price: f64,
+    /// The cancelled quantity.
     pub cancel_quantity: i64,
+    /// The total order quantity.
     pub order_quantity: i64,
 }
 
 /// Stock contract information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockContractInfo {
+    /// The security type identifier.
     pub security_type: String,
+    /// The exchange code.
     pub exchange: String,
+    /// The contract code.
     pub code: String,
+    /// The contract symbol.
     pub symbol: String,
+    /// The contract name.
     pub name: String,
 }
 
 /// Futures contract information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesContractInfo {
+    /// The security type identifier.
     pub security_type: String,
+    /// The contract code.
     pub code: String,
+    /// The exchange code.
     pub exchange: String,
+    /// The optional delivery month.
     #[serde(default)]
     pub delivery_month: Option<String>,
+    /// The optional strike price.
     #[serde(default)]
     pub strike_price: Option<f64>,
+    /// The optional option right type.
     #[serde(default)]
     pub option_right: Option<String>,
 }
@@ -173,16 +231,26 @@ pub struct FuturesContractInfo {
 /// Stock order information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockOrderInfo {
+    /// The order identifier.
     pub id: String,
+    /// The sequence number.
     pub seqno: String,
+    /// The order number.
     pub ordno: String,
+    /// The order action (Buy or Sell).
     pub action: String,
+    /// The order price.
     pub price: f64,
+    /// The order quantity.
     pub quantity: i64,
+    /// The order duration type.
     pub order_type: String,
+    /// The price type.
     pub price_type: String,
+    /// The optional order condition.
     #[serde(default)]
     pub order_cond: Option<String>,
+    /// The optional lot size type.
     #[serde(default)]
     pub order_lot: Option<String>,
 }
@@ -190,18 +258,29 @@ pub struct StockOrderInfo {
 /// Futures order information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesOrderInfo {
+    /// The order identifier.
     pub id: String,
+    /// The sequence number.
     pub seqno: String,
+    /// The order number.
     pub ordno: String,
+    /// The order action (Buy or Sell).
     pub action: String,
+    /// The order price.
     pub price: f64,
+    /// The order quantity.
     pub quantity: i64,
+    /// The order duration type.
     pub order_type: String,
+    /// The price type.
     pub price_type: String,
+    /// The optional market type (Day or Night).
     #[serde(default)]
     pub market_type: Option<String>,
+    /// The optional open/close type (New or Cover).
     #[serde(default)]
     pub oc_type: Option<String>,
+    /// Whether this is a combo order.
     #[serde(default)]
     pub combo: Option<bool>,
 }
@@ -209,29 +288,46 @@ pub struct FuturesOrderInfo {
 /// Stock order event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockOrderEventData {
+    /// The operation information.
     pub operation: OperationInfo,
+    /// The stock order details.
     pub order: StockOrderInfo,
+    /// The order status information.
     pub status: OrderStatusInfo,
+    /// The stock contract information.
     pub contract: StockContractInfo,
 }
 
 /// Stock deal event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockDealEventData {
+    /// The trade identifier.
     pub trade_id: String,
+    /// The sequence number.
     pub seqno: String,
+    /// The order number.
     pub ordno: String,
+    /// The optional exchange sequence number.
     #[serde(default)]
     pub exchange_seq: Option<String>,
+    /// The broker identifier.
     pub broker_id: String,
+    /// The account identifier.
     pub account_id: String,
+    /// The deal action (Buy or Sell).
     pub action: String,
+    /// The contract code.
     pub code: String,
+    /// The deal price.
     pub price: f64,
+    /// The deal quantity.
     pub quantity: i64,
+    /// The deal timestamp.
     pub ts: f64,
+    /// The optional order condition.
     #[serde(default)]
     pub order_cond: Option<String>,
+    /// The optional lot size type.
     #[serde(default)]
     pub order_lot: Option<String>,
 }
@@ -239,31 +335,49 @@ pub struct StockDealEventData {
 /// Futures order event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesOrderEventData {
+    /// The operation information.
     pub operation: OperationInfo,
+    /// The futures order details.
     pub order: FuturesOrderInfo,
+    /// The order status information.
     pub status: OrderStatusInfo,
+    /// The futures contract information.
     pub contract: FuturesContractInfo,
 }
 
 /// Futures deal event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesDealEventData {
+    /// The trade identifier.
     pub trade_id: String,
+    /// The sequence number.
     pub seqno: String,
+    /// The order number.
     pub ordno: String,
+    /// The optional exchange sequence number.
     #[serde(default)]
     pub exchange_seq: Option<String>,
+    /// The broker identifier.
     pub broker_id: String,
+    /// The account identifier.
     pub account_id: String,
+    /// The deal action (Buy or Sell).
     pub action: String,
+    /// The contract code.
     pub code: String,
+    /// The deal price.
     pub price: f64,
+    /// The deal quantity.
     pub quantity: i64,
+    /// The deal timestamp.
     pub ts: f64,
+    /// The optional security type.
     #[serde(default)]
     pub security_type: Option<String>,
+    /// The optional market type (Day or Night).
     #[serde(default)]
     pub market_type: Option<String>,
+    /// Whether this is a combo order.
     #[serde(default)]
     pub combo: Option<bool>,
 }
@@ -271,13 +385,16 @@ pub struct FuturesDealEventData {
 /// WebSocket subscription confirmation message.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsConfirmMsg {
+    /// The contract code.
     pub code: String,
+    /// The quote type (tick or bidask).
     pub quote_type: String,
 }
 
 /// WebSocket error message from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsErrorMsg {
+    /// The error detail message.
     pub detail: String,
 }
 

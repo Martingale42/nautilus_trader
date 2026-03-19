@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! Shared parsing helpers for Sinopac adapter.
 
 use nautilus_model::{enums::OrderSide, identifiers::InstrumentId};

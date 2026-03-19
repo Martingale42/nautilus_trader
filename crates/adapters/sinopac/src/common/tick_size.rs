@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! Tick size rules for TWSE/TAIFEX instruments.
 
 /// Returns the TWSE tick size and price precision for a given stock reference price.

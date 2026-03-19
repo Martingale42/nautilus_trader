@@ -68,10 +68,7 @@ async fn start_test_server() -> SocketAddr {
 
     // Wait for server to accept connections
     wait_until_async(
-        || {
-            let addr = addr;
-            async move { tokio::net::TcpStream::connect(addr).await.is_ok() }
-        },
+        || async move { tokio::net::TcpStream::connect(addr).await.is_ok() },
         Duration::from_secs(5),
     )
     .await;

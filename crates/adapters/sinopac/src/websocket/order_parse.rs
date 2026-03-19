@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! Parsers for Sinopac WebSocket order events.
 
 use pyo3::{prelude::*, types::PyDict};

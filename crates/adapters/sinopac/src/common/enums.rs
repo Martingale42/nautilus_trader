@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! Sinopac venue-specific enumerations.
 
 use serde::{Deserialize, Serialize};
@@ -22,13 +23,17 @@ use serde::{Deserialize, Serialize};
     pyo3::pyclass(
         eq,
         eq_int,
+        frozen,
         module = "nautilus_trader.core.nautilus_pyo3.sinopac",
-        from_py_object
+        rename_all = "SCREAMING_SNAKE_CASE",
+        from_py_object,
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SinopacAction {
+    /// Buy action.
     Buy,
+    /// Sell action.
     Sell,
 }
 
@@ -38,14 +43,19 @@ pub enum SinopacAction {
     pyo3::pyclass(
         eq,
         eq_int,
+        frozen,
         module = "nautilus_trader.core.nautilus_pyo3.sinopac",
-        from_py_object
+        rename_all = "SCREAMING_SNAKE_CASE",
+        from_py_object,
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SinopacPriceType {
+    /// Limit price.
     LMT,
+    /// Market price.
     MKT,
+    /// Market price with protection.
     MKP,
 }
 
@@ -55,14 +65,19 @@ pub enum SinopacPriceType {
     pyo3::pyclass(
         eq,
         eq_int,
+        frozen,
         module = "nautilus_trader.core.nautilus_pyo3.sinopac",
-        from_py_object
+        rename_all = "SCREAMING_SNAKE_CASE",
+        from_py_object,
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SinopacOrderType {
+    /// Rest of day duration.
     ROD,
+    /// Immediate or cancel duration.
     IOC,
+    /// Fill or kill duration.
     FOK,
 }
 
@@ -72,14 +87,19 @@ pub enum SinopacOrderType {
     pyo3::pyclass(
         eq,
         eq_int,
+        frozen,
         module = "nautilus_trader.core.nautilus_pyo3.sinopac",
-        from_py_object
+        rename_all = "SCREAMING_SNAKE_CASE",
+        from_py_object,
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SinopacOrderCond {
+    /// Cash order condition.
     Cash,
+    /// Margin trading condition.
     MarginTrading,
+    /// Short selling condition.
     ShortSelling,
 }
 
@@ -89,15 +109,21 @@ pub enum SinopacOrderCond {
     pyo3::pyclass(
         eq,
         eq_int,
+        frozen,
         module = "nautilus_trader.core.nautilus_pyo3.sinopac",
-        from_py_object
+        rename_all = "SCREAMING_SNAKE_CASE",
+        from_py_object,
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SinopacOrderLot {
+    /// Common lot size (1000 shares).
     Common,
+    /// Odd lot size.
     Odd,
+    /// Intraday odd lot size.
     IntradayOdd,
+    /// Fixing session lot size.
     Fixing,
 }
 
@@ -107,14 +133,18 @@ pub enum SinopacOrderLot {
     pyo3::pyclass(
         eq,
         eq_int,
+        frozen,
         module = "nautilus_trader.core.nautilus_pyo3.sinopac",
-        from_py_object
+        rename_all = "SCREAMING_SNAKE_CASE",
+        from_py_object,
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SinopacQuoteType {
+    /// Tick-by-tick quote type.
     Tick,
+    /// Bid/ask quote type.
     BidAsk,
 }
 
@@ -124,15 +154,20 @@ pub enum SinopacQuoteType {
     pyo3::pyclass(
         eq,
         eq_int,
+        frozen,
         module = "nautilus_trader.core.nautilus_pyo3.sinopac",
-        from_py_object
+        rename_all = "SCREAMING_SNAKE_CASE",
+        from_py_object,
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SinopacMarket {
+    /// Stock market.
     Stock,
+    /// Futures market.
     Futures,
+    /// Options market.
     Options,
 }
 
@@ -142,25 +177,33 @@ pub enum SinopacMarket {
     pyo3::pyclass(
         eq,
         eq_int,
+        frozen,
         module = "nautilus_trader.core.nautilus_pyo3.sinopac",
-        from_py_object
+        rename_all = "SCREAMING_SNAKE_CASE",
+        from_py_object,
     )
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SinopacExchange {
+    /// Taiwan Stock Exchange.
     TSE,
+    /// Over-the-Counter (Taipei Exchange).
     OTC,
 }
 
 /// Order update event types from gateway WS.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SinopacOrderEvent {
+    /// Stock order state update event.
     #[serde(rename = "OrderState.StockOrder")]
     StockOrder,
+    /// Stock deal (fill) event.
     #[serde(rename = "OrderState.StockDeal")]
     StockDeal,
+    /// Futures order state update event.
     #[serde(rename = "OrderState.FuturesOrder")]
     FuturesOrder,
+    /// Futures deal (fill) event.
     #[serde(rename = "OrderState.FuturesDeal")]
     FuturesDeal,
 }

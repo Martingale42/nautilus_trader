@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! Query parameter builders for Sinopac REST endpoints.
 
 use serde::Serialize;
@@ -19,7 +20,9 @@ use serde::Serialize;
 /// Query parameters for the snapshots endpoint.
 #[derive(Debug, Serialize)]
 pub struct SnapshotsQuery {
+    /// The comma-separated contract codes.
     pub codes: String,
+    /// The optional market type filter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub market: Option<String>,
 }
@@ -27,8 +30,11 @@ pub struct SnapshotsQuery {
 /// Query parameters for the ticks endpoint.
 #[derive(Debug, Serialize)]
 pub struct TicksQuery {
+    /// The contract code.
     pub code: String,
+    /// The query date.
     pub date: String,
+    /// The optional market type filter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub market: Option<String>,
 }
@@ -36,9 +42,13 @@ pub struct TicksQuery {
 /// Query parameters for the kbars endpoint.
 #[derive(Debug, Serialize)]
 pub struct KBarsQuery {
+    /// The contract code.
     pub code: String,
+    /// The start date for the query range.
     pub start: String,
+    /// The end date for the query range.
     pub end: String,
+    /// The optional market type filter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub market: Option<String>,
 }
@@ -46,6 +56,7 @@ pub struct KBarsQuery {
 /// Query parameters for the positions endpoint.
 #[derive(Debug, Serialize)]
 pub struct PositionsQuery {
+    /// The optional market type filter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub market: Option<String>,
 }

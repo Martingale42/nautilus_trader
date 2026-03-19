@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! REST API request and response models for the Sinopac gateway.
 
 use serde::{Deserialize, Serialize};
@@ -19,12 +20,17 @@ use serde::{Deserialize, Serialize};
 /// Login request payload.
 #[derive(Debug, Serialize)]
 pub struct LoginRequest {
+    /// The API key for authentication.
     pub api_key: String,
+    /// The secret key for authentication.
     pub secret_key: String,
+    /// The optional path to the CA certificate file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_path: Option<String>,
+    /// The optional CA certificate password.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_passwd: Option<String>,
+    /// Whether to use simulation mode.
     #[serde(default)]
     pub simulation: bool,
 }
@@ -32,149 +38,232 @@ pub struct LoginRequest {
 /// Login response containing account information.
 #[derive(Debug, Deserialize)]
 pub struct LoginResponse {
+    /// The list of account information entries.
     pub accounts: Vec<AccountInfo>,
 }
 
 /// Account information from the gateway.
 #[derive(Debug, Deserialize)]
 pub struct AccountInfo {
+    /// The account type identifier.
     pub account_type: String,
+    /// The account identifier.
     pub account_id: String,
 }
 
 /// Gateway status response.
 #[derive(Debug, Deserialize)]
 pub struct StatusResponse {
+    /// Whether the gateway is connected.
     pub connected: bool,
+    /// Whether the gateway is in simulation mode.
     pub simulation: bool,
 }
 
 /// Generic message response from the gateway.
 #[derive(Debug, Deserialize)]
 pub struct MessageResponse {
+    /// The response status message.
     pub status: String,
 }
 
 /// Response containing a trade ID.
 #[derive(Debug, Deserialize)]
 pub struct TradeIdResponse {
+    /// The response status message.
     pub status: String,
+    /// The trade identifier.
     pub trade_id: String,
 }
 
 /// Stock contract from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StockContract {
+    /// The contract code.
     pub code: String,
+    /// The contract symbol.
     pub symbol: String,
+    /// The contract name.
     pub name: String,
+    /// The exchange code.
     pub exchange: String,
+    /// The industry category.
     pub category: String,
+    /// The daily price limit up.
     pub limit_up: f64,
+    /// The daily price limit down.
     pub limit_down: f64,
+    /// The reference price.
     pub reference: f64,
+    /// The contract update date.
     pub update_date: String,
+    /// The day trade eligibility flag.
     pub day_trade: String,
 }
 
 /// Futures contract from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FuturesContract {
+    /// The contract code.
     pub code: String,
+    /// The contract symbol.
     pub symbol: String,
+    /// The contract name.
     pub name: String,
+    /// The product category.
     pub category: String,
+    /// The delivery month.
     pub delivery_month: String,
+    /// The delivery date.
     pub delivery_date: String,
+    /// The underlying kind identifier.
     pub underlying_kind: String,
+    /// The daily price limit up.
     pub limit_up: f64,
+    /// The daily price limit down.
     pub limit_down: f64,
+    /// The reference price.
     pub reference: f64,
+    /// The contract update date.
     pub update_date: String,
 }
 
 /// Options contract from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OptionsContract {
+    /// The contract code.
     pub code: String,
+    /// The contract symbol.
     pub symbol: String,
+    /// The contract name.
     pub name: String,
+    /// The product category.
     pub category: String,
+    /// The delivery month.
     pub delivery_month: String,
+    /// The delivery date.
     pub delivery_date: String,
+    /// The option strike price.
     pub strike_price: f64,
+    /// The option right type (Call or Put).
     pub option_right: String,
+    /// The underlying kind identifier.
     pub underlying_kind: String,
+    /// The daily price limit up.
     pub limit_up: f64,
+    /// The daily price limit down.
     pub limit_down: f64,
+    /// The reference price.
     pub reference: f64,
+    /// The contract update date.
     pub update_date: String,
 }
 
 /// Market snapshot data from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SnapshotData {
+    /// The contract code.
     pub code: String,
+    /// The exchange code.
     pub exchange: String,
+    /// The opening price.
     pub open: f64,
+    /// The high price.
     pub high: f64,
+    /// The low price.
     pub low: f64,
+    /// The closing price.
     pub close: f64,
+    /// The last tick volume.
     pub volume: i64,
+    /// The total accumulated volume.
     pub total_volume: i64,
+    /// The best bid price.
     pub buy_price: f64,
+    /// The best bid volume.
     pub buy_volume: f64,
+    /// The best ask price.
     pub sell_price: f64,
+    /// The best ask volume.
     pub sell_volume: f64,
+    /// The price change from reference.
     pub change_price: f64,
+    /// The price change rate from reference.
     pub change_rate: f64,
+    /// The timestamp in epoch milliseconds.
     pub ts: u64,
 }
 
 /// Historical tick data response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TicksResponse {
+    /// The contract code.
     pub code: String,
+    /// The timestamps in epoch milliseconds.
     pub ts: Vec<u64>,
+    /// The closing prices.
     pub close: Vec<f64>,
+    /// The tick volumes.
     pub volume: Vec<i64>,
+    /// The bid prices.
     pub bid_price: Vec<f64>,
+    /// The ask prices.
     pub ask_price: Vec<f64>,
+    /// The tick type indicators.
     pub tick_type: Vec<i32>,
 }
 
 /// Historical OHLCV bar data response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct KBarsResponse {
+    /// The contract code.
     pub code: String,
+    /// The bar timestamps in epoch milliseconds.
     pub ts: Vec<u64>,
+    /// The opening prices.
     pub open: Vec<f64>,
+    /// The high prices.
     pub high: Vec<f64>,
+    /// The low prices.
     pub low: Vec<f64>,
+    /// The closing prices.
     pub close: Vec<f64>,
+    /// The bar volumes.
     pub volume: Vec<i64>,
 }
 
 /// Place order request payload.
 #[derive(Debug, Serialize)]
 pub struct PlaceOrderRequest {
+    /// The contract code.
     pub code: String,
+    /// The order action (Buy or Sell).
     pub action: String,
+    /// The order price.
     pub price: f64,
+    /// The order quantity.
     pub quantity: i64,
+    /// The price type (LMT, MKT, MKP).
     pub price_type: String,
+    /// The order duration type (ROD, IOC, FOK).
     pub order_type: String,
+    /// The order condition (Cash, MarginTrading, ShortSelling).
     pub order_cond: String,
+    /// The lot size type (Common, Odd, IntradayOdd, Fixing).
     pub order_lot: String,
+    /// The market type (stock, futures, options).
     pub market: String,
 }
 
 /// Update order request payload.
 #[derive(Debug, Serialize)]
 pub struct UpdateOrderRequest {
+    /// The trade identifier to update.
     pub trade_id: String,
+    /// The optional new price.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price: Option<f64>,
+    /// The optional new quantity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quantity: Option<i64>,
 }
@@ -182,67 +271,99 @@ pub struct UpdateOrderRequest {
 /// Cancel order request payload.
 #[derive(Debug, Serialize)]
 pub struct CancelOrderRequest {
+    /// The trade identifier to cancel.
     pub trade_id: String,
 }
 
 /// Place order response from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlaceOrderResponse {
+    /// The trade identifier.
     pub trade_id: String,
+    /// The contract code.
     pub code: String,
+    /// The order action (Buy or Sell).
     pub action: String,
+    /// The order status.
     pub status: String,
 }
 
 /// Active trade information from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TradeInfo {
+    /// The trade identifier.
     pub trade_id: String,
+    /// The contract code.
     pub code: String,
+    /// The order action (Buy or Sell).
     pub action: String,
+    /// The order price.
     pub price: f64,
+    /// The order quantity.
     pub quantity: i64,
+    /// The order status.
     pub status: String,
+    /// The order duration type.
     pub order_type: String,
+    /// The price type.
     pub price_type: String,
 }
 
 /// Account position from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Position {
+    /// The contract code.
     pub code: String,
+    /// The position direction (Buy or Sell).
     pub direction: String,
+    /// The position quantity.
     pub quantity: i64,
+    /// The average entry price.
     pub price: f64,
+    /// The last traded price.
     pub last_price: f64,
+    /// The unrealized profit and loss.
     pub pnl: f64,
+    /// The yesterday position quantity.
     pub yd_quantity: i64,
 }
 
 /// Account balance from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AccountBalance {
+    /// The balance date.
     pub date: String,
+    /// The account balance amount.
     pub balance: f64,
 }
 
 /// Margin information from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MarginInfo {
+    /// The yesterday closing balance.
     pub yesterday_balance: f64,
+    /// The today current balance.
     pub today_balance: f64,
+    /// The available margin amount.
     pub available_margin: f64,
+    /// The risk indicator value.
     pub risk_indicator: f64,
 }
 
 /// Profit and loss record from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProfitLoss {
+    /// The contract code.
     pub code: String,
+    /// The traded quantity.
     pub quantity: i64,
+    /// The buy price.
     pub buy_price: f64,
+    /// The sell price.
     pub sell_price: f64,
+    /// The realized profit and loss.
     pub pnl: f64,
+    /// The profit ratio.
     pub pr_ratio: f64,
 }
 

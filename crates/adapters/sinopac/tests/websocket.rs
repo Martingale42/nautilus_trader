@@ -50,10 +50,7 @@ async fn ws_handler(ws: WebSocket) {
                         .get("contract_code")
                         .and_then(|v| v.as_str())
                         .unwrap_or("2330");
-                    let quote_type = cmd
-                        .get("quote_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let quote_type = cmd.get("quote_type").and_then(|v| v.as_str()).unwrap_or("");
 
                     if action == "subscribe" {
                         let ack = serde_json::json!({
@@ -96,10 +93,7 @@ async fn start_ws_server() -> SocketAddr {
 
     // Wait for server to accept connections
     wait_until_async(
-        || {
-            let addr = addr;
-            async move { tokio::net::TcpStream::connect(addr).await.is_ok() }
-        },
+        || async move { tokio::net::TcpStream::connect(addr).await.is_ok() },
         Duration::from_secs(5),
     )
     .await;
@@ -157,9 +151,7 @@ async fn test_subscribe_tick() {
     )
     .await;
 
-    client
-        .subscribe("2330", "tick")
-        .expect("subscribe failed");
+    client.subscribe("2330", "tick").expect("subscribe failed");
 
     let msg = client.next_message().await.expect("expected a message");
     match msg {

@@ -12,22 +12,24 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! WebSocket error types for the Sinopac adapter.
 
 use thiserror::Error;
 
-/// Result type alias for Sinopac WebSocket operations.
-pub type SinopacWsResult<T> = Result<T, SinopacWsError>;
-
 /// WebSocket error types for the Sinopac adapter.
 #[derive(Debug, Clone, Error)]
 pub enum SinopacWsError {
+    /// WebSocket is not connected.
     #[error("WebSocket not connected")]
     NotConnected,
+    /// WebSocket send operation failed.
     #[error("Send failed: {0}")]
     Send(String),
+    /// WebSocket connection attempt failed.
     #[error("Connection failed: {0}")]
     Connection(String),
+    /// JSON serialization or deserialization failed.
     #[error("JSON error: {0}")]
     Json(String),
 }

@@ -99,12 +99,10 @@ def get_sinopac_instrument_provider(
 
 @lru_cache(1)
 def _get_ws_msg_handlers() -> list:
-    """Return the shared list of WS message handlers."""
     return []
 
 
-def _ws_dispatch_callback(msg) -> None:
-    """Dispatch a WS message to all registered handlers."""
+def _ws_dispatch_callback(msg: object) -> None:
     for handler in _get_ws_msg_handlers():
         handler(msg)
 

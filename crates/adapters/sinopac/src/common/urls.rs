@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! URL resolution for the Sinopac gateway.
 
 /// Returns the gateway HTTP base URL, with optional override.

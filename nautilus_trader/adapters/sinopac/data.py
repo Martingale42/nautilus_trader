@@ -138,8 +138,7 @@ class SinopacDataClient(LiveMarketDataClient):
         for instrument in self._instrument_provider.get_all().values():
             self._handle_data(instrument)
 
-    def _handle_msg(self, msg) -> None:
-        """Handle incoming messages from Sinopac WS (called from Rust)."""
+    def _handle_msg(self, msg: object) -> None:
         try:
             if nautilus_pyo3.is_pycapsule(msg):
                 data = capsule_to_data(msg)
@@ -195,25 +194,25 @@ class SinopacDataClient(LiveMarketDataClient):
         self._ws_client.unsubscribe(code, "bidask")
         self._log.info(f"Unsubscribed from quote ticks: {instrument_id}", LogColor.BLUE)
 
-    async def _subscribe_bars(self, command) -> None:
+    async def _subscribe_bars(self, command: object) -> None:
         self._log.error(
             f"Cannot subscribe to {command.bar_type} bars: "
             "Sinopac does not support streaming bars (use request_bars for historical)",
         )
 
-    async def _unsubscribe_bars(self, command) -> None:
+    async def _unsubscribe_bars(self, command: object) -> None:
         pass  # No-op
 
-    async def _subscribe_instrument_status(self, command) -> None:
+    async def _subscribe_instrument_status(self, command: object) -> None:
         pass  # Not supported by Sinopac
 
-    async def _subscribe_instrument_close(self, command) -> None:
+    async def _subscribe_instrument_close(self, command: object) -> None:
         pass  # Not supported by Sinopac
 
-    async def _unsubscribe_instrument_status(self, command) -> None:
+    async def _unsubscribe_instrument_status(self, command: object) -> None:
         pass  # No-op
 
-    async def _unsubscribe_instrument_close(self, command) -> None:
+    async def _unsubscribe_instrument_close(self, command: object) -> None:
         pass  # No-op
 
     # -- Historical data requests ---------------------------------------------

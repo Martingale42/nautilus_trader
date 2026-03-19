@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! Parsers that convert Sinopac REST responses to Nautilus domain types.
 
 use nautilus_core::UnixNanos;

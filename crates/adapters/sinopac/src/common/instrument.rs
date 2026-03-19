@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! Instrument helpers for Taiwan market contracts.
 
 /// Default stock lot size for Common orders (1000 shares = 1 lot in Taiwan market).

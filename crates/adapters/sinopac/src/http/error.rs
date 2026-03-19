@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
+
 //! HTTP error types for the Sinopac adapter.
 
 use thiserror::Error;
@@ -19,12 +20,21 @@ use thiserror::Error;
 /// HTTP error types for the Sinopac gateway.
 #[derive(Debug, Clone, Error)]
 pub enum SinopacHttpError {
+    /// HTTP network request failed.
     #[error("HTTP request failed: {0}")]
     NetworkError(String),
+    /// JSON deserialization failed.
     #[error("JSON deserialization failed: {0}")]
     JsonError(String),
+    /// Gateway returned an error response.
     #[error("Gateway error ({status}): {body}")]
-    GatewayError { status: u16, body: String },
+    GatewayError {
+        /// The HTTP status code.
+        status: u16,
+        /// The response body.
+        body: String,
+    },
+    /// Gateway is not connected.
     #[error("Gateway not connected")]
     NotConnected,
 }
