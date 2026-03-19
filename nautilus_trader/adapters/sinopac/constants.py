@@ -8,5 +8,5 @@ SINOPAC: Final[str] = "SINOPAC"
 SINOPAC_VENUE: Final[Venue] = Venue(SINOPAC)
 SINOPAC_CLIENT_ID: Final[ClientId] = ClientId(SINOPAC)
 
-SHIOAJI_GATEWAY_URL: Final[str] = "http://localhost:8000"
-SHIOAJI_GATEWAY_WS_URL: Final[str] = "ws://localhost:8000/ws"
+SINOPAC_GATEWAY_URL: Final[str] = "http://localhost:8000"
+SINOPAC_GATEWAY_WS_URL: Final[str] = "ws://localhost:8000/ws"

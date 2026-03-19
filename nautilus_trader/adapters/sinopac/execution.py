@@ -3,16 +3,16 @@ from __future__ import annotations
 import asyncio
 import os
 
-from nautilus_trader.adapters.shioaji.config import ShioajiExecClientConfig
-from nautilus_trader.adapters.shioaji.constants import SINOPAC
-from nautilus_trader.adapters.shioaji.constants import SINOPAC_VENUE
-from nautilus_trader.adapters.shioaji.providers import ShioajiInstrumentProvider
+from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
+from nautilus_trader.adapters.sinopac.constants import SINOPAC
+from nautilus_trader.adapters.sinopac.constants import SINOPAC_VENUE
+from nautilus_trader.adapters.sinopac.providers import SinopacInstrumentProvider
 from nautilus_trader.cache.cache import Cache
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core import nautilus_pyo3
-from nautilus_trader.core.nautilus_pyo3 import shioaji as pyo3_shioaji
+from nautilus_trader.core.nautilus_pyo3 import sinopac as pyo3_sinopac
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import BatchCancelOrders
 from nautilus_trader.execution.messages import CancelAllOrders
@@ -50,7 +50,7 @@ from nautilus_trader.model.instruments import FuturesContract
 from nautilus_trader.model.instruments import OptionContract
 
 
-_SHIOAJI_STATUS_MAP = {
+_SINOPAC_STATUS_MAP = {
     "PendingSubmit": OrderStatus.SUBMITTED,
     "PreSubmitted": OrderStatus.SUBMITTED,
     "Submitted": OrderStatus.ACCEPTED,
@@ -60,44 +60,44 @@ _SHIOAJI_STATUS_MAP = {
     "PartFilled": OrderStatus.PARTIALLY_FILLED,
 }
 
-_NT_TO_SHIOAJI_ACTION = {
+_NT_TO_SINOPAC_ACTION = {
     OrderSide.BUY: "Buy",
     OrderSide.SELL: "Sell",
 }
 
-_NT_TO_SHIOAJI_PRICE_TYPE = {
+_NT_TO_SINOPAC_PRICE_TYPE = {
     OrderType.LIMIT: "LMT",
     OrderType.MARKET: "MKT",
 }
 
-_NT_TO_SHIOAJI_ORDER_TYPE = {
+_NT_TO_SINOPAC_ORDER_TYPE = {
     TimeInForce.DAY: "ROD",
     TimeInForce.IOC: "IOC",
     TimeInForce.FOK: "FOK",
 }
 
 
-class ShioajiExecutionClient(LiveExecutionClient):
+class SinopacExecutionClient(LiveExecutionClient):
     """
-    Provides an execution client for the Shioaji (SinoPac) adapter.
+    Provides an execution client for the Sinopac (SinoPac) adapter.
 
     Parameters
     ----------
     loop : asyncio.AbstractEventLoop
         The event loop for the client.
-    client : pyo3_shioaji.ShioajiHttpClient
-        The Shioaji gateway HTTP client.
-    ws_client : pyo3_shioaji.ShioajiWebSocketClient
-        The Shioaji gateway WebSocket client.
+    client : pyo3_sinopac.SinopacHttpClient
+        The Sinopac gateway HTTP client.
+    ws_client : pyo3_sinopac.SinopacWebSocketClient
+        The Sinopac gateway WebSocket client.
     msgbus : MessageBus
         The message bus for the client.
     cache : Cache
         The cache for the client.
     clock : LiveClock
         The clock for the client.
-    instrument_provider : ShioajiInstrumentProvider
+    instrument_provider : SinopacInstrumentProvider
         The instrument provider.
-    config : ShioajiExecClientConfig
+    config : SinopacExecClientConfig
         The configuration for the client.
     name : str, optional
         The custom client ID.
@@ -107,17 +107,17 @@ class ShioajiExecutionClient(LiveExecutionClient):
     def __init__(
         self,
         loop: asyncio.AbstractEventLoop,
-        client: pyo3_shioaji.ShioajiHttpClient,
-        ws_client: pyo3_shioaji.ShioajiWebSocketClient,
+        client: pyo3_sinopac.SinopacHttpClient,
+        ws_client: pyo3_sinopac.SinopacWebSocketClient,
         msgbus: MessageBus,
         cache: Cache,
         clock: LiveClock,
-        instrument_provider: ShioajiInstrumentProvider,
-        config: ShioajiExecClientConfig,
+        instrument_provider: SinopacInstrumentProvider,
+        config: SinopacExecClientConfig,
         name: str | None = None,
     ) -> None:
         account_id_str = config.account_id or os.environ.get(
-            "SHIOAJI_ACCOUNT_ID",
+            "SINOPAC_ACCOUNT_ID",
             "SINOPAC-001",
         )
         account_id = AccountId(f"{SINOPAC}-{account_id_str}")
@@ -151,7 +151,7 @@ class ShioajiExecutionClient(LiveExecutionClient):
         await self._instrument_provider.initialize()
         await self._update_account_state()
         self._log.info(
-            f"Connected to Shioaji gateway at {self._config.gateway_base_url}",
+            f"Connected to Sinopac gateway at {self._config.gateway_base_url}",
             LogColor.GREEN,
         )
 
@@ -190,7 +190,7 @@ class ShioajiExecutionClient(LiveExecutionClient):
     # -- WS message handler ---------------------------------------------------
 
     def _handle_msg(self, msg) -> None:
-        """Handle incoming messages from Shioaji WS (order events as dicts)."""
+        """Handle incoming messages from Sinopac WS (order events as dicts)."""
         try:
             if nautilus_pyo3.is_pycapsule(msg):
                 return  # Market data — handled by DataClient
@@ -201,7 +201,7 @@ class ShioajiExecutionClient(LiveExecutionClient):
 
             self._log.warning(f"Unhandled exec WS message type: {type(msg)}")
         except Exception as e:
-            self._log.exception("Error handling Shioaji exec WS message", e)
+            self._log.exception("Error handling Sinopac exec WS message", e)
 
     def _handle_order_event(self, event: dict) -> None:
         """Dispatch order event dict to appropriate handler."""
@@ -354,7 +354,7 @@ class ShioajiExecutionClient(LiveExecutionClient):
         order = command.order
         instrument_id = order.instrument_id
 
-        if order.order_type not in _NT_TO_SHIOAJI_PRICE_TYPE:
+        if order.order_type not in _NT_TO_SINOPAC_PRICE_TYPE:
             self._log.error(f"Unsupported order type: {order.order_type}")
             return
 
@@ -367,9 +367,9 @@ class ShioajiExecutionClient(LiveExecutionClient):
 
         try:
             code = instrument_id.symbol.value
-            action = _NT_TO_SHIOAJI_ACTION[order.side]
-            price_type = _NT_TO_SHIOAJI_PRICE_TYPE[order.order_type]
-            order_type = _NT_TO_SHIOAJI_ORDER_TYPE.get(order.time_in_force, "ROD")
+            action = _NT_TO_SINOPAC_ACTION[order.side]
+            price_type = _NT_TO_SINOPAC_PRICE_TYPE[order.order_type]
+            order_type = _NT_TO_SINOPAC_ORDER_TYPE.get(order.time_in_force, "ROD")
             price = float(order.price) if order.price is not None else 0.0
             quantity = int(order.quantity)
 
@@ -544,10 +544,10 @@ class ShioajiExecutionClient(LiveExecutionClient):
                 raw_status = trade_dict["status"]
                 # Gateway may return "Status.Failed" instead of "Failed"
                 status_key = raw_status.split(".")[-1] if "." in raw_status else raw_status
-                order_status = _SHIOAJI_STATUS_MAP.get(status_key)
+                order_status = _SINOPAC_STATUS_MAP.get(status_key)
                 if order_status is None:
                     self._log.warning(
-                        f"Unknown Shioaji order status '{raw_status}', defaulting to DENIED",
+                        f"Unknown Sinopac order status '{raw_status}', defaulting to DENIED",
                     )
                     order_status = OrderStatus.DENIED
                 order_side = (
@@ -572,7 +572,7 @@ class ShioajiExecutionClient(LiveExecutionClient):
                 client_order_id = (
                     ClientOrderId(client_order_id_str)
                     if client_order_id_str
-                    else ClientOrderId(f"SHIOAJI-{trade_id}")
+                    else ClientOrderId(f"SINOPAC-{trade_id}")
                 )
 
                 filled_qty = trade_dict.get("filled_qty", 0)

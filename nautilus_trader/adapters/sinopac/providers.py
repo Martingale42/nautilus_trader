@@ -8,17 +8,17 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import instruments_from_pyo3
 
 
-class ShioajiInstrumentProvider(InstrumentProvider):
+class SinopacInstrumentProvider(InstrumentProvider):
     """
-    Provides Nautilus instrument definitions from Shioaji (SinoPac) gateway.
+    Provides Nautilus instrument definitions from Sinopac (SinoPac) gateway.
 
     Loads stocks, futures, and options contracts via the Rust HTTP client
     and converts them to Nautilus instrument types.
 
     Parameters
     ----------
-    client : nautilus_pyo3.shioaji.ShioajiHttpClient
-        The Shioaji gateway HTTP client.
+    client : nautilus_pyo3.sinopac.SinopacHttpClient
+        The Sinopac gateway HTTP client.
     config : InstrumentProviderConfig, optional
         The instrument provider configuration, by default None.
 
@@ -26,7 +26,7 @@ class ShioajiInstrumentProvider(InstrumentProvider):
 
     def __init__(
         self,
-        client: nautilus_pyo3.shioaji.ShioajiHttpClient,
+        client: nautilus_pyo3.sinopac.SinopacHttpClient,
         config: InstrumentProviderConfig | None = None,
     ) -> None:
         super().__init__(config=config)
@@ -47,12 +47,12 @@ class ShioajiInstrumentProvider(InstrumentProvider):
 
     async def load_all_async(self, filters: dict | None = None) -> None:
         """
-        Load all instruments from the Shioaji gateway.
+        Load all instruments from the Sinopac gateway.
 
         Parameters
         ----------
         filters : dict, optional
-            Not implemented for Shioaji (all contracts are loaded).
+            Not implemented for Sinopac (all contracts are loaded).
 
         """
         all_pyo3_instruments: list[Any] = []
@@ -99,21 +99,21 @@ class ShioajiInstrumentProvider(InstrumentProvider):
         filters: dict | None = None,
     ) -> None:
         """
-        Load specific instruments by ID from Shioaji.
+        Load specific instruments by ID from Sinopac.
 
         Parameters
         ----------
         instrument_ids : list[InstrumentId]
             The instrument IDs to load.
         filters : dict, optional
-            Not implemented for Shioaji.
+            Not implemented for Sinopac.
 
         """
         if not instrument_ids:
             self._log.warning("No instrument IDs given for loading")
             return
 
-        # Shioaji doesn't support per-instrument queries, load all and filter
+        # Sinopac doesn't support per-instrument queries, load all and filter
         all_pyo3_instruments: list[Any] = []
 
         try:
@@ -142,7 +142,7 @@ class ShioajiInstrumentProvider(InstrumentProvider):
                 continue
             self.add(instrument=instrument)
 
-        self._log.info(f"Loaded {len(self._instruments)} instruments from Shioaji")
+        self._log.info(f"Loaded {len(self._instruments)} instruments from Sinopac")
 
     async def load_async(
         self,
@@ -150,14 +150,14 @@ class ShioajiInstrumentProvider(InstrumentProvider):
         filters: dict | None = None,
     ) -> None:
         """
-        Load a single instrument by ID from Shioaji.
+        Load a single instrument by ID from Sinopac.
 
         Parameters
         ----------
         instrument_id : InstrumentId
             The instrument ID to load.
         filters : dict, optional
-            Not implemented for Shioaji.
+            Not implemented for Sinopac.
 
         """
         PyCondition.not_none(instrument_id, "instrument_id")

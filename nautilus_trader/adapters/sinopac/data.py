@@ -1,15 +1,15 @@
 import asyncio
 
-from nautilus_trader.adapters.shioaji.config import ShioajiDataClientConfig
-from nautilus_trader.adapters.shioaji.constants import SINOPAC
-from nautilus_trader.adapters.shioaji.constants import SINOPAC_VENUE
-from nautilus_trader.adapters.shioaji.providers import ShioajiInstrumentProvider
+from nautilus_trader.adapters.sinopac.config import SinopacDataClientConfig
+from nautilus_trader.adapters.sinopac.constants import SINOPAC
+from nautilus_trader.adapters.sinopac.constants import SINOPAC_VENUE
+from nautilus_trader.adapters.sinopac.providers import SinopacInstrumentProvider
 from nautilus_trader.cache.cache import Cache
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core import nautilus_pyo3
-from nautilus_trader.core.nautilus_pyo3 import shioaji as pyo3_shioaji
+from nautilus_trader.core.nautilus_pyo3 import sinopac as pyo3_sinopac
 from nautilus_trader.data.messages import RequestBars
 from nautilus_trader.data.messages import RequestQuoteTicks
 from nautilus_trader.data.messages import RequestTradeTicks
@@ -28,27 +28,27 @@ from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import InstrumentId
 
 
-class ShioajiDataClient(LiveMarketDataClient):
+class SinopacDataClient(LiveMarketDataClient):
     """
-    Provides a data client for the Shioaji (SinoPac) adapter.
+    Provides a data client for the Sinopac (SinoPac) adapter.
 
     Parameters
     ----------
     loop : asyncio.AbstractEventLoop
         The event loop for the client.
-    client : pyo3_shioaji.ShioajiHttpClient
-        The Shioaji gateway HTTP client.
-    ws_client : pyo3_shioaji.ShioajiWebSocketClient
-        The Shioaji gateway WebSocket client.
+    client : pyo3_sinopac.SinopacHttpClient
+        The Sinopac gateway HTTP client.
+    ws_client : pyo3_sinopac.SinopacWebSocketClient
+        The Sinopac gateway WebSocket client.
     msgbus : MessageBus
         The message bus for the client.
     cache : Cache
         The cache for the client.
     clock : LiveClock
         The clock for the client.
-    instrument_provider : ShioajiInstrumentProvider
+    instrument_provider : SinopacInstrumentProvider
         The instrument provider.
-    config : ShioajiDataClientConfig
+    config : SinopacDataClientConfig
         The configuration for the client.
     name : str, optional
         The custom client ID.
@@ -61,13 +61,13 @@ class ShioajiDataClient(LiveMarketDataClient):
     def __init__(
         self,
         loop: asyncio.AbstractEventLoop,
-        client: pyo3_shioaji.ShioajiHttpClient,
-        ws_client: pyo3_shioaji.ShioajiWebSocketClient,
+        client: pyo3_sinopac.SinopacHttpClient,
+        ws_client: pyo3_sinopac.SinopacWebSocketClient,
         msgbus: MessageBus,
         cache: Cache,
         clock: LiveClock,
-        instrument_provider: ShioajiInstrumentProvider,
-        config: ShioajiDataClientConfig,
+        instrument_provider: SinopacInstrumentProvider,
+        config: SinopacDataClientConfig,
         name: str | None = None,
         ws_callback: object | None = None,
     ) -> None:
@@ -94,7 +94,7 @@ class ShioajiDataClient(LiveMarketDataClient):
         self._client_futures: set[asyncio.Future] = set()
 
     @property
-    def shioaji_instrument_provider(self) -> ShioajiInstrumentProvider:
+    def sinopac_instrument_provider(self) -> SinopacInstrumentProvider:
         return self._instrument_provider  # type: ignore
 
     # -- Connection lifecycle -------------------------------------------------
@@ -105,7 +105,7 @@ class ShioajiDataClient(LiveMarketDataClient):
         self._send_all_instruments_to_data_engine()
 
         # 2. Connect WS with callback
-        instruments_pyo3 = self.shioaji_instrument_provider.instruments_pyo3()
+        instruments_pyo3 = self.sinopac_instrument_provider.instruments_pyo3()
         await self._ws_client.connect(
             instruments=instruments_pyo3,
             callback=self._ws_callback,
@@ -113,7 +113,7 @@ class ShioajiDataClient(LiveMarketDataClient):
         await self._ws_client.wait_until_active(timeout_secs=10.0)
 
         self._log.info(
-            f"Connected to Shioaji gateway at {self._config.gateway_base_url}",
+            f"Connected to Sinopac gateway at {self._config.gateway_base_url}",
             LogColor.GREEN,
         )
 
@@ -121,9 +121,9 @@ class ShioajiDataClient(LiveMarketDataClient):
         await asyncio.sleep(1.0)  # Grace period for pending WS messages
 
         if self._ws_client.is_connected():
-            self._log.info("Disconnecting Shioaji WebSocket")
+            self._log.info("Disconnecting Sinopac WebSocket")
             await self._ws_client.disconnect()
-            self._log.info("Shioaji WebSocket disconnected", LogColor.BLUE)
+            self._log.info("Sinopac WebSocket disconnected", LogColor.BLUE)
 
         await cancel_tasks_with_timeout(
             self._client_futures,
@@ -139,7 +139,7 @@ class ShioajiDataClient(LiveMarketDataClient):
             self._handle_data(instrument)
 
     def _handle_msg(self, msg) -> None:
-        """Handle incoming messages from Shioaji WS (called from Rust)."""
+        """Handle incoming messages from Sinopac WS (called from Rust)."""
         try:
             if nautilus_pyo3.is_pycapsule(msg):
                 data = capsule_to_data(msg)
@@ -147,7 +147,7 @@ class ShioajiDataClient(LiveMarketDataClient):
                 return
             self._log.warning(f"Unhandled WS message type: {type(msg)}")
         except Exception as e:
-            self._log.exception("Error handling Shioaji WS message", e)
+            self._log.exception("Error handling Sinopac WS message", e)
 
     # -- Subscriptions --------------------------------------------------------
 
@@ -198,17 +198,17 @@ class ShioajiDataClient(LiveMarketDataClient):
     async def _subscribe_bars(self, command) -> None:
         self._log.error(
             f"Cannot subscribe to {command.bar_type} bars: "
-            "Shioaji does not support streaming bars (use request_bars for historical)",
+            "Sinopac does not support streaming bars (use request_bars for historical)",
         )
 
     async def _unsubscribe_bars(self, command) -> None:
         pass  # No-op
 
     async def _subscribe_instrument_status(self, command) -> None:
-        pass  # Not supported by Shioaji
+        pass  # Not supported by Sinopac
 
     async def _subscribe_instrument_close(self, command) -> None:
-        pass  # Not supported by Shioaji
+        pass  # Not supported by Sinopac
 
     async def _unsubscribe_instrument_status(self, command) -> None:
         pass  # No-op
@@ -249,7 +249,7 @@ class ShioajiDataClient(LiveMarketDataClient):
                 request.params,
             )
         except Exception as e:
-            self._log.exception("Failed to request trade ticks from Shioaji", e)
+            self._log.exception("Failed to request trade ticks from Sinopac", e)
 
     async def _request_bars(self, request: RequestBars) -> None:
         if request.bar_type.is_internally_aggregated():
@@ -307,7 +307,7 @@ class ShioajiDataClient(LiveMarketDataClient):
                 request.params,
             )
         except Exception as e:
-            self._log.exception("Failed to request bars from Shioaji", e)
+            self._log.exception("Failed to request bars from Sinopac", e)
 
     async def _request_quote_ticks(self, request: RequestQuoteTicks) -> None:
-        self._log.error("Shioaji does not support historical quote tick requests")
+        self._log.error("Sinopac does not support historical quote tick requests")
