@@ -16,10 +16,15 @@
 //! WebSocket client for Sinopac gateway streaming data.
 
 use std::{
-    collections::HashSet,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU8, Ordering},
+    },
+    time::Duration,
 };
 
+use arc_swap::ArcSwap;
+use nautilus_common::live::get_runtime;
 use nautilus_network::{
     mode::ConnectionMode,
     websocket::{WebSocketClient, WebSocketConfig, channel_message_handler},
@@ -28,8 +33,8 @@ use tokio::sync::mpsc;
 
 use super::{
     error::SinopacWsError,
-    handler::feed_handler,
-    messages::{WsIncomingMsg, WsSubscribeMsg},
+    handler::{FeedHandler, HandlerCommand},
+    messages::WsIncomingMsg,
 };
 use crate::common::{consts::SINOPAC_GATEWAY_WS_URL, enums::SinopacQuoteType};
 
@@ -45,20 +50,22 @@ use crate::common::{consts::SINOPAC_GATEWAY_WS_URL, enums::SinopacQuoteType};
 )]
 pub struct SinopacWebSocketClient {
     url: String,
-    ws_client: Arc<tokio::sync::Mutex<Option<WebSocketClient>>>,
-    msg_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<WsIncomingMsg>>>>,
-    subscriptions: Arc<Mutex<HashSet<(String, SinopacQuoteType)>>>,
-    feed_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    connection_mode: Arc<ArcSwap<AtomicU8>>,
+    cmd_tx: Arc<tokio::sync::RwLock<mpsc::UnboundedSender<HandlerCommand>>>,
+    out_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<WsIncomingMsg>>>>,
+    signal: Arc<AtomicBool>,
+    task_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl Clone for SinopacWebSocketClient {
     fn clone(&self) -> Self {
         Self {
             url: self.url.clone(),
-            ws_client: Arc::clone(&self.ws_client),
-            msg_rx: Arc::clone(&self.msg_rx),
-            subscriptions: Arc::clone(&self.subscriptions),
-            feed_handle: Arc::clone(&self.feed_handle),
+            connection_mode: Arc::clone(&self.connection_mode),
+            cmd_tx: Arc::clone(&self.cmd_tx),
+            out_rx: Arc::clone(&self.out_rx),
+            signal: Arc::clone(&self.signal),
+            task_handle: Arc::clone(&self.task_handle),
         }
     }
 }
@@ -68,12 +75,21 @@ impl SinopacWebSocketClient {
     #[must_use]
     pub fn new(url: Option<String>) -> Self {
         let url = url.unwrap_or_else(|| SINOPAC_GATEWAY_WS_URL.to_string());
+
+        // Placeholder channel — receiver is immediately dropped.
+        // connect() swaps in the real channel.
+        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel::<HandlerCommand>();
+
+        let initial_mode = AtomicU8::new(ConnectionMode::Closed.as_u8());
+        let connection_mode = Arc::new(ArcSwap::from_pointee(initial_mode));
+
         Self {
             url,
-            ws_client: Arc::new(tokio::sync::Mutex::new(None)),
-            msg_rx: Arc::new(Mutex::new(None)),
-            subscriptions: Arc::new(Mutex::new(HashSet::new())),
-            feed_handle: Arc::new(Mutex::new(None)),
+            connection_mode,
+            cmd_tx: Arc::new(tokio::sync::RwLock::new(cmd_tx)),
+            out_rx: Arc::new(Mutex::new(None)),
+            signal: Arc::new(AtomicBool::new(false)),
+            task_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -89,9 +105,11 @@ impl SinopacWebSocketClient {
     /// automatic reconnection, spawns a feed handler task that deserializes
     /// raw frames into `WsIncomingMsg`, and re-subscribes after reconnections.
     pub async fn connect(&self) -> Result<(), SinopacWsError> {
-        if self.is_connected().await {
+        if self.is_connected() {
             return Ok(());
         }
+
+        self.signal.store(false, Ordering::Relaxed);
 
         log::info!("Connecting to WebSocket: {}", self.url);
 
@@ -122,21 +140,40 @@ impl SinopacWebSocketClient {
         .await
         .map_err(|e| SinopacWsError::Connection(e.to_string()))?;
 
-        // Store the client before spawning the feed handler so that
-        // a reconnection sentinel never finds `None` in the mutex.
-        *self.ws_client.lock().await = Some(client);
+        // Store connection mode (lock-free via ArcSwap)
+        self.connection_mode.store(client.connection_mode_atomic());
 
-        // Spawn the feed handler that deserializes raw messages and
-        // re-subscribes on reconnection
-        let (msg_tx, msg_rx) = mpsc::unbounded_channel();
-        let ws_client_ref = Arc::clone(&self.ws_client);
-        let subs_ref = Arc::clone(&self.subscriptions);
-        let handle = tokio::spawn(async move {
-            feed_handler(raw_rx, msg_tx, ws_client_ref, subs_ref).await;
+        // Create output channel for parsed messages
+        let (out_tx, out_rx) = mpsc::unbounded_channel();
+        *self.out_rx.lock().unwrap() = Some(out_rx);
+
+        // Create command channel and update cmd_tx
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<HandlerCommand>();
+        *self.cmd_tx.write().await = cmd_tx;
+
+        // Send the client to the handler
+        self.cmd_tx
+            .read()
+            .await
+            .send(HandlerCommand::SetClient(client))
+            .map_err(|e| SinopacWsError::Send(e.to_string()))?;
+
+        // Create and spawn the feed handler
+        let signal = Arc::clone(&self.signal);
+        let handler = FeedHandler::new(signal, cmd_rx, raw_rx);
+
+        let handle = get_runtime().spawn(async move {
+            let mut handler = handler;
+            while let Some(msg) = handler.next().await {
+                if out_tx.send(msg).is_err() {
+                    log::debug!("Message receiver dropped, stopping handler");
+                    break;
+                }
+            }
+            log::debug!("Handler task exiting");
         });
 
-        *self.msg_rx.lock().unwrap() = Some(msg_rx);
-        *self.feed_handle.lock().unwrap() = Some(handle);
+        *self.task_handle.lock().unwrap() = Some(handle);
 
         log::debug!("WebSocket connected");
         Ok(())
@@ -144,28 +181,31 @@ impl SinopacWebSocketClient {
 
     /// Disconnects from the gateway.
     pub async fn disconnect(&self) -> Result<(), SinopacWsError> {
-        // Abort the feed handler task
-        if let Some(handle) = self.feed_handle.lock().unwrap().take() {
-            handle.abort();
+        self.signal.store(true, Ordering::Relaxed);
+
+        if let Err(e) = self.cmd_tx.read().await.send(HandlerCommand::Disconnect) {
+            log::debug!("Failed to send disconnect command: {e}");
         }
 
-        // Disconnect the network client
-        if let Some(client) = self.ws_client.lock().await.take() {
-            client.disconnect().await;
+        let handle = self.task_handle.lock().unwrap().take();
+        if let Some(handle) = handle {
+            match tokio::time::timeout(Duration::from_secs(2), handle).await {
+                Ok(Ok(())) => log::debug!("Handler task completed"),
+                Ok(Err(e)) => log::debug!("Handler task error: {e}"),
+                Err(_) => log::debug!("Handler task timed out, aborting"),
+            }
         }
 
-        *self.msg_rx.lock().unwrap() = None;
+        *self.out_rx.lock().unwrap() = None;
 
         log::debug!("WebSocket disconnected");
         Ok(())
     }
 
     /// Returns whether the client is currently connected.
-    pub async fn is_connected(&self) -> bool {
-        let guard = self.ws_client.lock().await;
-        guard
-            .as_ref()
-            .is_some_and(|c| c.connection_mode() == ConnectionMode::Active)
+    pub fn is_connected(&self) -> bool {
+        let mode_ref = self.connection_mode.load();
+        ConnectionMode::from_atomic(&mode_ref).is_active()
     }
 
     /// Subscribes to quote data for a contract.
@@ -174,29 +214,14 @@ impl SinopacWebSocketClient {
         code: &str,
         quote_type: SinopacQuoteType,
     ) -> Result<(), SinopacWsError> {
-        let msg = WsSubscribeMsg {
-            action: "subscribe".to_string(),
-            contract_code: code.to_string(),
-            quote_type,
-        };
-        let text = serde_json::to_string(&msg).map_err(|e| SinopacWsError::Json(e.to_string()))?;
-
-        {
-            let guard = self.ws_client.lock().await;
-            let client = guard.as_ref().ok_or(SinopacWsError::NotConnected)?;
-            client
-                .send_text(text, None)
-                .await
-                .map_err(|e| SinopacWsError::Send(e.to_string()))?;
-        }
-
-        // Track the subscription for post-reconnection re-subscribe
-        self.subscriptions
-            .lock()
-            .unwrap()
-            .insert((code.to_string(), quote_type));
-
-        Ok(())
+        self.cmd_tx
+            .read()
+            .await
+            .send(HandlerCommand::Subscribe {
+                code: code.to_string(),
+                quote_type,
+            })
+            .map_err(|e| SinopacWsError::Send(e.to_string()))
     }
 
     /// Unsubscribes from quote data for a contract.
@@ -205,29 +230,14 @@ impl SinopacWebSocketClient {
         code: &str,
         quote_type: SinopacQuoteType,
     ) -> Result<(), SinopacWsError> {
-        let msg = WsSubscribeMsg {
-            action: "unsubscribe".to_string(),
-            contract_code: code.to_string(),
-            quote_type,
-        };
-        let text = serde_json::to_string(&msg).map_err(|e| SinopacWsError::Json(e.to_string()))?;
-
-        {
-            let guard = self.ws_client.lock().await;
-            let client = guard.as_ref().ok_or(SinopacWsError::NotConnected)?;
-            client
-                .send_text(text, None)
-                .await
-                .map_err(|e| SinopacWsError::Send(e.to_string()))?;
-        }
-
-        // Remove from tracked subscriptions
-        self.subscriptions
-            .lock()
-            .unwrap()
-            .remove(&(code.to_string(), quote_type));
-
-        Ok(())
+        self.cmd_tx
+            .read()
+            .await
+            .send(HandlerCommand::Unsubscribe {
+                code: code.to_string(),
+                quote_type,
+            })
+            .map_err(|e| SinopacWsError::Send(e.to_string()))
     }
 
     /// Takes the message receiver out of the client.
@@ -236,18 +246,18 @@ impl SinopacWebSocketClient {
     /// method to move into a spawned callback task. Returns `None` if
     /// already taken.
     pub fn take_msg_rx(&self) -> Option<mpsc::UnboundedReceiver<WsIncomingMsg>> {
-        self.msg_rx.lock().unwrap().take()
+        self.out_rx.lock().unwrap().take()
     }
 
     /// Reads the next parsed message from the WebSocket.
     pub async fn next_message(&self) -> Option<WsIncomingMsg> {
         let rx = {
-            let mut guard = self.msg_rx.lock().unwrap();
+            let mut guard = self.out_rx.lock().unwrap();
             guard.take()
         };
         let mut rx = rx?;
         let msg = rx.recv().await;
-        self.msg_rx.lock().unwrap().replace(rx);
+        self.out_rx.lock().unwrap().replace(rx);
         msg
     }
 }

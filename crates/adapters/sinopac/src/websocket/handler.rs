@@ -17,7 +17,10 @@
 
 use std::{
     collections::HashSet,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use nautilus_network::websocket::WebSocketClient;
@@ -27,84 +30,167 @@ use tokio_tungstenite::tungstenite::Message;
 use super::messages::{WsIncomingMsg, WsSubscribeMsg};
 use crate::common::enums::SinopacQuoteType;
 
-/// Receives raw WebSocket frames from the `nautilus_network` channel handler,
-/// deserializes them into `WsIncomingMsg`, and forwards to the message channel.
-///
-/// Detects the `__RECONNECTED__` sentinel from `nautilus_network` and
-/// re-subscribes all active subscriptions after reconnection.
-/// Ping/Pong and reconnection are handled by `nautilus_network::WebSocketClient`.
-pub(crate) async fn feed_handler(
-    mut raw_rx: mpsc::UnboundedReceiver<Message>,
-    msg_tx: mpsc::UnboundedSender<WsIncomingMsg>,
-    ws_client: Arc<tokio::sync::Mutex<Option<WebSocketClient>>>,
-    subscriptions: Arc<Mutex<HashSet<(String, SinopacQuoteType)>>>,
-) {
-    log::debug!("Feed handler started");
+/// Commands sent from the client to the feed handler.
+#[derive(Debug)]
+pub(crate) enum HandlerCommand {
+    /// Sets the WebSocket client for the handler to own.
+    SetClient(WebSocketClient),
+    /// Subscribes to quote data for a contract.
+    Subscribe {
+        code: String,
+        quote_type: SinopacQuoteType,
+    },
+    /// Unsubscribes from quote data for a contract.
+    Unsubscribe {
+        code: String,
+        quote_type: SinopacQuoteType,
+    },
+    /// Disconnects the WebSocket client.
+    Disconnect,
+}
 
-    while let Some(raw_msg) = raw_rx.recv().await {
-        match raw_msg {
-            Message::Text(text) => {
-                // Check for reconnection sentinel
-                if text.as_str() == nautilus_network::RECONNECTED {
-                    log::info!("Received WebSocket reconnected signal");
-                    resubscribe_all(&ws_client, &subscriptions).await;
-                    continue;
-                }
+/// Feed handler that owns the WebSocket client and processes messages.
+pub(super) struct FeedHandler {
+    signal: Arc<AtomicBool>,
+    client: Option<WebSocketClient>,
+    cmd_rx: mpsc::UnboundedReceiver<HandlerCommand>,
+    raw_rx: mpsc::UnboundedReceiver<Message>,
+    subscriptions: HashSet<(String, SinopacQuoteType)>,
+}
 
-                match serde_json::from_str::<WsIncomingMsg>(&text) {
-                    Ok(msg) => {
-                        if msg_tx.send(msg).is_err() {
-                            log::debug!("Message receiver dropped, shutting down feed handler");
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize WS message: {e}, raw: {text}");
-                    }
-                }
-            }
-            Message::Close(_) => {
-                log::info!("WebSocket close frame received");
-                break;
-            }
-            _ => {} // Ping/Pong handled by nautilus_network
+impl FeedHandler {
+    /// Creates a new [`FeedHandler`] instance.
+    pub(super) fn new(
+        signal: Arc<AtomicBool>,
+        cmd_rx: mpsc::UnboundedReceiver<HandlerCommand>,
+        raw_rx: mpsc::UnboundedReceiver<Message>,
+    ) -> Self {
+        Self {
+            signal,
+            client: None,
+            cmd_rx,
+            raw_rx,
+            subscriptions: HashSet::new(),
         }
     }
 
-    log::debug!("Feed handler ended");
-}
+    /// Returns the next parsed incoming message, or `None` when the handler should stop.
+    pub(super) async fn next(&mut self) -> Option<WsIncomingMsg> {
+        loop {
+            if self.signal.load(Ordering::Relaxed) {
+                log::debug!("Stop signal received");
+                return None;
+            }
 
-/// Re-subscribes all tracked subscriptions after a reconnection.
-async fn resubscribe_all(
-    ws_client: &Arc<tokio::sync::Mutex<Option<WebSocketClient>>>,
-    subscriptions: &Arc<Mutex<HashSet<(String, SinopacQuoteType)>>>,
-) {
-    let subs_snapshot: Vec<(String, SinopacQuoteType)> = {
-        let guard = subscriptions.lock().unwrap();
-        guard.iter().cloned().collect()
-    };
+            tokio::select! {
+                Some(cmd) = self.cmd_rx.recv() => {
+                    match cmd {
+                        HandlerCommand::SetClient(client) => {
+                            log::debug!("WebSocketClient received by handler");
+                            self.client = Some(client);
+                        }
+                        HandlerCommand::Subscribe { code, quote_type } => {
+                            let msg = WsSubscribeMsg {
+                                action: "subscribe".to_string(),
+                                contract_code: code.clone(),
+                                quote_type,
+                            };
+                            let text = serde_json::to_string(&msg).expect("serialize subscribe");
 
-    if subs_snapshot.is_empty() {
-        return;
+                            if let Some(client) = &self.client
+                                && let Err(e) = client.send_text(text, None).await
+                            {
+                                log::error!("Failed to send subscribe for {code}: {e}");
+                            }
+
+                            self.subscriptions.insert((code, quote_type));
+                        }
+                        HandlerCommand::Unsubscribe { code, quote_type } => {
+                            let msg = WsSubscribeMsg {
+                                action: "unsubscribe".to_string(),
+                                contract_code: code.clone(),
+                                quote_type,
+                            };
+                            let text = serde_json::to_string(&msg).expect("serialize unsubscribe");
+
+                            if let Some(client) = &self.client
+                                && let Err(e) = client.send_text(text, None).await
+                            {
+                                log::error!("Failed to send unsubscribe for {code}: {e}");
+                            }
+
+                            self.subscriptions.remove(&(code, quote_type));
+                        }
+                        HandlerCommand::Disconnect => {
+                            log::debug!("Disconnect command received");
+
+                            if let Some(client) = self.client.take() {
+                                client.disconnect().await;
+                            }
+
+                            return None;
+                        }
+                    }
+                }
+
+                msg = self.raw_rx.recv() => {
+                    let msg = match msg {
+                        Some(msg) => msg,
+                        None => {
+                            log::debug!("WebSocket stream closed");
+                            return None;
+                        }
+                    };
+
+                    match msg {
+                        Message::Text(text) => {
+                            if text.as_str() == nautilus_network::RECONNECTED {
+                                log::info!("Received WebSocket reconnected signal");
+                                self.resubscribe_all().await;
+                                continue;
+                            }
+
+                            match serde_json::from_str::<WsIncomingMsg>(&text) {
+                                Ok(incoming) => return Some(incoming),
+                                Err(e) => {
+                                    log::warn!("Failed to deserialize WS message: {e}, raw: {text}");
+                                }
+                            }
+                        }
+                        Message::Close(_) => {
+                            log::info!("WebSocket close frame received");
+                            return None;
+                        }
+                        _ => {} // Ping/Pong handled by nautilus_network
+                    }
+                }
+            }
+        }
     }
 
-    log::info!(
-        "Re-subscribing {} topics after reconnection",
-        subs_snapshot.len()
-    );
+    /// Re-subscribes all tracked subscriptions after a reconnection.
+    async fn resubscribe_all(&self) {
+        if self.subscriptions.is_empty() {
+            return;
+        }
 
-    let guard = ws_client.lock().await;
-    if let Some(client) = guard.as_ref() {
-        for (code, quote_type) in subs_snapshot {
-            let msg = WsSubscribeMsg {
-                action: "subscribe".to_string(),
-                contract_code: code.clone(),
-                quote_type,
-            };
-            let text = serde_json::to_string(&msg).expect("serialize subscribe");
+        log::info!(
+            "Re-subscribing {} topics after reconnection",
+            self.subscriptions.len()
+        );
 
-            if let Err(e) = client.send_text(text, None).await {
-                log::error!("Failed to re-subscribe {code}: {e}");
+        if let Some(client) = &self.client {
+            for (code, quote_type) in &self.subscriptions {
+                let msg = WsSubscribeMsg {
+                    action: "subscribe".to_string(),
+                    contract_code: code.clone(),
+                    quote_type: *quote_type,
+                };
+                let text = serde_json::to_string(&msg).expect("serialize subscribe");
+
+                if let Err(e) = client.send_text(text, None).await {
+                    log::error!("Failed to re-subscribe {code}: {e}");
+                }
             }
         }
     }

@@ -5915,6 +5915,7 @@ name = "nautilus-sinopac"
 version = "0.54.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "axum",
  "chrono",
  "futures-util",

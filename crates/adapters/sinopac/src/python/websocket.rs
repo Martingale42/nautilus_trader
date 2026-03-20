@@ -49,12 +49,8 @@ impl SinopacWebSocketClient {
 
     /// Returns whether the client is currently connected.
     #[pyo3(name = "is_connected")]
-    fn py_is_connected<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let client = self.clone();
-        pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move { Ok(client.is_connected().await) },
-        )
+    fn py_is_connected(&self) -> bool {
+        self.is_connected()
     }
 
     /// Subscribes to quote data for a contract.
@@ -239,8 +235,8 @@ impl SinopacWebSocketClient {
                                     confirm.quote_type
                                 );
                             }
-                            WsIncomingMsg::Error(ref err) => {
-                                log::error!("WS error: {}", err.detail);
+                            WsIncomingMsg::Error(ref e) => {
+                                log::error!("WS error: {}", e.detail);
                             }
                         }
                     }
@@ -274,7 +270,7 @@ impl SinopacWebSocketClient {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let start = std::time::Instant::now();
             let timeout = std::time::Duration::from_secs_f64(timeout_secs);
-            while !client.is_connected().await {
+            while !client.is_connected() {
                 if start.elapsed() > timeout {
                     return Err(pyo3::exceptions::PyTimeoutError::new_err(format!(
                         "WS connection timeout after {timeout_secs}s"

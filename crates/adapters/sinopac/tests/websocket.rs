@@ -115,7 +115,7 @@ async fn test_connect_disconnect() {
     let url = create_ws_url(addr);
     let client = SinopacWebSocketClient::new(Some(url));
 
-    assert!(!client.is_connected().await);
+    assert!(!client.is_connected());
 
     client.connect().await.expect("connect failed");
 
@@ -123,13 +123,13 @@ async fn test_connect_disconnect() {
     wait_until_async(
         || {
             let client = client.clone();
-            async move { client.is_connected().await }
+            async move { client.is_connected() }
         },
         Duration::from_secs(5),
     )
     .await;
 
-    assert!(client.is_connected().await);
+    assert!(client.is_connected());
 
     client.disconnect().await.expect("disconnect failed");
 }
@@ -146,7 +146,7 @@ async fn test_subscribe_tick() {
     wait_until_async(
         || {
             let client = client.clone();
-            async move { client.is_connected().await }
+            async move { client.is_connected() }
         },
         Duration::from_secs(5),
     )
@@ -188,7 +188,7 @@ async fn test_subscribe_bidask() {
     wait_until_async(
         || {
             let client = client.clone();
-            async move { client.is_connected().await }
+            async move { client.is_connected() }
         },
         Duration::from_secs(5),
     )

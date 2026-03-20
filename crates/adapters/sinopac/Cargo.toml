@@ -51,6 +51,7 @@ nautilus-model = { workspace = true }
 nautilus-network = { workspace = true }
 
 anyhow = { workspace = true }
+arc-swap = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
