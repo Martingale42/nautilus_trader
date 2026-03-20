@@ -5,9 +5,9 @@
 **Commits:** 26ad940f0, 3c037fee2
 **Plan:** `docs/plans/2026-03-20-sinopac-structural-refactor.md`
 
-## Verdict: APPROVED WITH NOTES
+## Verdict: APPROVED
 
-The migration from custom `tokio-tungstenite` WebSocket handling to `nautilus_network::WebSocketClient` is correctly implemented. Reconnection, re-subscription, disconnect, and the Python bindings all work as intended. Tests pass, clippy is clean, formatting is clean. Two important findings noted below -- neither blocks approval, but both should be addressed in follow-up work.
+The migration from custom `tokio-tungstenite` WebSocket handling to `nautilus_network::WebSocketClient` is correctly implemented. Reconnection, re-subscription, disconnect, and the Python bindings all work as intended. Tests pass, clippy is clean, formatting is clean. Both important findings from the initial review have been resolved in commit 7b2a7aad8.
 
 ---
 
@@ -115,4 +115,38 @@ Wire format is unchanged. `WsSubscribeMsg` serialization produces the same JSON 
 
 ## Summary
 
-The nautilus_network migration is well-executed. The core changes follow the plan accurately: custom `tokio-tungstenite` handling is replaced with `nautilus_network::WebSocketClient`, reconnection support is added via sentinel detection, subscription tracking enables automatic re-subscribe, and `disconnect()` is now fully functional (no cross-runtime issues). All verification checks pass. The two important findings are low-risk improvements that can be addressed in a follow-up commit.
+The nautilus_network migration is well-executed. The core changes follow the plan accurately: custom `tokio-tungstenite` handling is replaced with `nautilus_network::WebSocketClient`, reconnection support is added via sentinel detection, subscription tracking enables automatic re-subscribe, and `disconnect()` is now fully functional (no cross-runtime issues). All verification checks pass. Both important findings have been resolved.
+
+---
+
+## Fix Verification (commit 7b2a7aad8)
+
+**Reviewed:** 2026-03-20
+
+### Post-Fix Verification Results
+
+| Check | Result |
+|-------|--------|
+| `cargo clippy -p nautilus-sinopac --all-targets` | Clean (no warnings) |
+| `cargo +nightly fmt -p nautilus-sinopac -- --check` | Clean |
+| `cargo test -p nautilus-sinopac` | 71/71 passed (63 unit + 5 HTTP + 3 WS) |
+
+### Finding 1: Race condition -- RESOLVED
+
+**Original:** `client.rs` stored the `WebSocketClient` in the mutex *after* spawning the feed handler, creating a window where a reconnection sentinel could find `None`.
+
+**Fix:** The client is now stored at line 127 (`*self.ws_client.lock().await = Some(client)`) *before* the feed handler is spawned at line 134 (`tokio::spawn`). The reconnection sentinel handler in `resubscribe_all()` will always find a valid `Some(client)` in the mutex.
+
+**Verified:** Correct. The ordering is now: connect -> store client -> spawn feed handler. No race window exists.
+
+### Finding 2: Lock per-iteration in `resubscribe_all` -- RESOLVED
+
+**Original:** `handler.rs` acquired the `ws_client` tokio mutex inside the for loop, once per subscription, allowing interleaving with user-initiated subscribe/unsubscribe calls.
+
+**Fix:** The lock is now acquired once at line 96 (`let guard = ws_client.lock().await`) before the loop. The loop at line 98 iterates within the lock guard scope, sending all re-subscribe messages atomically.
+
+**Verified:** Correct. The implementation matches the suggested pattern from the original review. The lock is held for the duration of all re-subscribe sends, preventing interleaving.
+
+### Minor Findings (3, 4): Not addressed
+
+Findings 3 (`tokio::spawn` vs `get_runtime().spawn()`) and 4 (commit squashing) were minor observations, not blocking. Neither was addressed in this fix commit, which is appropriate -- the fix commit correctly scoped itself to the two important findings only.
