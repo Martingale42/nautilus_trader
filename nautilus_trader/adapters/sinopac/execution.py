@@ -245,6 +245,7 @@ class SinopacExecutionClient(LiveExecutionClient):
                     reason=reason,
                     ts_event=ts_event,
                 )
+                self._trade_id_to_client_order_id.pop(order_id, None)
             elif op_type == "Cancel":
                 self.generate_order_cancel_rejected(
                     strategy_id=order.strategy_id,
@@ -274,6 +275,7 @@ class SinopacExecutionClient(LiveExecutionClient):
                 venue_order_id=venue_order_id,
                 ts_event=ts_event,
             )
+            self._trade_id_to_client_order_id.pop(order_id, None)
         elif op_type in ("UpdatePrice", "UpdateQty"):
             modified_price = event.get("modified_price", 0.0)
             order_quantity = event.get("order_quantity", 0)
@@ -342,6 +344,11 @@ class SinopacExecutionClient(LiveExecutionClient):
             liquidity_side=LiquiditySide.NO_LIQUIDITY_SIDE,
             ts_event=ts_event_ns,
         )
+
+        # Clean up mapping when order is fully filled
+        order = self._cache.order(client_order_id)
+        if order is not None and order.is_closed:
+            self._trade_id_to_client_order_id.pop(trade_id_str, None)
 
     # -- Order operations -----------------------------------------------------
 
