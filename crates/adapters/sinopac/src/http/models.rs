@@ -22,7 +22,7 @@ use crate::common::enums::{
     SinopacPriceType,
 };
 
-/// Login request payload.
+/// Represents a login request payload.
 #[derive(Debug, Serialize)]
 pub struct LoginRequest {
     /// The API key for authentication.
@@ -40,14 +40,14 @@ pub struct LoginRequest {
     pub simulation: bool,
 }
 
-/// Login response containing account information.
+/// Represents a login response containing account information.
 #[derive(Debug, Deserialize)]
 pub struct LoginResponse {
     /// The list of account information entries.
     pub accounts: Vec<AccountInfo>,
 }
 
-/// Account information from the gateway.
+/// Represents account information from the gateway.
 #[derive(Debug, Deserialize)]
 pub struct AccountInfo {
     /// The account type identifier.
@@ -56,7 +56,7 @@ pub struct AccountInfo {
     pub account_id: String,
 }
 
-/// Gateway status response.
+/// Represents a gateway status response.
 #[derive(Debug, Deserialize)]
 pub struct StatusResponse {
     /// Whether the gateway is connected.
@@ -65,14 +65,14 @@ pub struct StatusResponse {
     pub simulation: bool,
 }
 
-/// Generic message response from the gateway.
+/// Represents a generic message response from the gateway.
 #[derive(Debug, Deserialize)]
 pub struct MessageResponse {
     /// The response status message.
     pub status: String,
 }
 
-/// Response containing a trade ID.
+/// Represents a response containing a trade ID.
 #[derive(Debug, Deserialize)]
 pub struct TradeIdResponse {
     /// The response status message.
@@ -81,7 +81,7 @@ pub struct TradeIdResponse {
     pub trade_id: String,
 }
 
-/// Stock contract from the gateway.
+/// Represents a stock contract from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StockContract {
     /// The contract code.
@@ -106,7 +106,7 @@ pub struct StockContract {
     pub day_trade: String,
 }
 
-/// Futures contract from the gateway.
+/// Represents a futures contract from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FuturesContract {
     /// The contract code.
@@ -133,7 +133,7 @@ pub struct FuturesContract {
     pub update_date: String,
 }
 
-/// Options contract from the gateway.
+/// Represents an options contract from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OptionsContract {
     /// The contract code.
@@ -164,7 +164,7 @@ pub struct OptionsContract {
     pub update_date: String,
 }
 
-/// Market snapshot data from the gateway.
+/// Represents market snapshot data from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SnapshotData {
     /// The contract code.
@@ -199,7 +199,7 @@ pub struct SnapshotData {
     pub ts: u64,
 }
 
-/// Historical tick data response.
+/// Represents a historical tick data response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TicksResponse {
     /// The contract code.
@@ -218,7 +218,7 @@ pub struct TicksResponse {
     pub tick_type: Vec<i32>,
 }
 
-/// Historical OHLCV bar data response.
+/// Represents a historical OHLCV bar data response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct KBarsResponse {
     /// The contract code.
@@ -237,7 +237,7 @@ pub struct KBarsResponse {
     pub volume: Vec<i64>,
 }
 
-/// Place order request payload.
+/// Represents a place order request payload.
 #[derive(Debug, Serialize)]
 pub struct PlaceOrderRequest {
     /// The contract code.
@@ -260,7 +260,7 @@ pub struct PlaceOrderRequest {
     pub market: SinopacMarket,
 }
 
-/// Update order request payload.
+/// Represents an update order request payload.
 #[derive(Debug, Serialize)]
 pub struct UpdateOrderRequest {
     /// The trade identifier to update.
@@ -273,14 +273,14 @@ pub struct UpdateOrderRequest {
     pub quantity: Option<i64>,
 }
 
-/// Cancel order request payload.
+/// Represents a cancel order request payload.
 #[derive(Debug, Serialize)]
 pub struct CancelOrderRequest {
     /// The trade identifier to cancel.
     pub trade_id: String,
 }
 
-/// Place order response from the gateway.
+/// Represents a place order response from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlaceOrderResponse {
     /// The trade identifier.
@@ -293,7 +293,7 @@ pub struct PlaceOrderResponse {
     pub status: String,
 }
 
-/// Active trade information from the gateway.
+/// Represents active trade information from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TradeInfo {
     /// The trade identifier.
@@ -314,7 +314,7 @@ pub struct TradeInfo {
     pub price_type: String,
 }
 
-/// Account position from the gateway.
+/// Represents an account position from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Position {
     /// The contract code.
@@ -333,7 +333,7 @@ pub struct Position {
     pub yd_quantity: i64,
 }
 
-/// Account balance from the gateway.
+/// Represents an account balance from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AccountBalance {
     /// The balance date.
@@ -342,7 +342,7 @@ pub struct AccountBalance {
     pub balance: f64,
 }
 
-/// Margin information from the gateway.
+/// Represents margin information from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MarginInfo {
     /// The yesterday closing balance.
@@ -355,7 +355,7 @@ pub struct MarginInfo {
     pub risk_indicator: f64,
 }
 
-/// Profit and loss record from the gateway.
+/// Represents a profit and loss record from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProfitLoss {
     /// The contract code.

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::enums::SinopacQuoteType;
 
-/// WebSocket subscribe/unsubscribe command message.
+/// Represents a WebSocket subscribe/unsubscribe command message.
 #[derive(Debug, Serialize)]
 pub struct WsSubscribeMsg {
     /// The subscription action (subscribe or unsubscribe).
@@ -30,7 +30,7 @@ pub struct WsSubscribeMsg {
     pub quote_type: SinopacQuoteType,
 }
 
-/// Raw WS message envelope. The `type` field determines the payload shape.
+/// Represents a raw WebSocket message envelope. The `type` field determines the payload shape.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum WsIncomingMsg {
@@ -54,7 +54,7 @@ pub enum WsIncomingMsg {
     Error(WsErrorMsg),
 }
 
-/// WebSocket tick message.
+/// Represents a WebSocket tick message.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsTickMsg {
     /// The contract code.
@@ -63,7 +63,7 @@ pub struct WsTickMsg {
     pub data: WsTickData,
 }
 
-/// WebSocket tick data payload.
+/// Represents a WebSocket tick data payload.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsTickData {
     /// The closing price.
@@ -98,7 +98,7 @@ pub struct WsTickData {
     pub underlying_price: Option<f64>,
 }
 
-/// WebSocket bid/ask message.
+/// Represents a WebSocket bid/ask message.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsBidAskMsg {
     /// The contract code.
@@ -107,7 +107,7 @@ pub struct WsBidAskMsg {
     pub data: WsBidAskData,
 }
 
-/// WebSocket bid/ask data payload.
+/// Represents a WebSocket bid/ask data payload.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsBidAskData {
     /// The bid prices.
@@ -122,7 +122,7 @@ pub struct WsBidAskData {
     pub timestamp: String,
 }
 
-/// Raw order update envelope. The `event` field discriminates the data type.
+/// Represents a raw order update envelope. The `event` field discriminates the data type.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsOrderUpdateMsg {
     /// The order event type string.
@@ -156,7 +156,7 @@ impl WsOrderUpdateMsg {
     }
 }
 
-/// Typed order event after parsing the `data` field.
+/// Represents a typed order event after parsing the `data` field.
 #[derive(Debug, Clone)]
 pub enum OrderEvent {
     /// A stock order state event.
@@ -169,7 +169,7 @@ pub enum OrderEvent {
     FuturesDeal(FuturesDealEventData),
 }
 
-/// Operation information for order events.
+/// Represents operation information for order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OperationInfo {
     /// The operation type (New, Cancel, etc.).
@@ -180,7 +180,7 @@ pub struct OperationInfo {
     pub op_msg: String,
 }
 
-/// Order status information from the gateway.
+/// Represents order status information from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OrderStatusInfo {
     /// The order status identifier.
@@ -195,7 +195,7 @@ pub struct OrderStatusInfo {
     pub order_quantity: i64,
 }
 
-/// Stock contract information from order events.
+/// Represents stock contract information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockContractInfo {
     /// The security type identifier.
@@ -210,7 +210,7 @@ pub struct StockContractInfo {
     pub name: String,
 }
 
-/// Futures contract information from order events.
+/// Represents futures contract information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesContractInfo {
     /// The security type identifier.
@@ -230,7 +230,7 @@ pub struct FuturesContractInfo {
     pub option_right: Option<String>,
 }
 
-/// Stock order information from order events.
+/// Represents stock order information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockOrderInfo {
     /// The order identifier.
@@ -257,7 +257,7 @@ pub struct StockOrderInfo {
     pub order_lot: Option<String>,
 }
 
-/// Futures order information from order events.
+/// Represents futures order information from order events.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesOrderInfo {
     /// The order identifier.
@@ -287,7 +287,7 @@ pub struct FuturesOrderInfo {
     pub combo: Option<bool>,
 }
 
-/// Stock order event data from the gateway.
+/// Represents stock order event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockOrderEventData {
     /// The operation information.
@@ -300,7 +300,7 @@ pub struct StockOrderEventData {
     pub contract: StockContractInfo,
 }
 
-/// Stock deal event data from the gateway.
+/// Represents stock deal event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockDealEventData {
     /// The trade identifier.
@@ -334,7 +334,7 @@ pub struct StockDealEventData {
     pub order_lot: Option<String>,
 }
 
-/// Futures order event data from the gateway.
+/// Represents futures order event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesOrderEventData {
     /// The operation information.
@@ -347,7 +347,7 @@ pub struct FuturesOrderEventData {
     pub contract: FuturesContractInfo,
 }
 
-/// Futures deal event data from the gateway.
+/// Represents futures deal event data from the gateway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FuturesDealEventData {
     /// The trade identifier.
@@ -384,7 +384,7 @@ pub struct FuturesDealEventData {
     pub combo: Option<bool>,
 }
 
-/// WebSocket subscription confirmation message.
+/// Represents a WebSocket subscription confirmation message.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsConfirmMsg {
     /// The contract code.
@@ -393,7 +393,7 @@ pub struct WsConfirmMsg {
     pub quote_type: String,
 }
 
-/// WebSocket error message from the gateway.
+/// Represents a WebSocket error message from the gateway.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsErrorMsg {
     /// The error detail message.

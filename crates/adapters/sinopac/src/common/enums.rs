@@ -17,7 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Trading action (buy/sell).
+/// Represents a trading action (buy or sell).
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(
@@ -37,7 +37,7 @@ pub enum SinopacAction {
     Sell,
 }
 
-/// Price type for order submission.
+/// Represents a price type for order submission.
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(
@@ -59,7 +59,7 @@ pub enum SinopacPriceType {
     MKP,
 }
 
-/// Order duration (time in force).
+/// Represents an order duration (time in force).
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(
@@ -81,7 +81,7 @@ pub enum SinopacOrderType {
     FOK,
 }
 
-/// Stock order credit condition.
+/// Represents a stock order credit condition.
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(
@@ -103,7 +103,7 @@ pub enum SinopacOrderCond {
     ShortSelling,
 }
 
-/// Stock lot size type.
+/// Represents a stock lot size type.
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(
@@ -127,7 +127,7 @@ pub enum SinopacOrderLot {
     Fixing,
 }
 
-/// Quote subscription type.
+/// Represents a quote subscription type.
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(
@@ -148,7 +148,7 @@ pub enum SinopacQuoteType {
     BidAsk,
 }
 
-/// Market type for endpoint routing.
+/// Represents a market type for endpoint routing.
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(
@@ -171,7 +171,7 @@ pub enum SinopacMarket {
     Options,
 }
 
-/// Exchange code for Taiwan markets.
+/// Represents an exchange code for Taiwan markets.
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(
@@ -191,7 +191,7 @@ pub enum SinopacExchange {
     OTC,
 }
 
-/// Order update event types from gateway WS.
+/// Represents order update event types from the gateway WebSocket.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SinopacOrderEvent {
     /// Stock order state update event.
