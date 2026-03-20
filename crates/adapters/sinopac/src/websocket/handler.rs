@@ -93,19 +93,19 @@ async fn resubscribe_all(
         subs_snapshot.len()
     );
 
-    for (code, quote_type) in subs_snapshot {
-        let msg = WsSubscribeMsg {
-            action: "subscribe".to_string(),
-            contract_code: code.clone(),
-            quote_type,
-        };
-        let text = serde_json::to_string(&msg).expect("serialize subscribe");
+    let guard = ws_client.lock().await;
+    if let Some(client) = guard.as_ref() {
+        for (code, quote_type) in subs_snapshot {
+            let msg = WsSubscribeMsg {
+                action: "subscribe".to_string(),
+                contract_code: code.clone(),
+                quote_type,
+            };
+            let text = serde_json::to_string(&msg).expect("serialize subscribe");
 
-        let guard = ws_client.lock().await;
-        if let Some(client) = guard.as_ref()
-            && let Err(e) = client.send_text(text, None).await
-        {
-            log::error!("Failed to re-subscribe {code}: {e}");
+            if let Err(e) = client.send_text(text, None).await {
+                log::error!("Failed to re-subscribe {code}: {e}");
+            }
         }
     }
 }

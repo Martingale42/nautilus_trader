@@ -122,6 +122,10 @@ impl SinopacWebSocketClient {
         .await
         .map_err(|e| SinopacWsError::Connection(e.to_string()))?;
 
+        // Store the client before spawning the feed handler so that
+        // a reconnection sentinel never finds `None` in the mutex.
+        *self.ws_client.lock().await = Some(client);
+
         // Spawn the feed handler that deserializes raw messages and
         // re-subscribes on reconnection
         let (msg_tx, msg_rx) = mpsc::unbounded_channel();
@@ -131,7 +135,6 @@ impl SinopacWebSocketClient {
             feed_handler(raw_rx, msg_tx, ws_client_ref, subs_ref).await;
         });
 
-        *self.ws_client.lock().await = Some(client);
         *self.msg_rx.lock().unwrap() = Some(msg_rx);
         *self.feed_handle.lock().unwrap() = Some(handle);
 
