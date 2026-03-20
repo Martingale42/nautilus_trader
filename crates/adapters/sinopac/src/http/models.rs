@@ -17,6 +17,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::common::enums::{
+    SinopacAction, SinopacMarket, SinopacOrderCond, SinopacOrderLot, SinopacOrderType,
+    SinopacPriceType,
+};
+
 /// Login request payload.
 #[derive(Debug, Serialize)]
 pub struct LoginRequest {
@@ -238,21 +243,21 @@ pub struct PlaceOrderRequest {
     /// The contract code.
     pub code: String,
     /// The order action (Buy or Sell).
-    pub action: String,
+    pub action: SinopacAction,
     /// The order price.
     pub price: f64,
     /// The order quantity.
     pub quantity: i64,
     /// The price type (LMT, MKT, MKP).
-    pub price_type: String,
+    pub price_type: SinopacPriceType,
     /// The order duration type (ROD, IOC, FOK).
-    pub order_type: String,
+    pub order_type: SinopacOrderType,
     /// The order condition (Cash, MarginTrading, ShortSelling).
-    pub order_cond: String,
+    pub order_cond: SinopacOrderCond,
     /// The lot size type (Common, Odd, IntradayOdd, Fixing).
-    pub order_lot: String,
+    pub order_lot: SinopacOrderLot,
     /// The market type (stock, futures, options).
-    pub market: String,
+    pub market: SinopacMarket,
 }
 
 /// Update order request payload.

@@ -26,7 +26,13 @@ use pyo3::{
 };
 
 use crate::{
-    common::parse::parse_instrument_id,
+    common::{
+        enums::{
+            SinopacAction, SinopacMarket, SinopacOrderCond, SinopacOrderLot, SinopacOrderType,
+            SinopacPriceType,
+        },
+        parse::parse_instrument_id,
+    },
     http::{
         client::SinopacHttpClient,
         models::{CancelOrderRequest, LoginRequest, PlaceOrderRequest, UpdateOrderRequest},
@@ -270,19 +276,19 @@ impl SinopacHttpClient {
 
     /// Places an order via the gateway.
     #[pyo3(name = "place_order")]
-    #[pyo3(signature = (code, action, price, quantity, price_type="LMT", order_type="ROD", order_cond="Cash", order_lot="Common", market="stock"))]
+    #[pyo3(signature = (code, action, price, quantity, price_type=SinopacPriceType::LMT, order_type=SinopacOrderType::ROD, order_cond=SinopacOrderCond::Cash, order_lot=SinopacOrderLot::Common, market=SinopacMarket::Stock))]
     fn py_place_order<'py>(
         &self,
         py: Python<'py>,
         code: String,
-        action: String,
+        action: SinopacAction,
         price: f64,
         quantity: i64,
-        price_type: &str,
-        order_type: &str,
-        order_cond: &str,
-        order_lot: &str,
-        market: &str,
+        price_type: SinopacPriceType,
+        order_type: SinopacOrderType,
+        order_cond: SinopacOrderCond,
+        order_lot: SinopacOrderLot,
+        market: SinopacMarket,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let request = PlaceOrderRequest {
@@ -290,11 +296,11 @@ impl SinopacHttpClient {
             action,
             price,
             quantity,
-            price_type: price_type.to_string(),
-            order_type: order_type.to_string(),
-            order_cond: order_cond.to_string(),
-            order_lot: order_lot.to_string(),
-            market: market.to_string(),
+            price_type,
+            order_type,
+            order_cond,
+            order_lot,
+            market,
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let resp = client
