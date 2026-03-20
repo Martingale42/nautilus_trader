@@ -25,7 +25,10 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use nautilus_common::testing::wait_until_async;
-use nautilus_sinopac::websocket::{client::SinopacWebSocketClient, messages::WsIncomingMsg};
+use nautilus_sinopac::{
+    common::enums::SinopacQuoteType,
+    websocket::{client::SinopacWebSocketClient, messages::WsIncomingMsg},
+};
 use rstest::rstest;
 
 fn load_test_json(filename: &str) -> String {
@@ -151,7 +154,9 @@ async fn test_subscribe_tick() {
     )
     .await;
 
-    client.subscribe("2330", "tick").expect("subscribe failed");
+    client
+        .subscribe("2330", SinopacQuoteType::Tick)
+        .expect("subscribe failed");
 
     let msg = client.next_message().await.expect("expected a message");
     match msg {
@@ -191,7 +196,7 @@ async fn test_subscribe_bidask() {
     .await;
 
     client
-        .subscribe("2330", "bidask")
+        .subscribe("2330", SinopacQuoteType::BidAsk)
         .expect("subscribe failed");
 
     let msg = client.next_message().await.expect("expected a message");

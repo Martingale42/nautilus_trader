@@ -17,6 +17,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::common::enums::SinopacQuoteType;
+
 /// WebSocket subscribe/unsubscribe command message.
 #[derive(Debug, Serialize)]
 pub struct WsSubscribeMsg {
@@ -25,7 +27,7 @@ pub struct WsSubscribeMsg {
     /// The contract code to subscribe to.
     pub contract_code: String,
     /// The quote type (tick or bidask).
-    pub quote_type: String,
+    pub quote_type: SinopacQuoteType,
 }
 
 /// Raw WS message envelope. The `type` field determines the payload shape.

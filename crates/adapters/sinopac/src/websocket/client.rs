@@ -24,7 +24,7 @@ use nautilus_common::live::get_runtime;
 use tokio::sync::mpsc;
 
 use super::{WsCommand, error::SinopacWsError, handler::ws_handler_loop, messages::WsIncomingMsg};
-use crate::common::consts::SINOPAC_GATEWAY_WS_URL;
+use crate::common::{consts::SINOPAC_GATEWAY_WS_URL, enums::SinopacQuoteType};
 
 /// WebSocket client for streaming market data and order updates
 /// from the Sinopac FastAPI gateway.
@@ -113,23 +113,31 @@ impl SinopacWebSocketClient {
     }
 
     /// Subscribes to quote data for a contract.
-    pub fn subscribe(&self, code: &str, quote_type: &str) -> Result<(), SinopacWsError> {
+    pub fn subscribe(
+        &self,
+        code: &str,
+        quote_type: SinopacQuoteType,
+    ) -> Result<(), SinopacWsError> {
         let guard = self.cmd_tx.lock().unwrap();
         let tx = guard.as_ref().ok_or(SinopacWsError::NotConnected)?;
         tx.send(WsCommand::Subscribe {
             code: code.to_string(),
-            quote_type: quote_type.to_string(),
+            quote_type,
         })
         .map_err(|e| SinopacWsError::Send(e.to_string()))
     }
 
     /// Unsubscribes from quote data for a contract.
-    pub fn unsubscribe(&self, code: &str, quote_type: &str) -> Result<(), SinopacWsError> {
+    pub fn unsubscribe(
+        &self,
+        code: &str,
+        quote_type: SinopacQuoteType,
+    ) -> Result<(), SinopacWsError> {
         let guard = self.cmd_tx.lock().unwrap();
         let tx = guard.as_ref().ok_or(SinopacWsError::NotConnected)?;
         tx.send(WsCommand::Unsubscribe {
             code: code.to_string(),
-            quote_type: quote_type.to_string(),
+            quote_type,
         })
         .map_err(|e| SinopacWsError::Send(e.to_string()))
     }
