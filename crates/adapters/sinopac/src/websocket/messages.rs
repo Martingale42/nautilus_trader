@@ -477,8 +477,8 @@ mod tests {
     fn test_deserialize_ws_error() {
         let msg: WsIncomingMsg = load_test_json_as("ws_error.json");
         match msg {
-            WsIncomingMsg::Error(err) => {
-                assert!(err.detail.contains("Missing"));
+            WsIncomingMsg::Error(e) => {
+                assert!(e.detail.contains("Missing"));
             }
             _ => panic!("Expected Error message"),
         }

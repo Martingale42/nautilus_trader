@@ -142,7 +142,7 @@ class SinopacDataClient(LiveMarketDataClient):
     async def _disconnect(self) -> None:
         await asyncio.sleep(1.0)  # Grace period for pending WS messages
 
-        if await self._ws_client.is_connected():
+        if self._ws_client.is_connected():
             self._log.info("Disconnecting Sinopac WebSocket")
             await self._ws_client.disconnect()
             self._log.info("Sinopac WebSocket disconnected", LogColor.BLUE)
