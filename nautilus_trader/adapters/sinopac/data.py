@@ -1,3 +1,18 @@
+# -------------------------------------------------------------------------------------------------
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+#  https://nautechsystems.io
+#
+#  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+#  You may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+# -------------------------------------------------------------------------------------------------
+
 import asyncio
 
 from nautilus_trader.adapters.sinopac.config import SinopacDataClientConfig
@@ -17,6 +32,12 @@ from nautilus_trader.data.messages import RequestTradeTicks
 from nautilus_trader.data.messages import SubscribeQuoteTicks
 from nautilus_trader.data.messages import SubscribeTradeTicks
 from nautilus_trader.data.messages import UnsubscribeQuoteTicks
+from nautilus_trader.data.messages import SubscribeBars
+from nautilus_trader.data.messages import SubscribeInstrumentClose
+from nautilus_trader.data.messages import SubscribeInstrumentStatus
+from nautilus_trader.data.messages import UnsubscribeBars
+from nautilus_trader.data.messages import UnsubscribeInstrumentClose
+from nautilus_trader.data.messages import UnsubscribeInstrumentStatus
 from nautilus_trader.data.messages import UnsubscribeTradeTicks
 from nautilus_trader.live.cancellation import DEFAULT_FUTURE_CANCELLATION_TIMEOUT
 from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
@@ -162,17 +183,6 @@ class SinopacDataClient(LiveMarketDataClient):
         await self._ws_client.subscribe(code, SinopacQuoteType.TICK)
         self._log.info(f"Subscribed to trade ticks: {instrument_id}", LogColor.BLUE)
 
-    async def _unsubscribe_trade_ticks(self, command: UnsubscribeTradeTicks) -> None:
-        instrument_id = command.instrument_id
-        if instrument_id not in self._subscribed_trades:
-            self._log.warning(f"Not subscribed to {instrument_id} trades")
-            return
-
-        self._subscribed_trades.discard(instrument_id)
-        code = instrument_id.symbol.value
-        await self._ws_client.unsubscribe(code, SinopacQuoteType.TICK)
-        self._log.info(f"Unsubscribed from trade ticks: {instrument_id}", LogColor.BLUE)
-
     async def _subscribe_quote_ticks(self, command: SubscribeQuoteTicks) -> None:
         instrument_id = command.instrument_id
         if instrument_id in self._subscribed_quotes:
@@ -183,6 +193,29 @@ class SinopacDataClient(LiveMarketDataClient):
         code = instrument_id.symbol.value
         await self._ws_client.subscribe(code, SinopacQuoteType.BID_ASK)
         self._log.info(f"Subscribed to quote ticks: {instrument_id}", LogColor.BLUE)
+
+    async def _subscribe_bars(self, command: SubscribeBars) -> None:
+        self._log.error(
+            f"Cannot subscribe to {command.bar_type} bars: "
+            "Sinopac does not support streaming bars (use request_bars for historical)",
+        )
+
+    async def _subscribe_instrument_status(self, command: SubscribeInstrumentStatus) -> None:
+        pass  # Not supported by Sinopac
+
+    async def _subscribe_instrument_close(self, command: SubscribeInstrumentClose) -> None:
+        pass  # Not supported by Sinopac
+
+    async def _unsubscribe_trade_ticks(self, command: UnsubscribeTradeTicks) -> None:
+        instrument_id = command.instrument_id
+        if instrument_id not in self._subscribed_trades:
+            self._log.warning(f"Not subscribed to {instrument_id} trades")
+            return
+
+        self._subscribed_trades.discard(instrument_id)
+        code = instrument_id.symbol.value
+        await self._ws_client.unsubscribe(code, SinopacQuoteType.TICK)
+        self._log.info(f"Unsubscribed from trade ticks: {instrument_id}", LogColor.BLUE)
 
     async def _unsubscribe_quote_ticks(self, command: UnsubscribeQuoteTicks) -> None:
         instrument_id = command.instrument_id
@@ -195,25 +228,13 @@ class SinopacDataClient(LiveMarketDataClient):
         await self._ws_client.unsubscribe(code, SinopacQuoteType.BID_ASK)
         self._log.info(f"Unsubscribed from quote ticks: {instrument_id}", LogColor.BLUE)
 
-    async def _subscribe_bars(self, command: object) -> None:
-        self._log.error(
-            f"Cannot subscribe to {command.bar_type} bars: "
-            "Sinopac does not support streaming bars (use request_bars for historical)",
-        )
-
-    async def _unsubscribe_bars(self, command: object) -> None:
+    async def _unsubscribe_bars(self, command: UnsubscribeBars) -> None:
         pass  # No-op
 
-    async def _subscribe_instrument_status(self, command: object) -> None:
-        pass  # Not supported by Sinopac
-
-    async def _subscribe_instrument_close(self, command: object) -> None:
-        pass  # Not supported by Sinopac
-
-    async def _unsubscribe_instrument_status(self, command: object) -> None:
+    async def _unsubscribe_instrument_status(self, command: UnsubscribeInstrumentStatus) -> None:
         pass  # No-op
 
-    async def _unsubscribe_instrument_close(self, command: object) -> None:
+    async def _unsubscribe_instrument_close(self, command: UnsubscribeInstrumentClose) -> None:
         pass  # No-op
 
     # -- Historical data requests ---------------------------------------------

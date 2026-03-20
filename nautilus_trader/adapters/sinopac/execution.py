@@ -1,7 +1,23 @@
+# -------------------------------------------------------------------------------------------------
+#  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+#  https://nautechsystems.io
+#
+#  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+#  You may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+# -------------------------------------------------------------------------------------------------
+
 from __future__ import annotations
 
 import asyncio
 import os
+from typing import Any
 
 from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
 from nautilus_trader.adapters.sinopac.constants import SINOPAC
@@ -170,7 +186,6 @@ class SinopacExecutionClient(LiveExecutionClient):
         self._client_futures.clear()
 
     async def _update_account_state(self) -> None:
-        """Query account balance and generate AccountState event."""
         try:
             balance_data = await self._http_client.account_balance()
             twd = Currency.from_str("TWD")
@@ -195,7 +210,7 @@ class SinopacExecutionClient(LiveExecutionClient):
     def _handle_msg(self, msg: object) -> None:
         try:
             if nautilus_pyo3.is_pycapsule(msg):
-                return  # Market data — handled by DataClient
+                return  # Market data -- handled by DataClient
 
             if isinstance(msg, dict):
                 self._handle_order_event(msg)
@@ -205,7 +220,7 @@ class SinopacExecutionClient(LiveExecutionClient):
         except Exception as e:
             self._log.exception("Error handling Sinopac exec WS message", e)
 
-    def _handle_order_event(self, event: dict) -> None:
+    def _handle_order_event(self, event: dict[str, Any]) -> None:
         event_type = event.get("event_type")
         if event_type in ("stock_order", "futures_order"):
             self._handle_order_status_event(event)
@@ -214,8 +229,7 @@ class SinopacExecutionClient(LiveExecutionClient):
         else:
             self._log.warning(f"Unknown order event type: {event_type}")
 
-    def _handle_order_status_event(self, event: dict) -> None:
-        """Handle a stock/futures order status event from WS."""
+    def _handle_order_status_event(self, event: dict[str, Any]) -> None:
         op_code = event.get("op_code", "")
         op_type = event.get("op_type", "")
         order_id = event.get("order_id", "")
@@ -299,8 +313,7 @@ class SinopacExecutionClient(LiveExecutionClient):
                 )
         # "New" with op_code "00" = order accepted (already handled in _submit_order)
 
-    def _handle_deal_event(self, event: dict) -> None:
-        """Handle a stock/futures deal (fill) event from WS."""
+    def _handle_deal_event(self, event: dict[str, Any]) -> None:
         trade_id_str = event.get("trade_id", "")
         ordno = event.get("ordno", "")
         code = event.get("code", "")
@@ -520,7 +533,6 @@ class SinopacExecutionClient(LiveExecutionClient):
             await self._cancel_order(cancel)
 
     def _determine_market(self, instrument: object) -> SinopacMarket:
-        """Determine the Sinopac market type from a Nautilus instrument."""
         if isinstance(instrument, Equity):
             return SinopacMarket.STOCK
         elif isinstance(instrument, FuturesContract):
