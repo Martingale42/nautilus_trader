@@ -13,6 +13,10 @@ from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.nautilus_pyo3 import sinopac as pyo3_sinopac
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacAction
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacMarket
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOrderType
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacPriceType
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import BatchCancelOrders
 from nautilus_trader.execution.messages import CancelAllOrders
@@ -63,19 +67,19 @@ _SINOPAC_STATUS_MAP = {
 }
 
 _NT_TO_SINOPAC_ACTION = {
-    OrderSide.BUY: "Buy",
-    OrderSide.SELL: "Sell",
+    OrderSide.BUY: SinopacAction.BUY,
+    OrderSide.SELL: SinopacAction.SELL,
 }
 
 _NT_TO_SINOPAC_PRICE_TYPE = {
-    OrderType.LIMIT: "LMT",
-    OrderType.MARKET: "MKT",
+    OrderType.LIMIT: SinopacPriceType.LMT,
+    OrderType.MARKET: SinopacPriceType.MKT,
 }
 
 _NT_TO_SINOPAC_ORDER_TYPE = {
-    TimeInForce.DAY: "ROD",
-    TimeInForce.IOC: "IOC",
-    TimeInForce.FOK: "FOK",
+    TimeInForce.DAY: SinopacOrderType.ROD,
+    TimeInForce.IOC: SinopacOrderType.IOC,
+    TimeInForce.FOK: SinopacOrderType.FOK,
 }
 
 
@@ -371,7 +375,10 @@ class SinopacExecutionClient(LiveExecutionClient):
             code = instrument_id.symbol.value
             action = _NT_TO_SINOPAC_ACTION[order.side]
             price_type = _NT_TO_SINOPAC_PRICE_TYPE[order.order_type]
-            order_type = _NT_TO_SINOPAC_ORDER_TYPE.get(order.time_in_force, "ROD")
+            order_type = _NT_TO_SINOPAC_ORDER_TYPE.get(
+                order.time_in_force,
+                SinopacOrderType.ROD,
+            )
             price = float(order.price) if order.price is not None else 0.0
             quantity = int(order.quantity)
 
@@ -512,14 +519,15 @@ class SinopacExecutionClient(LiveExecutionClient):
         for cancel in command.cancels:
             await self._cancel_order(cancel)
 
-    def _determine_market(self, instrument: object) -> str:
+    def _determine_market(self, instrument: object) -> SinopacMarket:
+        """Determine the Sinopac market type from a Nautilus instrument."""
         if isinstance(instrument, Equity):
-            return "stock"
+            return SinopacMarket.STOCK
         elif isinstance(instrument, FuturesContract):
-            return "futures"
+            return SinopacMarket.FUTURES
         elif isinstance(instrument, OptionContract):
-            return "options"
-        return "stock"
+            return SinopacMarket.OPTIONS
+        return SinopacMarket.STOCK
 
     # -- Reconciliation reports -----------------------------------------------
 

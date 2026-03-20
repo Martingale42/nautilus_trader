@@ -26,11 +26,16 @@ use nautilus_model::{
 };
 use pyo3::prelude::*;
 
-use crate::websocket::{
-    client::SinopacWebSocketClient,
-    messages::WsIncomingMsg,
-    order_parse::order_event_to_pydict,
-    parse::{parse_taiwan_timestamp, parse_ws_bidask_to_quote_tick, parse_ws_tick_to_trade_tick},
+use crate::{
+    common::enums::SinopacQuoteType,
+    websocket::{
+        client::SinopacWebSocketClient,
+        messages::WsIncomingMsg,
+        order_parse::order_event_to_pydict,
+        parse::{
+            parse_taiwan_timestamp, parse_ws_bidask_to_quote_tick, parse_ws_tick_to_trade_tick,
+        },
+    },
 };
 
 #[pymethods]
@@ -50,14 +55,14 @@ impl SinopacWebSocketClient {
 
     /// Subscribes to quote data for a contract.
     #[pyo3(name = "subscribe")]
-    fn py_subscribe(&self, code: String, quote_type: String) -> PyResult<()> {
-        self.subscribe(&code, &quote_type).map_err(to_pyruntime_err)
+    fn py_subscribe(&self, code: String, quote_type: SinopacQuoteType) -> PyResult<()> {
+        self.subscribe(&code, quote_type).map_err(to_pyruntime_err)
     }
 
     /// Unsubscribes from quote data for a contract.
     #[pyo3(name = "unsubscribe")]
-    fn py_unsubscribe(&self, code: String, quote_type: String) -> PyResult<()> {
-        self.unsubscribe(&code, &quote_type)
+    fn py_unsubscribe(&self, code: String, quote_type: SinopacQuoteType) -> PyResult<()> {
+        self.unsubscribe(&code, quote_type)
             .map_err(to_pyruntime_err)
     }
 

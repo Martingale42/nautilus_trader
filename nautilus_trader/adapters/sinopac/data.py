@@ -10,6 +10,7 @@ from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.nautilus_pyo3 import sinopac as pyo3_sinopac
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacQuoteType
 from nautilus_trader.data.messages import RequestBars
 from nautilus_trader.data.messages import RequestQuoteTicks
 from nautilus_trader.data.messages import RequestTradeTicks
@@ -158,7 +159,7 @@ class SinopacDataClient(LiveMarketDataClient):
 
         self._subscribed_trades.add(instrument_id)
         code = instrument_id.symbol.value
-        self._ws_client.subscribe(code, "tick")
+        self._ws_client.subscribe(code, SinopacQuoteType.TICK)
         self._log.info(f"Subscribed to trade ticks: {instrument_id}", LogColor.BLUE)
 
     async def _unsubscribe_trade_ticks(self, command: UnsubscribeTradeTicks) -> None:
@@ -169,7 +170,7 @@ class SinopacDataClient(LiveMarketDataClient):
 
         self._subscribed_trades.discard(instrument_id)
         code = instrument_id.symbol.value
-        self._ws_client.unsubscribe(code, "tick")
+        self._ws_client.unsubscribe(code, SinopacQuoteType.TICK)
         self._log.info(f"Unsubscribed from trade ticks: {instrument_id}", LogColor.BLUE)
 
     async def _subscribe_quote_ticks(self, command: SubscribeQuoteTicks) -> None:
@@ -180,7 +181,7 @@ class SinopacDataClient(LiveMarketDataClient):
 
         self._subscribed_quotes.add(instrument_id)
         code = instrument_id.symbol.value
-        self._ws_client.subscribe(code, "bidask")
+        self._ws_client.subscribe(code, SinopacQuoteType.BID_ASK)
         self._log.info(f"Subscribed to quote ticks: {instrument_id}", LogColor.BLUE)
 
     async def _unsubscribe_quote_ticks(self, command: UnsubscribeQuoteTicks) -> None:
@@ -191,7 +192,7 @@ class SinopacDataClient(LiveMarketDataClient):
 
         self._subscribed_quotes.discard(instrument_id)
         code = instrument_id.symbol.value
-        self._ws_client.unsubscribe(code, "bidask")
+        self._ws_client.unsubscribe(code, SinopacQuoteType.BID_ASK)
         self._log.info(f"Unsubscribed from quote ticks: {instrument_id}", LogColor.BLUE)
 
     async def _subscribe_bars(self, command: object) -> None:
