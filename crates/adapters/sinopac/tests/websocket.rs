@@ -115,25 +115,23 @@ async fn test_connect_disconnect() {
     let url = create_ws_url(addr);
     let client = SinopacWebSocketClient::new(Some(url));
 
-    assert!(!client.is_connected());
+    assert!(!client.is_connected().await);
 
     client.connect().await.expect("connect failed");
 
-    // Wait for the handler task (running on get_runtime()) to set is_connected
+    // Wait for the handler task to set is_connected
     wait_until_async(
         || {
-            let connected = client.is_connected();
-            async move { connected }
+            let client = client.clone();
+            async move { client.is_connected().await }
         },
         Duration::from_secs(5),
     )
     .await;
 
-    assert!(client.is_connected());
+    assert!(client.is_connected().await);
 
-    // Note: we don't call disconnect().await here because it awaits a JoinHandle
-    // from get_runtime() which is a different runtime than #[tokio::test].
-    // Dropping the client is sufficient for test cleanup.
+    client.disconnect().await.expect("disconnect failed");
 }
 
 #[rstest]
@@ -147,8 +145,8 @@ async fn test_subscribe_tick() {
 
     wait_until_async(
         || {
-            let connected = client.is_connected();
-            async move { connected }
+            let client = client.clone();
+            async move { client.is_connected().await }
         },
         Duration::from_secs(5),
     )
@@ -156,6 +154,7 @@ async fn test_subscribe_tick() {
 
     client
         .subscribe("2330", SinopacQuoteType::Tick)
+        .await
         .expect("subscribe failed");
 
     let msg = client.next_message().await.expect("expected a message");
@@ -188,8 +187,8 @@ async fn test_subscribe_bidask() {
 
     wait_until_async(
         || {
-            let connected = client.is_connected();
-            async move { connected }
+            let client = client.clone();
+            async move { client.is_connected().await }
         },
         Duration::from_secs(5),
     )
@@ -197,6 +196,7 @@ async fn test_subscribe_bidask() {
 
     client
         .subscribe("2330", SinopacQuoteType::BidAsk)
+        .await
         .expect("subscribe failed");
 
     let msg = client.next_message().await.expect("expected a message");

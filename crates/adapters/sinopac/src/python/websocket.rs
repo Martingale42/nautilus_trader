@@ -49,24 +49,49 @@ impl SinopacWebSocketClient {
 
     /// Returns whether the client is currently connected.
     #[pyo3(name = "is_connected")]
-    fn py_is_connected(&self) -> bool {
-        self.is_connected()
+    fn py_is_connected<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(
+            py,
+            async move { Ok(client.is_connected().await) },
+        )
     }
 
     /// Subscribes to quote data for a contract.
     #[pyo3(name = "subscribe")]
-    fn py_subscribe(&self, code: String, quote_type: SinopacQuoteType) -> PyResult<()> {
-        self.subscribe(&code, quote_type).map_err(to_pyruntime_err)
+    fn py_subscribe<'py>(
+        &self,
+        py: Python<'py>,
+        code: String,
+        quote_type: SinopacQuoteType,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            client
+                .subscribe(&code, quote_type)
+                .await
+                .map_err(to_pyruntime_err)
+        })
     }
 
     /// Unsubscribes from quote data for a contract.
     #[pyo3(name = "unsubscribe")]
-    fn py_unsubscribe(&self, code: String, quote_type: SinopacQuoteType) -> PyResult<()> {
-        self.unsubscribe(&code, quote_type)
-            .map_err(to_pyruntime_err)
+    fn py_unsubscribe<'py>(
+        &self,
+        py: Python<'py>,
+        code: String,
+        quote_type: SinopacQuoteType,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = self.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            client
+                .unsubscribe(&code, quote_type)
+                .await
+                .map_err(to_pyruntime_err)
+        })
     }
 
-    /// Connect to the gateway WS and start the message processing loop.
+    /// Connects to the gateway WS and starts the message processing loop.
     ///
     /// `instruments` — list of pyo3 InstrumentAny objects (for ID/precision lookup)
     /// `callback` — Python callable invoked with each parsed data PyCapsule
@@ -228,7 +253,7 @@ impl SinopacWebSocketClient {
         })
     }
 
-    /// Disconnect from the gateway WS.
+    /// Disconnects from the gateway WS.
     #[pyo3(name = "disconnect")]
     fn py_disconnect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
@@ -249,7 +274,7 @@ impl SinopacWebSocketClient {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let start = std::time::Instant::now();
             let timeout = std::time::Duration::from_secs_f64(timeout_secs);
-            while !client.is_connected() {
+            while !client.is_connected().await {
                 if start.elapsed() > timeout {
                     return Err(pyo3::exceptions::PyTimeoutError::new_err(format!(
                         "WS connection timeout after {timeout_secs}s"

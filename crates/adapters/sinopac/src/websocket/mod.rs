@@ -23,25 +23,3 @@ pub mod parse;
 
 #[cfg(feature = "python")]
 pub mod order_parse;
-
-use crate::common::enums::SinopacQuoteType;
-
-/// Internal command sent from client API to the background handler task.
-pub(crate) enum WsCommand {
-    /// Subscribes to quote data for a contract.
-    Subscribe {
-        /// The contract code.
-        code: String,
-        /// The quote type to subscribe to.
-        quote_type: SinopacQuoteType,
-    },
-    /// Unsubscribes from quote data for a contract.
-    Unsubscribe {
-        /// The contract code.
-        code: String,
-        /// The quote type to unsubscribe from.
-        quote_type: SinopacQuoteType,
-    },
-    /// Closes the WebSocket connection.
-    Close,
-}

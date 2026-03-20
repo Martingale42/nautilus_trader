@@ -13,119 +13,99 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! WebSocket message handler loop for the Sinopac adapter.
+//! WebSocket feed handler for the Sinopac adapter.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
 };
 
-use futures_util::{SinkExt, StreamExt};
+use nautilus_network::websocket::WebSocketClient;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message as WsFrame;
+use tokio_tungstenite::tungstenite::Message;
 
-use super::{
-    WsCommand,
-    messages::{WsIncomingMsg, WsSubscribeMsg},
-};
+use super::messages::{WsIncomingMsg, WsSubscribeMsg};
+use crate::common::enums::SinopacQuoteType;
 
-/// Background task that manages the WebSocket connection.
+/// Receives raw WebSocket frames from the `nautilus_network` channel handler,
+/// deserializes them into `WsIncomingMsg`, and forwards to the message channel.
 ///
-/// Reads frames from the WS stream, deserializes to `WsIncomingMsg`,
-/// and forwards to the message channel. Also processes subscribe/unsubscribe
-/// commands from the command channel.
-pub(crate) async fn ws_handler_loop<S>(
-    ws_stream: S,
-    mut cmd_rx: mpsc::UnboundedReceiver<WsCommand>,
+/// Detects the `__RECONNECTED__` sentinel from `nautilus_network` and
+/// re-subscribes all active subscriptions after reconnection.
+/// Ping/Pong and reconnection are handled by `nautilus_network::WebSocketClient`.
+pub(crate) async fn feed_handler(
+    mut raw_rx: mpsc::UnboundedReceiver<Message>,
     msg_tx: mpsc::UnboundedSender<WsIncomingMsg>,
-    is_connected: Arc<AtomicBool>,
-) where
-    S: StreamExt<Item = Result<WsFrame, tokio_tungstenite::tungstenite::Error>>
-        + SinkExt<WsFrame>
-        + Unpin,
-    <S as futures_util::Sink<WsFrame>>::Error: std::fmt::Display,
-{
-    let (mut sink, mut stream) = ws_stream.split();
-    is_connected.store(true, Ordering::SeqCst);
-    log::debug!("WebSocket handler loop started");
+    ws_client: Arc<tokio::sync::Mutex<Option<WebSocketClient>>>,
+    subscriptions: Arc<Mutex<HashSet<(String, SinopacQuoteType)>>>,
+) {
+    log::debug!("Feed handler started");
 
-    loop {
-        tokio::select! {
-            // Process incoming WS frames
-            frame = stream.next() => {
-                match frame {
-                    Some(Ok(WsFrame::Text(text))) => {
-                        match serde_json::from_str::<WsIncomingMsg>(&text) {
-                            Ok(msg) => {
-                                if msg_tx.send(msg).is_err() {
-                                    log::debug!("Message receiver dropped, shutting down");
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                log::warn!("Failed to deserialize WS message: {e}, raw: {text}");
-                            }
-                        }
-                    }
-                    Some(Ok(WsFrame::Close(_))) => {
-                        log::debug!("Received WS close frame");
-                        break;
-                    }
-                    Some(Ok(WsFrame::Ping(data))) => {
-                        if let Err(e) = sink.send(WsFrame::Pong(data)).await {
-                            log::error!("Failed to send pong: {e}");
+    while let Some(raw_msg) = raw_rx.recv().await {
+        match raw_msg {
+            Message::Text(text) => {
+                // Check for reconnection sentinel
+                if text.as_str() == nautilus_network::RECONNECTED {
+                    log::info!("Received WebSocket reconnected signal");
+                    resubscribe_all(&ws_client, &subscriptions).await;
+                    continue;
+                }
+
+                match serde_json::from_str::<WsIncomingMsg>(&text) {
+                    Ok(msg) => {
+                        if msg_tx.send(msg).is_err() {
+                            log::debug!("Message receiver dropped, shutting down feed handler");
                             break;
                         }
                     }
-                    Some(Ok(_)) => {} // Ignore other frame types
-                    Some(Err(e)) => {
-                        log::error!("WebSocket error: {e}");
-                        break;
-                    }
-                    None => {
-                        log::debug!("WebSocket stream ended");
-                        break;
+                    Err(e) => {
+                        log::warn!("Failed to deserialize WS message: {e}, raw: {text}");
                     }
                 }
             }
-
-            // Process outgoing commands
-            cmd = cmd_rx.recv() => {
-                match cmd {
-                    Some(WsCommand::Subscribe { code, quote_type }) => {
-                        let msg = WsSubscribeMsg {
-                            action: "subscribe".to_string(),
-                            contract_code: code,
-                            quote_type,
-                        };
-                        let text = serde_json::to_string(&msg).expect("serialize subscribe");
-                        if let Err(e) = sink.send(WsFrame::Text(text.into())).await {
-                            log::error!("Failed to send subscribe: {e}");
-                            break;
-                        }
-                    }
-                    Some(WsCommand::Unsubscribe { code, quote_type }) => {
-                        let msg = WsSubscribeMsg {
-                            action: "unsubscribe".to_string(),
-                            contract_code: code,
-                            quote_type,
-                        };
-                        let text = serde_json::to_string(&msg).expect("serialize unsubscribe");
-                        if let Err(e) = sink.send(WsFrame::Text(text.into())).await {
-                            log::error!("Failed to send unsubscribe: {e}");
-                            break;
-                        }
-                    }
-                    Some(WsCommand::Close) | None => {
-                        log::debug!("Close command received");
-                        let _ = sink.send(WsFrame::Close(None)).await;
-                        break;
-                    }
-                }
+            Message::Close(_) => {
+                log::info!("WebSocket close frame received");
+                break;
             }
+            _ => {} // Ping/Pong handled by nautilus_network
         }
     }
 
-    is_connected.store(false, Ordering::SeqCst);
-    log::debug!("WebSocket handler loop ended");
+    log::debug!("Feed handler ended");
+}
+
+/// Re-subscribes all tracked subscriptions after a reconnection.
+async fn resubscribe_all(
+    ws_client: &Arc<tokio::sync::Mutex<Option<WebSocketClient>>>,
+    subscriptions: &Arc<Mutex<HashSet<(String, SinopacQuoteType)>>>,
+) {
+    let subs_snapshot: Vec<(String, SinopacQuoteType)> = {
+        let guard = subscriptions.lock().unwrap();
+        guard.iter().cloned().collect()
+    };
+
+    if subs_snapshot.is_empty() {
+        return;
+    }
+
+    log::info!(
+        "Re-subscribing {} topics after reconnection",
+        subs_snapshot.len()
+    );
+
+    for (code, quote_type) in subs_snapshot {
+        let msg = WsSubscribeMsg {
+            action: "subscribe".to_string(),
+            contract_code: code.clone(),
+            quote_type,
+        };
+        let text = serde_json::to_string(&msg).expect("serialize subscribe");
+
+        let guard = ws_client.lock().await;
+        if let Some(client) = guard.as_ref()
+            && let Err(e) = client.send_text(text, None).await
+        {
+            log::error!("Failed to re-subscribe {code}: {e}");
+        }
+    }
 }
