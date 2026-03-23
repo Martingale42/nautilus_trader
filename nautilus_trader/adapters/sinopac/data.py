@@ -29,15 +29,17 @@ from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacQuoteType
 from nautilus_trader.data.messages import RequestBars
 from nautilus_trader.data.messages import RequestQuoteTicks
 from nautilus_trader.data.messages import RequestTradeTicks
-from nautilus_trader.data.messages import SubscribeQuoteTicks
-from nautilus_trader.data.messages import SubscribeTradeTicks
-from nautilus_trader.data.messages import UnsubscribeQuoteTicks
 from nautilus_trader.data.messages import SubscribeBars
 from nautilus_trader.data.messages import SubscribeInstrumentClose
 from nautilus_trader.data.messages import SubscribeInstrumentStatus
+from nautilus_trader.data.messages import SubscribeOrderBook
+from nautilus_trader.data.messages import SubscribeQuoteTicks
+from nautilus_trader.data.messages import SubscribeTradeTicks
 from nautilus_trader.data.messages import UnsubscribeBars
 from nautilus_trader.data.messages import UnsubscribeInstrumentClose
 from nautilus_trader.data.messages import UnsubscribeInstrumentStatus
+from nautilus_trader.data.messages import UnsubscribeOrderBook
+from nautilus_trader.data.messages import UnsubscribeQuoteTicks
 from nautilus_trader.data.messages import UnsubscribeTradeTicks
 from nautilus_trader.live.cancellation import DEFAULT_FUTURE_CANCELLATION_TIMEOUT
 from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
@@ -111,6 +113,7 @@ class SinopacDataClient(LiveMarketDataClient):
         # Subscription tracking
         self._subscribed_trades: set[InstrumentId] = set()
         self._subscribed_quotes: set[InstrumentId] = set()
+        self._subscribed_book: set[InstrumentId] = set()  # depth + deltas share BidAsk stream
 
         # Background task tracking
         self._client_futures: set[asyncio.Future] = set()
@@ -191,8 +194,27 @@ class SinopacDataClient(LiveMarketDataClient):
 
         self._subscribed_quotes.add(instrument_id)
         code = instrument_id.symbol.value
-        await self._ws_client.subscribe(code, SinopacQuoteType.BID_ASK)
+        if instrument_id not in self._subscribed_book:
+            await self._ws_client.subscribe(code, SinopacQuoteType.BID_ASK)
         self._log.info(f"Subscribed to quote ticks: {instrument_id}", LogColor.BLUE)
+
+    async def _subscribe_order_book_deltas(self, command: SubscribeOrderBook) -> None:
+        await self._subscribe_order_book(command)
+
+    async def _subscribe_order_book_depth(self, command: SubscribeOrderBook) -> None:
+        await self._subscribe_order_book(command)
+
+    async def _subscribe_order_book(self, command: SubscribeOrderBook) -> None:
+        instrument_id = command.instrument_id
+        if instrument_id in self._subscribed_book:
+            self._log.warning(f"Already subscribed to {instrument_id} order book")
+            return
+
+        self._subscribed_book.add(instrument_id)
+        code = instrument_id.symbol.value
+        if instrument_id not in self._subscribed_quotes:
+            await self._ws_client.subscribe(code, SinopacQuoteType.BID_ASK)
+        self._log.info(f"Subscribed to order book: {instrument_id}", LogColor.BLUE)
 
     async def _subscribe_bars(self, command: SubscribeBars) -> None:
         self._log.error(
@@ -224,9 +246,28 @@ class SinopacDataClient(LiveMarketDataClient):
             return
 
         self._subscribed_quotes.discard(instrument_id)
-        code = instrument_id.symbol.value
-        await self._ws_client.unsubscribe(code, SinopacQuoteType.BID_ASK)
+        if instrument_id not in self._subscribed_book:
+            code = instrument_id.symbol.value
+            await self._ws_client.unsubscribe(code, SinopacQuoteType.BID_ASK)
         self._log.info(f"Unsubscribed from quote ticks: {instrument_id}", LogColor.BLUE)
+
+    async def _unsubscribe_order_book_deltas(self, command: UnsubscribeOrderBook) -> None:
+        await self._unsubscribe_order_book(command)
+
+    async def _unsubscribe_order_book_depth(self, command: UnsubscribeOrderBook) -> None:
+        await self._unsubscribe_order_book(command)
+
+    async def _unsubscribe_order_book(self, command: UnsubscribeOrderBook) -> None:
+        instrument_id = command.instrument_id
+        if instrument_id not in self._subscribed_book:
+            self._log.warning(f"Not subscribed to {instrument_id} order book")
+            return
+
+        self._subscribed_book.discard(instrument_id)
+        if instrument_id not in self._subscribed_quotes:
+            code = instrument_id.symbol.value
+            await self._ws_client.unsubscribe(code, SinopacQuoteType.BID_ASK)
+        self._log.info(f"Unsubscribed from order book: {instrument_id}", LogColor.BLUE)
 
     async def _unsubscribe_bars(self, command: UnsubscribeBars) -> None:
         pass  # No-op

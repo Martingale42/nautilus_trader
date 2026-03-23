@@ -17,8 +17,11 @@
 
 use nautilus_core::UnixNanos;
 use nautilus_model::{
-    data::{QuoteTick, TradeTick},
-    enums::AggressorSide,
+    data::{
+        BookOrder, OrderBookDelta, OrderBookDeltas, OrderBookDepth10, QuoteTick, TradeTick,
+        depth::DEPTH10_LEN,
+    },
+    enums::{AggressorSide, BookAction, OrderSide, RecordFlag},
     identifiers::{InstrumentId, TradeId},
     types::{Price, Quantity},
 };
@@ -68,6 +71,7 @@ pub fn parse_ws_tick_to_trade_tick(
 /// Parses a WS bidask message into a `QuoteTick` (top of book).
 ///
 /// Uses `bid_price[0]`/`bid_volume[0]` and `ask_price[0]`/`ask_volume[0]`.
+/// Returns an error if the top-of-book level has zero volume (e.g. market closed).
 pub fn parse_ws_bidask_to_quote_tick(
     msg: &WsBidAskMsg,
     instrument_id: InstrumentId,
@@ -78,6 +82,10 @@ pub fn parse_ws_bidask_to_quote_tick(
 ) -> anyhow::Result<QuoteTick> {
     if msg.data.bid_price.is_empty() || msg.data.ask_price.is_empty() {
         anyhow::bail!("Empty bid/ask price arrays for {}", msg.code);
+    }
+
+    if msg.data.bid_volume[0] <= 0 || msg.data.ask_volume[0] <= 0 {
+        anyhow::bail!("No valid top-of-book for {}", msg.code);
     }
 
     QuoteTick::new_checked(
@@ -91,9 +99,153 @@ pub fn parse_ws_bidask_to_quote_tick(
     )
 }
 
+/// Parses a WS bidask message into an `OrderBookDepth10` snapshot.
+///
+/// Fills up to 5 bid and 5 ask levels from the gateway data, skipping levels
+/// with non-positive volume. Remaining slots are padded with default (null) orders.
+/// Returns an error if no valid levels exist (e.g. all-zero snapshot).
+pub fn parse_ws_bidask_to_order_book_depth10(
+    msg: &WsBidAskMsg,
+    instrument_id: InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+) -> anyhow::Result<OrderBookDepth10> {
+    if msg.data.bid_price.is_empty() || msg.data.ask_price.is_empty() {
+        anyhow::bail!("Empty bid/ask price arrays for {}", msg.code);
+    }
+
+    let mut bids = [BookOrder::default(); DEPTH10_LEN];
+    let mut asks = [BookOrder::default(); DEPTH10_LEN];
+    let mut bid_counts = [0u32; DEPTH10_LEN];
+    let mut ask_counts = [0u32; DEPTH10_LEN];
+
+    let mut bid_idx = 0;
+    for (&price, &volume) in msg.data.bid_price.iter().zip(msg.data.bid_volume.iter()) {
+        if volume <= 0 || bid_idx >= DEPTH10_LEN {
+            continue;
+        }
+        bids[bid_idx] = BookOrder::new(
+            OrderSide::Buy,
+            Price::new(price, price_precision),
+            Quantity::new(volume as f64, size_precision),
+            0,
+        );
+        bid_counts[bid_idx] = 1;
+        bid_idx += 1;
+    }
+
+    let mut ask_idx = 0;
+    for (&price, &volume) in msg.data.ask_price.iter().zip(msg.data.ask_volume.iter()) {
+        if volume <= 0 || ask_idx >= DEPTH10_LEN {
+            continue;
+        }
+        asks[ask_idx] = BookOrder::new(
+            OrderSide::Sell,
+            Price::new(price, price_precision),
+            Quantity::new(volume as f64, size_precision),
+            0,
+        );
+        ask_counts[ask_idx] = 1;
+        ask_idx += 1;
+    }
+
+    if bid_idx == 0 && ask_idx == 0 {
+        anyhow::bail!("No valid book levels for {}", msg.code);
+    }
+
+    Ok(OrderBookDepth10::new(
+        instrument_id,
+        bids,
+        asks,
+        bid_counts,
+        ask_counts,
+        RecordFlag::F_LAST as u8 | RecordFlag::F_SNAPSHOT as u8,
+        0,
+        ts_event,
+        ts_init,
+    ))
+}
+
+/// Parses a WS bidask message into `OrderBookDeltas` (CLEAR + ADD pattern).
+///
+/// Produces a CLEAR delta followed by one ADD per level with positive volume,
+/// suitable for building and maintaining an `OrderBook` via `apply_deltas()`.
+/// Levels with non-positive volume are skipped (Hyperliquid pattern).
+pub fn parse_ws_bidask_to_order_book_deltas(
+    msg: &WsBidAskMsg,
+    instrument_id: InstrumentId,
+    price_precision: u8,
+    size_precision: u8,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+) -> anyhow::Result<OrderBookDeltas> {
+    if msg.data.bid_price.is_empty() || msg.data.ask_price.is_empty() {
+        anyhow::bail!("Empty bid/ask price arrays for {}", msg.code);
+    }
+
+    let bid_count = msg.data.bid_price.len();
+    let ask_count = msg.data.ask_price.len();
+    let mut deltas = Vec::with_capacity(1 + bid_count + ask_count);
+
+    // CLEAR wipes the book before rebuilding from snapshot
+    deltas.push(OrderBookDelta::clear(instrument_id, 0, ts_event, ts_init));
+
+    for (&price, &volume) in msg.data.bid_price.iter().zip(msg.data.bid_volume.iter()) {
+        if volume <= 0 {
+            continue;
+        }
+        deltas.push(OrderBookDelta::new(
+            instrument_id,
+            BookAction::Add,
+            BookOrder::new(
+                OrderSide::Buy,
+                Price::new(price, price_precision),
+                Quantity::new(volume as f64, size_precision),
+                0,
+            ),
+            0,
+            0,
+            ts_event,
+            ts_init,
+        ));
+    }
+
+    for (&price, &volume) in msg.data.ask_price.iter().zip(msg.data.ask_volume.iter()) {
+        if volume <= 0 {
+            continue;
+        }
+        deltas.push(OrderBookDelta::new(
+            instrument_id,
+            BookAction::Add,
+            BookOrder::new(
+                OrderSide::Sell,
+                Price::new(price, price_precision),
+                Quantity::new(volume as f64, size_precision),
+                0,
+            ),
+            0,
+            0,
+            ts_event,
+            ts_init,
+        ));
+    }
+
+    // Set F_LAST on the final delta
+    if let Some(last) = deltas.last_mut() {
+        last.flags |= RecordFlag::F_LAST as u8;
+    }
+
+    Ok(OrderBookDeltas::new(instrument_id, deltas))
+}
+
 #[cfg(test)]
 mod tests {
-    use nautilus_model::identifiers::{Symbol, Venue};
+    use nautilus_model::{
+        enums::BookAction,
+        identifiers::{Symbol, Venue},
+    };
     use rstest::rstest;
 
     use super::*;
@@ -192,6 +344,234 @@ mod tests {
             assert_eq!(quote.ask_price, Price::new(581.0, 1));
             assert_eq!(quote.bid_size, Quantity::new(120.0, 0));
             assert_eq!(quote.ask_size, Quantity::new(85.0, 0));
+        } else {
+            panic!("Expected BidAsk message");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_ws_bidask_to_depth10() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_bidask.json");
+        if let WsIncomingMsg::BidAsk(ba) = msg {
+            let ts = UnixNanos::from(1_740_900_000_000_000_000u64);
+            let depth = parse_ws_bidask_to_order_book_depth10(
+                &ba,
+                test_instrument_id(),
+                1,
+                0,
+                ts,
+                UnixNanos::default(),
+            )
+            .unwrap();
+
+            assert_eq!(depth.instrument_id, test_instrument_id());
+
+            // 5 real bid levels
+            assert_eq!(depth.bids[0].price, Price::new(580.0, 1));
+            assert_eq!(depth.bids[0].size, Quantity::new(120.0, 0));
+            assert_eq!(depth.bids[0].side, OrderSide::Buy);
+            assert_eq!(depth.bids[4].price, Price::new(576.0, 1));
+            assert_eq!(depth.bid_counts[0], 1);
+            assert_eq!(depth.bid_counts[4], 1);
+
+            // Padded levels are default (zero)
+            assert_eq!(depth.bid_counts[5], 0);
+            assert_eq!(depth.ask_counts[5], 0);
+
+            // 5 real ask levels
+            assert_eq!(depth.asks[0].price, Price::new(581.0, 1));
+            assert_eq!(depth.asks[0].size, Quantity::new(85.0, 0));
+            assert_eq!(depth.asks[0].side, OrderSide::Sell);
+            assert_eq!(depth.asks[4].price, Price::new(585.0, 1));
+
+            // Flags
+            assert_ne!(depth.flags & RecordFlag::F_SNAPSHOT as u8, 0);
+            assert_ne!(depth.flags & RecordFlag::F_LAST as u8, 0);
+        } else {
+            panic!("Expected BidAsk message");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_ws_bidask_to_deltas() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_bidask.json");
+        if let WsIncomingMsg::BidAsk(ba) = msg {
+            let ts = UnixNanos::from(1_740_900_000_000_000_000u64);
+            let deltas = parse_ws_bidask_to_order_book_deltas(
+                &ba,
+                test_instrument_id(),
+                1,
+                0,
+                ts,
+                UnixNanos::default(),
+            )
+            .unwrap();
+
+            assert_eq!(deltas.instrument_id, test_instrument_id());
+
+            let inner = deltas.deltas;
+            // 1 CLEAR + 5 bids + 5 asks = 11
+            assert_eq!(inner.len(), 11);
+
+            // First delta is CLEAR
+            assert_eq!(inner[0].action, BookAction::Clear);
+
+            // Next 5 are bid ADDs
+            assert_eq!(inner[1].action, BookAction::Add);
+            assert_eq!(inner[1].order.side, OrderSide::Buy);
+            assert_eq!(inner[1].order.price, Price::new(580.0, 1));
+            assert_eq!(inner[5].order.price, Price::new(576.0, 1));
+
+            // Last 5 are ask ADDs
+            assert_eq!(inner[6].action, BookAction::Add);
+            assert_eq!(inner[6].order.side, OrderSide::Sell);
+            assert_eq!(inner[6].order.price, Price::new(581.0, 1));
+            assert_eq!(inner[10].order.price, Price::new(585.0, 1));
+
+            // Last delta has F_LAST flag
+            assert_ne!(inner[10].flags & RecordFlag::F_LAST as u8, 0);
+        } else {
+            panic!("Expected BidAsk message");
+        }
+    }
+
+    // -- Zero-volume regression tests ----------------------------------------
+
+    #[rstest]
+    fn test_parse_ws_bidask_zeros_quote_tick_valid_top() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_bidask_zeros.json");
+        if let WsIncomingMsg::BidAsk(ba) = msg {
+            let quote = parse_ws_bidask_to_quote_tick(
+                &ba,
+                test_instrument_id(),
+                1,
+                0,
+                UnixNanos::from(1u64),
+                UnixNanos::default(),
+            )
+            .unwrap();
+
+            assert_eq!(quote.bid_price, Price::new(1795.0, 1));
+            assert_eq!(quote.ask_price, Price::new(1800.0, 1));
+        } else {
+            panic!("Expected BidAsk message");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_ws_bidask_all_zeros_quote_tick_bails() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_bidask_all_zeros.json");
+        if let WsIncomingMsg::BidAsk(ba) = msg {
+            let result = parse_ws_bidask_to_quote_tick(
+                &ba,
+                test_instrument_id(),
+                1,
+                0,
+                UnixNanos::from(1u64),
+                UnixNanos::default(),
+            );
+            assert!(result.is_err());
+        } else {
+            panic!("Expected BidAsk message");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_ws_bidask_zeros_depth10_skips_zero_levels() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_bidask_zeros.json");
+        if let WsIncomingMsg::BidAsk(ba) = msg {
+            let depth = parse_ws_bidask_to_order_book_depth10(
+                &ba,
+                test_instrument_id(),
+                1,
+                0,
+                UnixNanos::from(1u64),
+                UnixNanos::default(),
+            )
+            .unwrap();
+
+            // 2 valid bid levels, rest are default
+            assert_eq!(depth.bids[0].price, Price::new(1795.0, 1));
+            assert_eq!(depth.bids[1].price, Price::new(1790.0, 1));
+            assert_eq!(depth.bid_counts[0], 1);
+            assert_eq!(depth.bid_counts[1], 1);
+            assert_eq!(depth.bid_counts[2], 0); // skipped
+
+            // 2 valid ask levels
+            assert_eq!(depth.asks[0].price, Price::new(1800.0, 1));
+            assert_eq!(depth.asks[1].price, Price::new(1805.0, 1));
+            assert_eq!(depth.ask_counts[2], 0); // skipped
+        } else {
+            panic!("Expected BidAsk message");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_ws_bidask_all_zeros_depth10_bails() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_bidask_all_zeros.json");
+        if let WsIncomingMsg::BidAsk(ba) = msg {
+            let result = parse_ws_bidask_to_order_book_depth10(
+                &ba,
+                test_instrument_id(),
+                1,
+                0,
+                UnixNanos::from(1u64),
+                UnixNanos::default(),
+            );
+            assert!(result.is_err());
+        } else {
+            panic!("Expected BidAsk message");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_ws_bidask_zeros_deltas_skips_zero_levels() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_bidask_zeros.json");
+        if let WsIncomingMsg::BidAsk(ba) = msg {
+            let deltas = parse_ws_bidask_to_order_book_deltas(
+                &ba,
+                test_instrument_id(),
+                1,
+                0,
+                UnixNanos::from(1u64),
+                UnixNanos::default(),
+            )
+            .unwrap();
+
+            let inner = &deltas.deltas;
+            // 1 CLEAR + 2 bids + 2 asks = 5
+            assert_eq!(inner.len(), 5);
+            assert_eq!(inner[0].action, BookAction::Clear);
+            assert_eq!(inner[1].order.side, OrderSide::Buy);
+            assert_eq!(inner[3].order.side, OrderSide::Sell);
+
+            // Last delta has F_LAST
+            assert_ne!(inner[4].flags & RecordFlag::F_LAST as u8, 0);
+        } else {
+            panic!("Expected BidAsk message");
+        }
+    }
+
+    #[rstest]
+    fn test_parse_ws_bidask_all_zeros_deltas_clear_only() {
+        let msg: WsIncomingMsg = load_test_json_as("ws_bidask_all_zeros.json");
+        if let WsIncomingMsg::BidAsk(ba) = msg {
+            let deltas = parse_ws_bidask_to_order_book_deltas(
+                &ba,
+                test_instrument_id(),
+                1,
+                0,
+                UnixNanos::from(1u64),
+                UnixNanos::default(),
+            )
+            .unwrap();
+
+            let inner = &deltas.deltas;
+            // Only CLEAR, no ADDs
+            assert_eq!(inner.len(), 1);
+            assert_eq!(inner[0].action, BookAction::Clear);
+            // F_LAST set on CLEAR
+            assert_ne!(inner[0].flags & RecordFlag::F_LAST as u8, 0);
         } else {
             panic!("Expected BidAsk message");
         }

@@ -2,8 +2,15 @@
 """
 Example: Sinopac data client tester.
 
-Subscribes to trade ticks and/or quote ticks for Taiwan instruments
-using the Sinopac gateway adapter.
+Subscribes to trade ticks, quote ticks (BidAsk top-of-book), and order book
+data for Taiwan instruments using the Sinopac gateway adapter.
+
+The gateway streams 5-level BidAsk snapshots via WebSocket.  The adapter
+produces three data types from each snapshot:
+
+- ``QuoteTick``          — best bid/ask (subscribe_quotes)
+- ``OrderBookDepth10``   — all 5 levels as a snapshot (subscribe_book_depth)
+- ``OrderBookDeltas``    — CLEAR + ADD rebuild (subscribe_book_deltas)
 
 Prerequisites:
     1. Sinopac gateway running: ``uvicorn sinopac_server.main:app --port 8000``
@@ -54,6 +61,9 @@ config_tester = DataTesterConfig(
     instrument_ids=instrument_ids,
     subscribe_trades=True,
     subscribe_quotes=True,
+    subscribe_book_depth=True,
+    subscribe_book_deltas=True,
+    manage_book=True,
     log_data=True,
 )
 data_tester = DataTester(config=config_tester)

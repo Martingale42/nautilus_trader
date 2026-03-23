@@ -20,7 +20,7 @@ use std::{collections::HashMap, sync::Arc};
 use nautilus_common::live::get_runtime;
 use nautilus_core::{UnixNanos, python::to_pyruntime_err};
 use nautilus_model::{
-    data::Data,
+    data::{Data, OrderBookDeltas_API},
     instruments::Instrument,
     python::{data::data_to_pycapsule, instruments::pyobject_to_instrument_any},
 };
@@ -33,7 +33,9 @@ use crate::{
         messages::WsIncomingMsg,
         order_parse::order_event_to_pydict,
         parse::{
-            parse_taiwan_timestamp, parse_ws_bidask_to_quote_tick, parse_ws_tick_to_trade_tick,
+            parse_taiwan_timestamp, parse_ws_bidask_to_order_book_deltas,
+            parse_ws_bidask_to_order_book_depth10, parse_ws_bidask_to_quote_tick,
+            parse_ws_tick_to_trade_tick,
         },
     },
 };
@@ -180,26 +182,59 @@ impl SinopacWebSocketClient {
                                     }
                                 };
                                 let ts_init = UnixNanos::default();
+                                let id = inst.id();
+                                let pp = inst.price_precision();
+                                let sp = inst.size_precision();
 
-                                match parse_ws_bidask_to_quote_tick(
-                                    ba_msg,
-                                    inst.id(),
-                                    inst.price_precision(),
-                                    inst.size_precision(),
-                                    ts_event,
-                                    ts_init,
-                                ) {
-                                    Ok(quote) => Python::attach(|py| {
-                                        let capsule = data_to_pycapsule(py, Data::Quote(quote));
-                                        call_python(py, &callback, capsule);
-                                    }),
-                                    Err(e) => {
-                                        log::warn!(
-                                            "Failed to parse bidask for {}: {e}",
+                                Python::attach(|py| {
+                                    // QuoteTick (top-of-book)
+                                    match parse_ws_bidask_to_quote_tick(
+                                        ba_msg, id, pp, sp, ts_event, ts_init,
+                                    ) {
+                                        Ok(quote) => {
+                                            let c = data_to_pycapsule(py, Data::Quote(quote));
+                                            call_python(py, &callback, c);
+                                        }
+                                        Err(e) => log::warn!(
+                                            "Failed to parse bidask quote for {}: {e}",
                                             ba_msg.code
-                                        );
+                                        ),
                                     }
-                                }
+
+                                    // OrderBookDepth10 (all 5 levels)
+                                    match parse_ws_bidask_to_order_book_depth10(
+                                        ba_msg, id, pp, sp, ts_event, ts_init,
+                                    ) {
+                                        Ok(depth) => {
+                                            let c = data_to_pycapsule(
+                                                py,
+                                                Data::Depth10(Box::new(depth)),
+                                            );
+                                            call_python(py, &callback, c);
+                                        }
+                                        Err(e) => log::warn!(
+                                            "Failed to parse bidask depth for {}: {e}",
+                                            ba_msg.code
+                                        ),
+                                    }
+
+                                    // OrderBookDeltas (CLEAR + ADD snapshot)
+                                    match parse_ws_bidask_to_order_book_deltas(
+                                        ba_msg, id, pp, sp, ts_event, ts_init,
+                                    ) {
+                                        Ok(deltas) => {
+                                            let c = data_to_pycapsule(
+                                                py,
+                                                Data::Deltas(OrderBookDeltas_API::new(deltas)),
+                                            );
+                                            call_python(py, &callback, c);
+                                        }
+                                        Err(e) => log::warn!(
+                                            "Failed to parse bidask deltas for {}: {e}",
+                                            ba_msg.code
+                                        ),
+                                    }
+                                });
                             }
                             WsIncomingMsg::OrderUpdate(ref order_msg) => {
                                 match order_msg.parse_event() {
