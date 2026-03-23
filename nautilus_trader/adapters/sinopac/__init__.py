@@ -12,8 +12,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
-
-"""Provides a trading adapter for Sinopac (SinoPac Securities)."""
+"""
+Provides a trading adapter for Sinopac (SinoPac Securities).
+"""
 
 from nautilus_trader.adapters.sinopac.config import SinopacDataClientConfig
 from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig

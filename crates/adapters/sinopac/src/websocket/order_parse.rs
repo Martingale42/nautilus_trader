@@ -20,6 +20,7 @@ use pyo3::{prelude::*, types::PyDict};
 use super::messages::{OperationInfo, OrderEvent, OrderStatusInfo};
 
 /// Sets order status fields common to both stock and futures order events.
+#[allow(clippy::too_many_arguments)]
 fn set_order_fields(
     dict: &Bound<'_, PyDict>,
     event_type: &str,
@@ -54,6 +55,7 @@ fn set_order_fields(
 }
 
 /// Sets deal (fill) fields common to both stock and futures deal events.
+#[allow(clippy::too_many_arguments)]
 fn set_deal_fields(
     dict: &Bound<'_, PyDict>,
     event_type: &str,

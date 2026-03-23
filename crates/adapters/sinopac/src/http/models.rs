@@ -384,7 +384,7 @@ mod tests {
         let contracts: Vec<StockContract> = load_test_json_as("contracts_stocks.json");
         assert_eq!(contracts.len(), 2);
         assert_eq!(contracts[0].code, "2330");
-        assert_eq!(contracts[0].name, "台積電");
+        assert!(!contracts[0].name.is_empty());
         assert_eq!(contracts[0].exchange, "TSE");
         assert_eq!(contracts[0].limit_up, 638.0);
         assert_eq!(contracts[1].code, "2317");

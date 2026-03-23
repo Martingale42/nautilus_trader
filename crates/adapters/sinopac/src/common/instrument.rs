@@ -33,12 +33,12 @@ pub const TWD: &str = "TWD";
 /// `symbol` is the root symbol (e.g., "TXF", "MXF"), not the delivery code.
 pub fn futures_multiplier(symbol: &str) -> f64 {
     match symbol {
-        "TXF" => 200.0,  // 台指期: 200 TWD per point
-        "MXF" => 50.0,   // 小台指: 50 TWD per point
-        "T5F" => 100.0,  // 台灣50期貨
-        "XIF" => 200.0,  // 非金電期貨
-        "ZEF" => 4000.0, // 電子期: 4000 TWD per point
-        "ZFF" => 1000.0, // 金融期: 1000 TWD per point
+        "TXF" => 200.0,  // TAIEX futures: 200 TWD per point
+        "MXF" => 50.0,   // Mini-TAIEX: 50 TWD per point
+        "T5F" => 100.0,  // TAIEX 50 futures
+        "XIF" => 200.0,  // Non-finance/electronics futures
+        "ZEF" => 4000.0, // Electronics sector futures: 4000 TWD per point
+        "ZFF" => 1000.0, // Finance sector futures: 1000 TWD per point
         _ => 2000.0,     // Stock/commodity futures default
     }
 }
@@ -48,7 +48,7 @@ pub fn futures_multiplier(symbol: &str) -> f64 {
 /// `symbol` is the root symbol (e.g., "TXO").
 pub fn options_multiplier(symbol: &str) -> f64 {
     match symbol {
-        "TXO" => 50.0, // 台指選: 50 TWD per point
+        "TXO" => 50.0, // TAIEX options: 50 TWD per point
         _ => 2000.0,   // Stock options default
     }
 }

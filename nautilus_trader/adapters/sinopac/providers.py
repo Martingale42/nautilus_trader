@@ -71,7 +71,7 @@ class SinopacInstrumentProvider(InstrumentProvider):
 
         all_instruments: list[Any] = []
         labels = ("stocks", "futures", "options")
-        for label, result in zip(labels, results):
+        for label, result in zip(labels, results, strict=False):
             if isinstance(result, BaseException):
                 self._log.error(f"Failed to load {label}: {result}")
             else:
@@ -98,8 +98,7 @@ class SinopacInstrumentProvider(InstrumentProvider):
             self.add(instrument=instrument)
 
         self._log.info(
-            f"Total instruments loaded: {len(instruments)} "
-            f"({self.count} registered)",
+            f"Total instruments loaded: {len(instruments)} ({self.count} registered)",
         )
 
     async def load_ids_async(

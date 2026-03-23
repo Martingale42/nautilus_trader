@@ -571,15 +571,9 @@ class SinopacExecutionClient(LiveExecutionClient):
                         f"Unknown Sinopac order status '{raw_status}', defaulting to DENIED",
                     )
                     order_status = OrderStatus.DENIED
-                order_side = (
-                    OrderSide.BUY
-                    if trade_dict["action"] == "Buy"
-                    else OrderSide.SELL
-                )
+                order_side = OrderSide.BUY if trade_dict["action"] == "Buy" else OrderSide.SELL
                 order_type = (
-                    OrderType.LIMIT
-                    if trade_dict["price_type"] == "LMT"
-                    else OrderType.MARKET
+                    OrderType.LIMIT if trade_dict["price_type"] == "LMT" else OrderType.MARKET
                 )
 
                 # Map gateway order_type to NT TimeInForce
@@ -634,15 +628,9 @@ class SinopacExecutionClient(LiveExecutionClient):
             ),
         )
         for report in reports:
-            if (
-                command.client_order_id
-                and report.client_order_id == command.client_order_id
-            ):
+            if command.client_order_id and report.client_order_id == command.client_order_id:
                 return report
-            if (
-                command.venue_order_id
-                and report.venue_order_id == command.venue_order_id
-            ):
+            if command.venue_order_id and report.venue_order_id == command.venue_order_id:
                 return report
         return None
 
@@ -673,10 +661,7 @@ class SinopacExecutionClient(LiveExecutionClient):
                         f"{pos_dict['code']}.{SINOPAC}",
                     )
 
-                    if (
-                        command.instrument_id
-                        and command.instrument_id != instrument_id
-                    ):
+                    if command.instrument_id and command.instrument_id != instrument_id:
                         continue
 
                     instrument = self._cache.instrument(instrument_id)

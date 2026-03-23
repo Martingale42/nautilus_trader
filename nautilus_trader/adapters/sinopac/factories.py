@@ -14,6 +14,7 @@
 # -------------------------------------------------------------------------------------------------
 
 import asyncio
+from collections.abc import Callable
 from functools import lru_cache
 
 from nautilus_trader.adapters.sinopac.config import SinopacDataClientConfig
@@ -113,7 +114,7 @@ def get_sinopac_instrument_provider(
 
 
 @lru_cache(1)
-def _get_ws_msg_handlers() -> list[object]:
+def _get_ws_msg_handlers() -> list[Callable]:
     return []
 
 

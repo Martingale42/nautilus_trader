@@ -215,8 +215,7 @@ impl SinopacWebSocketClient {
                                             ba_msg, id, pp, sp, ts_event, ts_init,
                                         ) {
                                             Ok(quote) => {
-                                                let c =
-                                                    data_to_pycapsule(py, Data::Quote(quote));
+                                                let c = data_to_pycapsule(py, Data::Quote(quote));
                                                 call_python(py, &callback, c);
                                             }
                                             Err(e) => log::warn!(

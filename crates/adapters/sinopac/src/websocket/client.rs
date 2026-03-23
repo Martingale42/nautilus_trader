@@ -217,7 +217,7 @@ impl SinopacWebSocketClient {
 
     /// Returns the BidAsk emit flags for a contract code, or 0 if none set.
     pub fn bidask_emit_for(&self, code: &str) -> u8 {
-        self.bidask_emit_flags.get(code).map(|v| *v).unwrap_or(0)
+        self.bidask_emit_flags.get(code).map_or(0, |v| *v)
     }
 
     /// Sets or removes BidAsk emit flags for a contract code.

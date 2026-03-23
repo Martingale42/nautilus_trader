@@ -44,7 +44,7 @@ pub fn twse_stock_tick_size(reference: f64) -> (f64, u8) {
 
 /// Returns the tick size and precision for TAIFEX futures contracts.
 ///
-/// TXF (台指期) and most index futures: tick = 1.0, precision 0.
+/// TXF (TAIEX futures) and most index futures: tick = 1.0, precision 0.
 /// Some sector futures have finer increments.
 pub fn futures_tick_size(symbol: &str) -> (f64, u8) {
     match symbol {
@@ -56,7 +56,7 @@ pub fn futures_tick_size(symbol: &str) -> (f64, u8) {
 
 /// Returns the tick size and precision for TAIFEX options contracts.
 ///
-/// TXO (台指選擇權): premium < 10 -> tick 0.1, premium >= 10 -> tick 1.0.
+/// TXO (TAIEX options): premium < 10 -> tick 0.1, premium >= 10 -> tick 1.0.
 /// Uses reference price as proxy for current premium level.
 pub fn options_tick_size(reference: f64) -> (f64, u8) {
     if reference < 10.0 { (0.1, 1) } else { (1.0, 0) }

@@ -354,22 +354,19 @@ class SinopacDataClient(LiveMarketDataClient):
     async def _request_bars(self, request: RequestBars) -> None:
         if request.bar_type.is_internally_aggregated():
             self._log.error(
-                f"Cannot request {request.bar_type} bars: "
-                "only EXTERNAL aggregation supported",
+                f"Cannot request {request.bar_type} bars: only EXTERNAL aggregation supported",
             )
             return
 
         if not request.bar_type.spec.is_time_aggregated():
             self._log.error(
-                f"Cannot request {request.bar_type} bars: "
-                "only time bars supported",
+                f"Cannot request {request.bar_type} bars: only time bars supported",
             )
             return
 
         if request.bar_type.spec.price_type != PriceType.LAST:
             self._log.error(
-                f"Cannot request {request.bar_type} bars: "
-                "only LAST price type supported",
+                f"Cannot request {request.bar_type} bars: only LAST price type supported",
             )
             return
 

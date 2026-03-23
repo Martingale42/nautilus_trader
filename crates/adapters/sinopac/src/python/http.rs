@@ -234,6 +234,7 @@ impl SinopacHttpClient {
     /// Returns a list of Bar pyo3 objects.
     #[pyo3(name = "request_bars")]
     #[pyo3(signature = (code, start, end, bar_type, price_precision, size_precision, market=None))]
+    #[allow(clippy::too_many_arguments)]
     fn py_request_bars<'py>(
         &self,
         py: Python<'py>,
@@ -277,6 +278,7 @@ impl SinopacHttpClient {
     /// Places an order via the gateway.
     #[pyo3(name = "place_order")]
     #[pyo3(signature = (code, action, price, quantity, price_type=SinopacPriceType::LMT, order_type=SinopacOrderType::ROD, order_cond=SinopacOrderCond::Cash, order_lot=SinopacOrderLot::Common, market=SinopacMarket::Stock))]
+    #[allow(clippy::too_many_arguments)]
     fn py_place_order<'py>(
         &self,
         py: Python<'py>,
