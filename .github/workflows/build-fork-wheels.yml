@@ -1,0 +1,72 @@
+name: build-fork-wheels
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-wheel:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.13"
+    name: wheel - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    env:
+      BUILD_MODE: release
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Common setup
+        uses: ./.github/actions/common-setup
+        with:
+          python-version: ${{ matrix.python-version }}
+          free-disk-space: "true"
+
+      - name: Build wheel
+        uses: ./.github/actions/common-wheel-build
+        with:
+          python-version: ${{ matrix.python-version }}
+          github_ref: ${{ github.ref }}
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: wheel-${{ matrix.os }}
+          path: dist/nautilus_trader-*.whl
+
+  create-release:
+    needs: build-wheel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all wheels
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: dist
+          pattern: wheel-*
+          merge-multiple: true
+
+      - name: List wheels
+        run: ls -lh dist/
+
+      - name: Create release with wheels
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+        with:
+          files: dist/nautilus_trader-*.whl
+          generate_release_notes: true
