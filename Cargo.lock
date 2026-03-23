@@ -5936,6 +5936,7 @@ dependencies = [
  "nautilus-polymarket",
  "nautilus-sandbox",
  "nautilus-serialization",
+ "nautilus-sinopac",
  "nautilus-tardis",
  "nautilus-testkit",
  "nautilus-trading",
@@ -6013,6 +6014,32 @@ dependencies = [
  "ustr",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "nautilus-sinopac"
+version = "0.55.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "axum",
+ "chrono",
+ "dashmap",
+ "futures-util",
+ "log",
+ "nautilus-common",
+ "nautilus-core",
+ "nautilus-model",
+ "nautilus-network",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "ustr",
 ]
 
 [[package]]
