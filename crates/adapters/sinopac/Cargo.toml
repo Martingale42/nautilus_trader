@@ -53,6 +53,7 @@ nautilus-network = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 chrono = { workspace = true }
+dashmap = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

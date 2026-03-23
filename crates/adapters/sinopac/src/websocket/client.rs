@@ -24,6 +24,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
+use dashmap::DashMap;
 use nautilus_common::live::get_runtime;
 use nautilus_network::{
     mode::ConnectionMode,
@@ -37,6 +38,15 @@ use super::{
     messages::WsIncomingMsg,
 };
 use crate::common::{consts::SINOPAC_GATEWAY_WS_URL, enums::SinopacQuoteType};
+
+/// Emit `QuoteTick` from BidAsk messages.
+pub(crate) const BIDASK_EMIT_QUOTE: u8 = 0b001;
+
+/// Emit `OrderBookDepth10` from BidAsk messages.
+pub(crate) const BIDASK_EMIT_DEPTH: u8 = 0b010;
+
+/// Emit `OrderBookDeltas` from BidAsk messages.
+pub(crate) const BIDASK_EMIT_DELTAS: u8 = 0b100;
 
 /// WebSocket client for streaming market data and order updates
 /// from the Sinopac FastAPI gateway.
@@ -55,6 +65,7 @@ pub struct SinopacWebSocketClient {
     out_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<WsIncomingMsg>>>>,
     signal: Arc<AtomicBool>,
     task_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    bidask_emit_flags: Arc<DashMap<String, u8>>,
 }
 
 impl Clone for SinopacWebSocketClient {
@@ -66,6 +77,7 @@ impl Clone for SinopacWebSocketClient {
             out_rx: Arc::clone(&self.out_rx),
             signal: Arc::clone(&self.signal),
             task_handle: Arc::clone(&self.task_handle),
+            bidask_emit_flags: Arc::clone(&self.bidask_emit_flags),
         }
     }
 }
@@ -90,6 +102,7 @@ impl SinopacWebSocketClient {
             out_rx: Arc::new(Mutex::new(None)),
             signal: Arc::new(AtomicBool::new(false)),
             task_handle: Arc::new(Mutex::new(None)),
+            bidask_emit_flags: Arc::new(DashMap::new()),
         }
     }
 
@@ -200,6 +213,20 @@ impl SinopacWebSocketClient {
 
         log::debug!("WebSocket disconnected");
         Ok(())
+    }
+
+    /// Returns the BidAsk emit flags for a contract code, or 0 if none set.
+    pub fn bidask_emit_for(&self, code: &str) -> u8 {
+        self.bidask_emit_flags.get(code).map(|v| *v).unwrap_or(0)
+    }
+
+    /// Sets or removes BidAsk emit flags for a contract code.
+    pub fn set_bidask_emit_for(&self, code: &str, flags: u8) {
+        if flags == 0 {
+            self.bidask_emit_flags.remove(code);
+        } else {
+            self.bidask_emit_flags.insert(code.to_string(), flags);
+        }
     }
 
     /// Returns whether the client is currently connected.

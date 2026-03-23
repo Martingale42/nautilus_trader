@@ -29,7 +29,9 @@ use pyo3::prelude::*;
 use crate::{
     common::enums::SinopacQuoteType,
     websocket::{
-        client::SinopacWebSocketClient,
+        client::{
+            BIDASK_EMIT_DELTAS, BIDASK_EMIT_DEPTH, BIDASK_EMIT_QUOTE, SinopacWebSocketClient,
+        },
         messages::WsIncomingMsg,
         order_parse::order_event_to_pydict,
         parse::{
@@ -87,6 +89,22 @@ impl SinopacWebSocketClient {
                 .await
                 .map_err(to_pyruntime_err)
         })
+    }
+
+    /// Sets which data types to emit from BidAsk messages for a contract.
+    #[pyo3(name = "set_bidask_outputs")]
+    fn py_set_bidask_outputs(&self, code: String, quote: bool, depth: bool, deltas: bool) {
+        let mut flags = 0u8;
+        if quote {
+            flags |= BIDASK_EMIT_QUOTE;
+        }
+        if depth {
+            flags |= BIDASK_EMIT_DEPTH;
+        }
+        if deltas {
+            flags |= BIDASK_EMIT_DELTAS;
+        }
+        self.set_bidask_emit_for(&code, flags);
     }
 
     /// Connects to the gateway WS and starts the message processing loop.
@@ -182,57 +200,66 @@ impl SinopacWebSocketClient {
                                     }
                                 };
                                 let ts_init = UnixNanos::default();
+                                let emit = _client_guard.bidask_emit_for(&ba_msg.code);
+                                if emit == 0 {
+                                    continue;
+                                }
+
                                 let id = inst.id();
                                 let pp = inst.price_precision();
                                 let sp = inst.size_precision();
 
                                 Python::attach(|py| {
-                                    // QuoteTick (top-of-book)
-                                    match parse_ws_bidask_to_quote_tick(
-                                        ba_msg, id, pp, sp, ts_event, ts_init,
-                                    ) {
-                                        Ok(quote) => {
-                                            let c = data_to_pycapsule(py, Data::Quote(quote));
-                                            call_python(py, &callback, c);
+                                    if emit & BIDASK_EMIT_QUOTE != 0 {
+                                        match parse_ws_bidask_to_quote_tick(
+                                            ba_msg, id, pp, sp, ts_event, ts_init,
+                                        ) {
+                                            Ok(quote) => {
+                                                let c =
+                                                    data_to_pycapsule(py, Data::Quote(quote));
+                                                call_python(py, &callback, c);
+                                            }
+                                            Err(e) => log::warn!(
+                                                "Failed to parse bidask quote for {}: {e}",
+                                                ba_msg.code
+                                            ),
                                         }
-                                        Err(e) => log::warn!(
-                                            "Failed to parse bidask quote for {}: {e}",
-                                            ba_msg.code
-                                        ),
                                     }
 
-                                    // OrderBookDepth10 (all 5 levels)
-                                    match parse_ws_bidask_to_order_book_depth10(
-                                        ba_msg, id, pp, sp, ts_event, ts_init,
-                                    ) {
-                                        Ok(depth) => {
-                                            let c = data_to_pycapsule(
-                                                py,
-                                                Data::Depth10(Box::new(depth)),
-                                            );
-                                            call_python(py, &callback, c);
+                                    if emit & BIDASK_EMIT_DEPTH != 0 {
+                                        match parse_ws_bidask_to_order_book_depth10(
+                                            ba_msg, id, pp, sp, ts_event, ts_init,
+                                        ) {
+                                            Ok(depth) => {
+                                                let c = data_to_pycapsule(
+                                                    py,
+                                                    Data::Depth10(Box::new(depth)),
+                                                );
+                                                call_python(py, &callback, c);
+                                            }
+                                            Err(e) => log::warn!(
+                                                "Failed to parse bidask depth for {}: {e}",
+                                                ba_msg.code
+                                            ),
                                         }
-                                        Err(e) => log::warn!(
-                                            "Failed to parse bidask depth for {}: {e}",
-                                            ba_msg.code
-                                        ),
                                     }
 
-                                    // OrderBookDeltas (CLEAR + ADD snapshot)
-                                    match parse_ws_bidask_to_order_book_deltas(
-                                        ba_msg, id, pp, sp, ts_event, ts_init,
-                                    ) {
-                                        Ok(deltas) => {
-                                            let c = data_to_pycapsule(
-                                                py,
-                                                Data::Deltas(OrderBookDeltas_API::new(deltas)),
-                                            );
-                                            call_python(py, &callback, c);
+                                    if emit & BIDASK_EMIT_DELTAS != 0 {
+                                        match parse_ws_bidask_to_order_book_deltas(
+                                            ba_msg, id, pp, sp, ts_event, ts_init,
+                                        ) {
+                                            Ok(deltas) => {
+                                                let c = data_to_pycapsule(
+                                                    py,
+                                                    Data::Deltas(OrderBookDeltas_API::new(deltas)),
+                                                );
+                                                call_python(py, &callback, c);
+                                            }
+                                            Err(e) => log::warn!(
+                                                "Failed to parse bidask deltas for {}: {e}",
+                                                ba_msg.code
+                                            ),
                                         }
-                                        Err(e) => log::warn!(
-                                            "Failed to parse bidask deltas for {}: {e}",
-                                            ba_msg.code
-                                        ),
                                     }
                                 });
                             }

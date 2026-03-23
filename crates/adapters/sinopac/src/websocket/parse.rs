@@ -81,11 +81,11 @@ pub fn parse_ws_bidask_to_quote_tick(
     ts_init: UnixNanos,
 ) -> anyhow::Result<QuoteTick> {
     if msg.data.bid_price.is_empty() || msg.data.ask_price.is_empty() {
-        anyhow::bail!("Empty bid/ask price arrays for {}", msg.code);
+        anyhow::bail!("Empty bid/ask price arrays for {code}", code = msg.code);
     }
 
     if msg.data.bid_volume[0] <= 0 || msg.data.ask_volume[0] <= 0 {
-        anyhow::bail!("No valid top-of-book for {}", msg.code);
+        anyhow::bail!("No valid top-of-book for {code}", code = msg.code);
     }
 
     QuoteTick::new_checked(
@@ -113,7 +113,7 @@ pub fn parse_ws_bidask_to_order_book_depth10(
     ts_init: UnixNanos,
 ) -> anyhow::Result<OrderBookDepth10> {
     if msg.data.bid_price.is_empty() || msg.data.ask_price.is_empty() {
-        anyhow::bail!("Empty bid/ask price arrays for {}", msg.code);
+        anyhow::bail!("Empty bid/ask price arrays for {code}", code = msg.code);
     }
 
     let mut bids = [BookOrder::default(); DEPTH10_LEN];
@@ -152,7 +152,7 @@ pub fn parse_ws_bidask_to_order_book_depth10(
     }
 
     if bid_idx == 0 && ask_idx == 0 {
-        anyhow::bail!("No valid book levels for {}", msg.code);
+        anyhow::bail!("No valid book levels for {code}", code = msg.code);
     }
 
     Ok(OrderBookDepth10::new(
@@ -182,14 +182,13 @@ pub fn parse_ws_bidask_to_order_book_deltas(
     ts_init: UnixNanos,
 ) -> anyhow::Result<OrderBookDeltas> {
     if msg.data.bid_price.is_empty() || msg.data.ask_price.is_empty() {
-        anyhow::bail!("Empty bid/ask price arrays for {}", msg.code);
+        anyhow::bail!("Empty bid/ask price arrays for {code}", code = msg.code);
     }
 
     let bid_count = msg.data.bid_price.len();
     let ask_count = msg.data.ask_price.len();
     let mut deltas = Vec::with_capacity(1 + bid_count + ask_count);
 
-    // CLEAR wipes the book before rebuilding from snapshot
     deltas.push(OrderBookDelta::clear(instrument_id, 0, ts_event, ts_init));
 
     for (&price, &volume) in msg.data.bid_price.iter().zip(msg.data.bid_volume.iter()) {
@@ -232,7 +231,6 @@ pub fn parse_ws_bidask_to_order_book_deltas(
         ));
     }
 
-    // Set F_LAST on the final delta
     if let Some(last) = deltas.last_mut() {
         last.flags |= RecordFlag::F_LAST as u8;
     }
@@ -434,8 +432,6 @@ mod tests {
             panic!("Expected BidAsk message");
         }
     }
-
-    // -- Zero-volume regression tests ----------------------------------------
 
     #[rstest]
     fn test_parse_ws_bidask_zeros_quote_tick_valid_top() {

@@ -5918,6 +5918,7 @@ dependencies = [
  "arc-swap",
  "axum",
  "chrono",
+ "dashmap",
  "futures-util",
  "log",
  "nautilus-common",
