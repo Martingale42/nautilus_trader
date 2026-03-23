@@ -17,6 +17,7 @@ members = [
   "crates/adapters/polymarket",
   "crates/adapters/okx",
   "crates/adapters/sandbox",
+  "crates/adapters/sinopac",
   "crates/adapters/tardis",
   "crates/analysis",
   "crates/backtest",
@@ -105,6 +106,7 @@ nautilus-kraken = { path = "crates/adapters/kraken", version = "0.56.0", default
 nautilus-okx = { path = "crates/adapters/okx", version = "0.56.0", default-features = false }
 nautilus-polymarket = { path = "crates/adapters/polymarket", version = "0.56.0", default-features = false }
 nautilus-sandbox = { path = "crates/adapters/sandbox", version = "0.56.0", default-features = false }
+nautilus-sinopac = { path = "crates/adapters/sinopac", version = "0.56.0", default-features = false }
 nautilus-tardis = { path = "crates/adapters/tardis", version = "0.56.0", default-features = false }
 
 # -----------------------------------------------------------------------------

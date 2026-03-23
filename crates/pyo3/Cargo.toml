@@ -52,6 +52,7 @@ extension-module = [
   "nautilus-okx/extension-module",
   "nautilus-polymarket/extension-module",
   "nautilus-sandbox/extension-module",
+  "nautilus-sinopac/extension-module",
   "nautilus-persistence/extension-module",
   "nautilus-serialization/extension-module",
   "nautilus-tardis/extension-module",
@@ -80,6 +81,7 @@ high-precision = [
   "nautilus-okx/high-precision",
   "nautilus-polymarket/high-precision",
   "nautilus-sandbox/high-precision",
+  "nautilus-sinopac/high-precision",
   "nautilus-tardis/high-precision",
 ]
 hypersync = ["nautilus-blockchain/hypersync"]
@@ -126,6 +128,7 @@ nautilus-kraken = { workspace = true, features = ["python"] }
 nautilus-okx = { workspace = true, features = ["python"] }
 nautilus-polymarket = { workspace = true, features = ["python"] }
 nautilus-sandbox = { workspace = true, features = ["python"] }
+nautilus-sinopac = { workspace = true, features = ["python"] }
 nautilus-tardis = { workspace = true, features = ["python", "replay"] }
 
 pyo3 = { workspace = true }
