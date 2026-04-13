@@ -23,9 +23,11 @@ from nautilus_trader.adapters.sinopac.factories import SinopacLiveDataClientFact
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.config import TradingNodeConfig
+from nautilus_trader.config import StreamingConfig
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
+from nautilus_trader.persistence.writer import RotationMode
 from nautilus_trader.test_kit.strategies.tester_data import DataTester
 from nautilus_trader.test_kit.strategies.tester_data import DataTesterConfig
 
@@ -35,8 +37,14 @@ gateway_host = "localhost"
 gateway_port = 8000
 
 config_node = TradingNodeConfig(
-    trader_id=TraderId("TESTER-001"),
-    logging=LoggingConfig(log_level="INFO", use_pyo3=True),
+    trader_id=TraderId("SINOPAC-DATA-TESTER-001"),
+    logging=LoggingConfig(
+        log_level="INFO",
+        log_level_file="DEBUG",
+        log_directory="./catalog",
+        log_file_format="JSON",
+        use_pyo3=True
+    ),
     data_clients={
         SINOPAC: SinopacDataClientConfig(
             gateway_host=gateway_host,
@@ -44,6 +52,12 @@ config_node = TradingNodeConfig(
             instrument_provider=InstrumentProviderConfig(load_all=True),
         ),
     },
+    # streaming=StreamingConfig(
+    #     catalog_path="./catalog",
+    #     flush_interval_ms = 5000,
+    #     rotation_mode=RotationMode.INTERVAL,
+    #     rotation_interval="1h"
+    # ),
     timeout_connection=30.0,
     timeout_disconnection=5.0,
     timeout_post_stop=5.0,
@@ -54,7 +68,7 @@ node = TradingNode(config=config_node)
 # Configure instruments to test
 instrument_ids = [
     InstrumentId.from_str("2330.SINOPAC"),  # TSMC
-    # InstrumentId.from_str("2317.SINOPAC"),  # Hon Hai
+    InstrumentId.from_str("2317.SINOPAC"),  # Hon Hai
 ]
 
 config_tester = DataTesterConfig(
