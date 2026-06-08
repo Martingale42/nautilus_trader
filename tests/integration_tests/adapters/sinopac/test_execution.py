@@ -404,3 +404,90 @@ async def test_p3_business_rejection_still_rejects(exec_client, sinopac_equity):
 
     # Assert
     exec_client.generate_order_rejected.assert_called_once()
+
+
+# -- I2: reconciliation convergence after a timed-out submit (documents real behavior) --------------
+
+
+@pytest.mark.asyncio
+async def test_p3_reconciliation_surfaces_timed_out_order_as_external(
+    exec_client,
+    sinopac_equity,
+):
+    """
+    Document the ACTUAL convergence behavior after a place_order timeout (I2).
+
+    On timeout the local order stays SUBMITTED but never received a `trade_id`, so
+    `_trade_id_to_client_order_id` has no entry for the venue order. When that order
+    is still working at the venue, `generate_order_status_reports` -> `list_trades`
+    returns it and rebuilds an OrderStatusReport keyed on the venue `trade_id`.
+
+    Because no mapping exists, the report carries a SYNTHESIZED client_order_id
+    (`SINOPAC-{trade_id}`), NOT the local order's client_order_id. NT therefore
+    surfaces this as an EXTERNAL order rather than cleanly adopting the local
+    SUBMITTED one -- this test pins that real behavior so the (corrected) code
+    comment cannot drift back into an overstated "clean adopt" claim.
+
+    """
+    from nautilus_trader.execution.messages import GenerateOrderStatusReports
+    from nautilus_trader.model.enums import OrderStatus as NTOrderStatus
+    from nautilus_trader.model.identifiers import ClientOrderId
+    from nautilus_trader.model.identifiers import VenueOrderId
+
+    # Arrange: a local order that timed out on submit -> SUBMITTED, no venue mapping.
+    order = TestExecStubs.make_submitted_order(
+        instrument=sinopac_equity,
+        order_side=OrderSide.BUY,
+        quantity=sinopac_equity.make_qty(2000),
+        price=sinopac_equity.make_price(580.0),
+    )
+    exec_client._cache.add_order(order)
+    assert order.status == OrderStatus.SUBMITTED
+    # Mapping was never populated (timeout never returned a trade_id).
+    assert order.venue_order_id is None
+    assert "T9999" not in exec_client._trade_id_to_client_order_id
+
+    # The venue actually holds the order as a working (Submitted) trade.
+    exec_client._http_client.list_trades = AsyncMock(
+        return_value=[
+            {
+                "trade_id": "T9999",
+                "code": "2330",
+                "status": "Submitted",
+                "action": "Buy",
+                "price_type": "LMT",
+                "order_type": "ROD",
+                "quantity": 2000,
+                "filled_qty": 0,
+                "price": 580.0,
+            },
+        ],
+    )
+
+    command = GenerateOrderStatusReports(
+        instrument_id=None,
+        start=None,
+        end=None,
+        open_only=False,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+
+    # Act
+    reports = await exec_client.generate_order_status_reports(command)
+
+    # Assert -- reconciliation produced exactly one report for the working order.
+    assert len(reports) == 1
+    report = reports[0]
+    assert report.venue_order_id == VenueOrderId("T9999")
+    assert report.order_status == NTOrderStatus.ACCEPTED  # gateway "Submitted" -> ACCEPTED
+
+    # Real behavior: the report is keyed on a SYNTHESIZED client_order_id (external),
+    # NOT the local SUBMITTED order's own id -> NT treats it as an external order.
+    assert report.client_order_id == ClientOrderId("SINOPAC-T9999")
+    assert report.client_order_id != order.client_order_id
+
+    # The local order is NOT mutated by report generation (no clean adopt happens here);
+    # it remains SUBMITTED with no venue_order_id until NT's external-order handling runs.
+    assert order.status == OrderStatus.SUBMITTED
+    assert order.venue_order_id is None

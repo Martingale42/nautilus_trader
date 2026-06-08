@@ -444,15 +444,26 @@ class SinopacExecutionClient(LiveExecutionClient):
             # Transport failure: the request may have actually reached the gateway
             # and the order may be LIVE on the exchange. Rejecting here would create
             # hidden exposure (we report REJECTED while the venue holds a working
-            # order). Leave the order in SUBMITTED and let WS deal/order events or
-            # reconciliation (`generate_order_status_reports` -> `list_trades`)
-            # adopt the true state. Reconciliation keys on the venue `trade_id`, so
-            # it can re-establish the order even though the in-memory
-            # `_trade_id_to_client_order_id` mapping was never set (we never received
-            # a `trade_id` on timeout).
+            # order). So we leave the order in SUBMITTED rather than rejecting.
+            #
+            # Convergence is best-effort, NOT a guaranteed clean adopt of THIS local
+            # order: on timeout we never received a `trade_id`, so the local SUBMITTED
+            # order has no `venue_order_id` and the `_trade_id_to_client_order_id`
+            # mapping was never populated. Reconciliation (`generate_order_status_reports`
+            # -> `list_trades`) rebuilds an OrderStatusReport keyed on the venue
+            # `trade_id` with a *synthesized* `client_order_id` (`SINOPAC-{trade_id}`)
+            # when no mapping exists. Because that synthesized id and venue_order_id do
+            # not match the local order, NT most likely treats the report as an EXTERNAL
+            # order rather than adopting the local SUBMITTED one. Net effect: the venue
+            # working order becomes visible/tracked (no hidden exposure), but the
+            # original local SUBMITTED order's convergence depends on NT's external-order
+            # handling and may require operator intervention. WS deal/order events that
+            # do carry the original `trade_id` can still correlate if the mapping is
+            # later established by a successful path.
             self._log.error(
                 f"place_order transport failure for {order.client_order_id}: {e!r}; "
-                f"leaving order SUBMITTED for WS/reconciliation to resolve",
+                f"leaving order SUBMITTED (venue order, if any, surfaces via "
+                f"WS/reconciliation as an external order)",
             )
         except Exception as e:
             # Genuine business rejection (validation, margin, unsupported params, ...):
@@ -619,6 +630,14 @@ class SinopacExecutionClient(LiveExecutionClient):
 
                 trade_id = trade_dict["trade_id"]
                 client_order_id_str = self._trade_id_to_client_order_id.get(trade_id)
+                # When the in-memory mapping is missing (e.g. a place_order that timed
+                # out and never returned a `trade_id`), we synthesize a deterministic
+                # `client_order_id`. NOTE: this synthesized id does NOT match the local
+                # SUBMITTED order's own client_order_id, so NT will most likely surface
+                # this report as an EXTERNAL order rather than cleanly adopting the local
+                # one. The report still removes hidden exposure by making the venue's
+                # working order visible; full convergence of the original local order
+                # depends on NT's external-order handling.
                 client_order_id = (
                     ClientOrderId(client_order_id_str)
                     if client_order_id_str
