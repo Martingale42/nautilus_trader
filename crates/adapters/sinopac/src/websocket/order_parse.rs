@@ -62,6 +62,7 @@ fn set_deal_fields(
     trade_id: &str,
     seqno: &str,
     ordno: &str,
+    exchange_seq: Option<&str>,
     action: &str,
     code: &str,
     price: f64,
@@ -70,11 +71,22 @@ fn set_deal_fields(
 ) -> PyResult<()> {
     dict.set_item("event_type", event_type)?;
     dict.set_item("trade_id", trade_id)?;
-    // `seqno` is unique per fill, unlike `ordno` (brokerage order number) which is
-    // shared across all partial fills of one order. The Python client builds the NT
-    // TradeId from `seqno` so partial fills do not collide and corrupt the ledger.
+    // Per-fill uniqueness (per Shioaji deal-event semantics,
+    // sinotrade.github.io/tutor/order_deal_event):
+    //   - `seqno`        == the ORDER's seqno  -> SAME across all partial fills of an
+    //                       order (per-ORDER). Exposed for logging only; it MUST NOT
+    //                       be used as the per-fill TradeId key.
+    //   - `ordno`        == the deal-level order number: 5-char order prefix + last 3
+    //                       chars = the deal sequence (001/002/003...) -> per-fill UNIQUE.
+    //   - `exchange_seq` == the exchange's per-deal sequence -> per-fill UNIQUE
+    //                       (Option: may be absent, e.g. simulation / pre-confirmation).
+    // The Python client builds the NT TradeId from `exchange_seq` (fallback `ordno`)
+    // so partial fills do not collide and corrupt the ledger.
     dict.set_item("seqno", seqno)?;
     dict.set_item("ordno", ordno)?;
+    // `exchange_seq` is `Option<String>`; pyo3 maps `None` -> Python `None`, so
+    // `event.get("exchange_seq")` returns the string when present and `None` otherwise.
+    dict.set_item("exchange_seq", exchange_seq)?;
     dict.set_item("action", action)?;
     dict.set_item("code", code)?;
     dict.set_item("price", price)?;
@@ -108,6 +120,7 @@ pub fn order_event_to_pydict(py: Python<'_>, event: &OrderEvent) -> PyResult<Py<
             &data.trade_id,
             &data.seqno,
             &data.ordno,
+            data.exchange_seq.as_deref(),
             &data.action,
             &data.code,
             data.price,
@@ -134,6 +147,7 @@ pub fn order_event_to_pydict(py: Python<'_>, event: &OrderEvent) -> PyResult<Py<
             &data.trade_id,
             &data.seqno,
             &data.ordno,
+            data.exchange_seq.as_deref(),
             &data.action,
             &data.code,
             data.price,
@@ -163,11 +177,13 @@ mod tests {
     }
 
     #[rstest]
-    fn test_deal_pydict_contains_unique_seqno() {
-        // A stock deal event must expose the per-fill unique `seqno` to Python so
-        // the execution client can build a non-colliding NT TradeId (avoids the
-        // duplicate-TradeId ledger corruption when an order has multiple partial
-        // fills sharing the same `ordno`).
+    fn test_deal_pydict_exposes_per_fill_unique_keys() {
+        // A stock deal event must expose the per-fill-unique keys to Python so the
+        // execution client can build a non-colliding NT TradeId. Per Shioaji deal
+        // semantics the per-fill-unique keys are `exchange_seq` (exchange per-deal
+        // sequence) and the deal-level `ordno` (last 3 chars = deal sequence).
+        // `seqno` is per-ORDER (repeats across partial fills) and is exposed for
+        // logging only -- it MUST NOT be used as the fill key.
         ensure_python_initialized();
         let msg: WsIncomingMsg = load_test_json_as("ws_deal_stock.json");
         let WsIncomingMsg::OrderUpdate(update) = msg else {
@@ -179,10 +195,33 @@ mod tests {
             let dict = order_event_to_pydict(py, &event).expect("order_event_to_pydict failed");
             let bound = dict.bind(py);
 
+            // The per-fill-unique exchange sequence must be exposed for keying.
             assert!(
-                bound.contains("seqno").expect("contains failed"),
-                "deal pydict must contain seqno",
+                bound.contains("exchange_seq").expect("contains failed"),
+                "deal pydict must contain exchange_seq",
             );
+            let exchange_seq: String = bound
+                .get_item("exchange_seq")
+                .expect("get_item failed")
+                .expect("exchange_seq missing")
+                .extract()
+                .expect("exchange_seq not a string");
+            assert_eq!(exchange_seq, "E5678");
+
+            // The deal-level `ordno` (per-fill-unique fallback) must be exposed.
+            assert!(
+                bound.contains("ordno").expect("contains failed"),
+                "deal pydict must contain ordno",
+            );
+            let ordno: String = bound
+                .get_item("ordno")
+                .expect("get_item failed")
+                .expect("ordno missing")
+                .extract()
+                .expect("ordno not a string");
+            assert_eq!(ordno, "A1234");
+
+            // `seqno` (per-ORDER) is still exposed for logging but must never be the key.
             let seqno: String = bound
                 .get_item("seqno")
                 .expect("get_item failed")
@@ -191,14 +230,8 @@ mod tests {
                 .expect("seqno not a string");
             assert_eq!(seqno, "123456");
 
-            // `seqno` must be distinct from `ordno` (the shared order number).
-            let ordno: String = bound
-                .get_item("ordno")
-                .expect("get_item failed")
-                .expect("ordno missing")
-                .extract()
-                .expect("ordno not a string");
-            assert_ne!(seqno, ordno);
+            // The chosen fill key (exchange_seq) must differ from the per-ORDER seqno.
+            assert_ne!(exchange_seq, seqno);
         });
     }
 }

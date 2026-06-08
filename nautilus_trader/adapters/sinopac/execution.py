@@ -330,10 +330,11 @@ class SinopacExecutionClient(LiveExecutionClient):
     def _handle_deal_event(self, event: dict[str, Any]) -> None:
         trade_id_str = event.get("trade_id", "")
         ordno = event.get("ordno", "")
-        # `seqno` is unique per fill; `ordno` (brokerage order number) is shared by
-        # all partial fills of one order. Prefer `seqno` so partial-fill TradeIds do
-        # not collide and corrupt the ledger; fall back to `ordno` if `seqno` absent.
-        seq = event.get("seqno") or ordno
+        # seqno is per-ORDER (== the order's seqno) so it repeats across partial fills.
+        # The per-fill-unique keys are the exchange deal sequence (exchange_seq) and the
+        # deal-level ordno (last 3 chars are the deal sequence). Prefer exchange_seq;
+        # fall back to ordno. NEVER key on seqno -- it corrupts the ledger via dup TradeIds.
+        seq = event.get("exchange_seq") or ordno
         code = event.get("code", "")
         price = event.get("price", 0.0)
         quantity = event.get("quantity", 0)

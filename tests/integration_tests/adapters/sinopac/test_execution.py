@@ -97,54 +97,93 @@ def _add_accepted_order(client, instrument, *, client_order_id=None, venue_order
     return order, venue_order_id
 
 
-# -- P1: unique fill TradeId via seqno --------------------------------------------------------------
+# -- P1: per-fill-unique TradeId via exchange_seq / deal-level ordno --------------------------------
+#
+# Per the official Shioaji deal-event semantics
+# (sinotrade.github.io/tutor/order_deal_event):
+#   - `seqno`        == the ORDER's seqno  -> SAME across all partial fills of an order.
+#   - `ordno`        == deal-level order number, last 3 chars = deal sequence -> per-fill UNIQUE.
+#   - `exchange_seq` == exchange per-deal sequence -> per-fill UNIQUE (may be absent).
+# The fill TradeId key is `exchange_seq or ordno`; keying on `seqno` would collide.
 
 
-def test_p1_partial_fills_same_ordno_distinct_seqno_yield_distinct_trade_ids(
+def test_p1_partial_fills_same_seqno_distinct_exchange_seq_yield_distinct_trade_ids(
     exec_client,
     sinopac_equity,
 ):
     """
-    Two partial fills of one order share `ordno` but have distinct `seqno`.
+    Two partial fills of one order share `trade_id` AND `seqno` (per-ORDER) but
+    carry distinct per-fill `exchange_seq` (and distinct deal-level `ordno`).
 
     The resulting NT TradeIds MUST be distinct, otherwise NT fill dedup drops the
-    second fill and the ledger is corrupted (P1).
+    second fill and the ledger is corrupted (P1). This is the real Shioaji shape:
+    `seqno` repeats across fills, so it can NEVER be the fill key.
 
     """
     # Arrange
     order, venue_order_id = _add_accepted_order(exec_client, sinopac_equity)
     captured_trade_ids: list[TradeId] = []
+    captured_qtys: list[int] = []
 
     def _capture(*args, **kwargs):
         captured_trade_ids.append(kwargs["trade_id"])
+        captured_qtys.append(int(kwargs["last_qty"]))
 
     exec_client.generate_order_filled = MagicMock(side_effect=_capture)
 
+    # SAME seqno across both fills (per-ORDER), distinct exchange_seq + deal-level ordno.
     base_event = {
         "event_type": "stock_deal",
         "trade_id": venue_order_id.value,
-        "ordno": "A1234",  # identical across both partial fills
+        "seqno": "123456",  # per-ORDER: identical across both partial fills
         "code": "2330",
         "action": "Buy",
         "ts": 1709352601.0,
     }
-    fill_1 = {**base_event, "seqno": "000001", "price": 580.0, "quantity": 1000}
-    fill_2 = {**base_event, "seqno": "000002", "price": 580.0, "quantity": 1000}
+    fill_1 = {
+        **base_event,
+        "ordno": "tA0deX001",
+        "exchange_seq": "E0001",
+        "price": 580.0,
+        "quantity": 1000,
+    }
+    fill_2 = {
+        **base_event,
+        "ordno": "tA0deX002",
+        "exchange_seq": "E0002",
+        "price": 580.0,
+        "quantity": 1000,
+    }
 
     # Act
     exec_client._handle_deal_event(fill_1)
     exec_client._handle_deal_event(fill_2)
 
-    # Assert
+    # Assert -- distinct TradeIds keyed on the per-fill-unique exchange_seq.
     assert len(captured_trade_ids) == 2
     assert captured_trade_ids[0] != captured_trade_ids[1], "duplicate TradeId corrupts ledger"
-    assert captured_trade_ids[0] == TradeId(f"{venue_order_id.value}-000001")
-    assert captured_trade_ids[1] == TradeId(f"{venue_order_id.value}-000002")
+    assert captured_trade_ids[0] == TradeId(f"{venue_order_id.value}-E0001")
+    assert captured_trade_ids[1] == TradeId(f"{venue_order_id.value}-E0002")
+
+    # Regression guard: keying on the (identical) seqno WOULD collide. Prove the new
+    # key does not, even though seqno is byte-for-byte identical across both fills.
+    assert fill_1["seqno"] == fill_2["seqno"]
+    seqno_key_1 = TradeId(f"{venue_order_id.value}-{fill_1['seqno']}")
+    seqno_key_2 = TradeId(f"{venue_order_id.value}-{fill_2['seqno']}")
+    assert seqno_key_1 == seqno_key_2, "sanity: identical seqno collides under a seqno key"
+    assert captured_trade_ids[0] != seqno_key_1, "new key must NOT reduce to the seqno key"
+    assert captured_trade_ids[1] != seqno_key_2, "new key must NOT reduce to the seqno key"
+
+    # Both fills must be counted (no dedup-drop): the position aggregates 1000 + 1000.
+    assert captured_qtys == [1000, 1000]
+    assert sum(captured_qtys) == 2000
 
 
-def test_p1_falls_back_to_ordno_when_seqno_absent(exec_client, sinopac_equity):
+def test_p1_falls_back_to_ordno_when_exchange_seq_absent(exec_client, sinopac_equity):
     """
-    If `seqno` is missing (e.g. pre-rebuild gateway), fall back to `ordno`.
+    When `exchange_seq` is absent (e.g. simulation / pre-confirmation), the key
+    falls back to the per-fill-unique deal-level `ordno` and fills stay distinct.
+
     """
     # Arrange
     order, venue_order_id = _add_accepted_order(exec_client, sinopac_equity)
@@ -153,23 +192,71 @@ def test_p1_falls_back_to_ordno_when_seqno_absent(exec_client, sinopac_equity):
         side_effect=lambda *a, **k: captured.append(k["trade_id"]),
     )
 
-    event = {
+    base_event = {
         "event_type": "stock_deal",
         "trade_id": venue_order_id.value,
-        "ordno": "A1234",
+        "seqno": "123456",  # per-ORDER: identical across both fills
         "code": "2330",
         "action": "Buy",
         "price": 580.0,
         "quantity": 1000,
         "ts": 1709352601.0,
-        # no seqno key
+        # no exchange_seq key -> fall back to deal-level ordno
     }
+    fill_1 = {**base_event, "ordno": "tA0deX001"}
+    fill_2 = {**base_event, "ordno": "tA0deX002"}
 
     # Act
-    exec_client._handle_deal_event(event)
+    exec_client._handle_deal_event(fill_1)
+    exec_client._handle_deal_event(fill_2)
 
-    # Assert
-    assert captured == [TradeId(f"{venue_order_id.value}-A1234")]
+    # Assert -- fallback ordno keeps fills distinct even with identical seqno.
+    assert captured == [
+        TradeId(f"{venue_order_id.value}-tA0deX001"),
+        TradeId(f"{venue_order_id.value}-tA0deX002"),
+    ]
+    assert captured[0] != captured[1], "fallback ordno must stay per-fill unique"
+
+
+def test_p1_seqno_key_would_collide_proves_regression(exec_client, sinopac_equity):
+    """
+    Regression guard for the P1 fix: keying on `seqno` (per-ORDER) collides.
+
+    Builds two real-shaped partial fills with IDENTICAL `seqno` and asserts the
+    emitted TradeIds are distinct -- i.e. the implementation does NOT key on seqno.
+    If someone reverts the key back to `seqno`, both fills collapse to the same
+    TradeId and this test fails.
+
+    """
+    # Arrange
+    order, venue_order_id = _add_accepted_order(exec_client, sinopac_equity)
+    captured: list[TradeId] = []
+    exec_client.generate_order_filled = MagicMock(
+        side_effect=lambda *a, **k: captured.append(k["trade_id"]),
+    )
+
+    base_event = {
+        "event_type": "stock_deal",
+        "trade_id": venue_order_id.value,
+        "seqno": "999999",  # identical across both fills -> would collide under seqno key
+        "code": "2330",
+        "action": "Buy",
+        "price": 580.0,
+        "quantity": 1000,
+        "ts": 1709352601.0,
+    }
+    fill_1 = {**base_event, "ordno": "zZ9ab001", "exchange_seq": "X100"}
+    fill_2 = {**base_event, "ordno": "zZ9ab002", "exchange_seq": "X200"}
+
+    # Act
+    exec_client._handle_deal_event(fill_1)
+    exec_client._handle_deal_event(fill_2)
+
+    # Assert -- the seqno key would be the same for both; the real key must differ.
+    collision_key = TradeId(f"{venue_order_id.value}-999999")
+    assert captured[0] != captured[1], "identical seqno must NOT cause a TradeId collision"
+    assert captured[0] != collision_key
+    assert captured[1] != collision_key
 
 
 # -- P2: late "New" failure must not illegally reject an accepted order -----------------------------
