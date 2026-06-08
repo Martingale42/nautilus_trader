@@ -36,7 +36,7 @@ use crate::common::{
         CONTRACT_LOT_SIZE, SIZE_PRECISION, STOCK_LOT_SIZE, futures_multiplier, options_multiplier,
     },
     parse::{parse_instrument_id, taiwan_naive_to_unix_nanos},
-    tick_size::{futures_tick_size, options_tick_size, twse_stock_tick_size},
+    tick_size::{futures_tick_size, options_tick_size, twse_etf_tick_size, twse_stock_tick_size},
 };
 
 /// Parses a `SnapshotData` into a `QuoteTick` (top-of-book bid/ask).
@@ -139,7 +139,14 @@ pub fn parse_stock_to_equity(
     let raw_symbol = Symbol::new(&contract.code);
     let currency = parse_currency_or_twd(&contract.currency);
 
-    let (tick_size, price_precision) = twse_stock_tick_size(contract.reference);
+    // ETFs / beneficiary certificates (TWSE category "00") follow a different
+    // tick schedule than common stocks (e.g. 0050 @104 ticks 0.05 not 0.50;
+    // 00631L @36 ticks 0.01 not 0.05).
+    let (tick_size, price_precision) = if contract.category == "00" {
+        twse_etf_tick_size(contract.reference)
+    } else {
+        twse_stock_tick_size(contract.reference)
+    };
     let price_increment = Price::new(tick_size, price_precision);
     let lot_size_val = if contract.unit > 0.0 {
         contract.unit
@@ -578,6 +585,69 @@ mod tests {
         match instrument {
             InstrumentAny::Equity(e) => {
                 assert_eq!(e.price_precision(), 2); // 0.01 tick -> 2 decimals
+            }
+            _ => panic!("Expected Equity"),
+        }
+    }
+
+    fn etf_contract(code: &str, reference: f64) -> StockContract {
+        StockContract {
+            code: code.to_string(),
+            symbol: format!("TSE{code}"),
+            name: "ETF".to_string(),
+            exchange: "TSE".to_string(),
+            category: "00".to_string(), // TWSE ETF / beneficiary-cert category
+            limit_up: reference * 1.1,
+            limit_down: reference * 0.9,
+            reference,
+            update_date: "2026-06-08".to_string(),
+            day_trade: "Yes".to_string(),
+            unit: 1000.0,
+            multiplier: 0,
+            currency: "TWD".to_string(),
+        }
+    }
+
+    #[rstest]
+    fn test_parse_etf_above_50_uses_etf_tick() {
+        // 0050 @104.15: ETF tick 0.05 (NOT the stock-tier 0.50).
+        let contract = etf_contract("0050", 104.15);
+        let instrument =
+            parse_stock_to_equity(&contract, UnixNanos::default(), UnixNanos::default()).unwrap();
+        match instrument {
+            InstrumentAny::Equity(e) => {
+                assert_eq!(e.price_increment().as_f64(), 0.05);
+                assert_eq!(e.price_precision(), 2);
+            }
+            _ => panic!("Expected Equity"),
+        }
+    }
+
+    #[rstest]
+    fn test_parse_etf_below_50_uses_etf_tick() {
+        // 00631L @36.67: ETF tick 0.01 (NOT the stock-tier 0.05).
+        let contract = etf_contract("00631L", 36.67);
+        let instrument =
+            parse_stock_to_equity(&contract, UnixNanos::default(), UnixNanos::default()).unwrap();
+        match instrument {
+            InstrumentAny::Equity(e) => {
+                assert_eq!(e.price_increment().as_f64(), 0.01);
+                assert_eq!(e.price_precision(), 2);
+            }
+            _ => panic!("Expected Equity"),
+        }
+    }
+
+    #[rstest]
+    fn test_parse_stock_same_reference_uses_stock_tick() {
+        // Same 104.15 reference but a non-ETF category -> stock-tier 0.50.
+        let mut contract = etf_contract("2330", 104.15);
+        contract.category = "24".to_string(); // semiconductor industry, not ETF
+        let instrument =
+            parse_stock_to_equity(&contract, UnixNanos::default(), UnixNanos::default()).unwrap();
+        match instrument {
+            InstrumentAny::Equity(e) => {
+                assert_eq!(e.price_increment().as_f64(), 0.50);
             }
             _ => panic!("Expected Equity"),
         }
