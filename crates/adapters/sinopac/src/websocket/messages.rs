@@ -255,6 +255,9 @@ pub struct StockOrderInfo {
     /// The optional lot size type.
     #[serde(default)]
     pub order_lot: Option<String>,
+    /// The adapter token for order adoption (max 6 ASCII).
+    #[serde(default)]
+    pub custom_field: Option<String>,
 }
 
 /// Represents futures order information from order events.
@@ -285,6 +288,9 @@ pub struct FuturesOrderInfo {
     /// Whether this is a combo order.
     #[serde(default)]
     pub combo: Option<bool>,
+    /// The adapter token for order adoption (max 6 ASCII).
+    #[serde(default)]
+    pub custom_field: Option<String>,
 }
 
 /// Represents stock order event data from the gateway.

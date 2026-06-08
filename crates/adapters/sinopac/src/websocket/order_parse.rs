@@ -34,6 +34,7 @@ fn set_order_fields(
     price_type: &str,
     code: &str,
     status: &OrderStatusInfo,
+    custom_field: Option<&str>,
 ) -> PyResult<()> {
     dict.set_item("event_type", event_type)?;
     dict.set_item("op_type", &op.op_type)?;
@@ -51,6 +52,8 @@ fn set_order_fields(
     dict.set_item("cancel_quantity", status.cancel_quantity)?;
     dict.set_item("order_quantity", status.order_quantity)?;
     dict.set_item("modified_price", status.modified_price)?;
+    // `custom_field` is `Option<&str>`; pyo3 maps `None` -> Python `None`.
+    dict.set_item("custom_field", custom_field)?;
     Ok(())
 }
 
@@ -113,6 +116,7 @@ pub fn order_event_to_pydict(py: Python<'_>, event: &OrderEvent) -> PyResult<Py<
             &data.order.price_type,
             &data.contract.code,
             &data.status,
+            data.order.custom_field.as_deref(),
         )?,
         OrderEvent::StockDeal(data) => set_deal_fields(
             &dict,
@@ -140,6 +144,7 @@ pub fn order_event_to_pydict(py: Python<'_>, event: &OrderEvent) -> PyResult<Py<
             &data.order.price_type,
             &data.contract.code,
             &data.status,
+            data.order.custom_field.as_deref(),
         )?,
         OrderEvent::FuturesDeal(data) => set_deal_fields(
             &dict,

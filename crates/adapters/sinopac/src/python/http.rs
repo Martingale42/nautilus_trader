@@ -277,7 +277,7 @@ impl SinopacHttpClient {
 
     /// Places an order via the gateway.
     #[pyo3(name = "place_order")]
-    #[pyo3(signature = (code, action, price, quantity, price_type=SinopacPriceType::LMT, order_type=SinopacOrderType::ROD, order_cond=SinopacOrderCond::Cash, order_lot=SinopacOrderLot::Common, market=SinopacMarket::Stock))]
+    #[pyo3(signature = (code, action, price, quantity, price_type=SinopacPriceType::LMT, order_type=SinopacOrderType::ROD, order_cond=SinopacOrderCond::Cash, order_lot=SinopacOrderLot::Common, market=SinopacMarket::Stock, custom_field=None))]
     #[allow(clippy::too_many_arguments)]
     fn py_place_order<'py>(
         &self,
@@ -291,6 +291,7 @@ impl SinopacHttpClient {
         order_cond: SinopacOrderCond,
         order_lot: SinopacOrderLot,
         market: SinopacMarket,
+        custom_field: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let request = PlaceOrderRequest {
@@ -303,6 +304,7 @@ impl SinopacHttpClient {
             order_cond,
             order_lot,
             market,
+            custom_field,
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let resp = client
@@ -391,6 +393,8 @@ impl SinopacHttpClient {
                     dict.set_item("status", &t.status)?;
                     dict.set_item("order_type", &t.order_type)?;
                     dict.set_item("price_type", &t.price_type)?;
+                    // `custom_field` is `Option<String>`; maps `None` -> Python `None`.
+                    dict.set_item("custom_field", t.custom_field.as_deref())?;
                     list.append(dict)?;
                 }
                 Ok(list.unbind())

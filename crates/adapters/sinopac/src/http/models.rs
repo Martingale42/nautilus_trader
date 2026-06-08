@@ -258,6 +258,11 @@ pub struct PlaceOrderRequest {
     pub order_lot: SinopacOrderLot,
     /// The market type (stock, futures, options).
     pub market: SinopacMarket,
+    /// Free-form tag for order adoption (max 6 ASCII, adapter stores a
+    /// deterministic hash of `client_order_id` so timed-out orders can be
+    /// recovered from later WS events / reconciliation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_field: Option<String>,
 }
 
 /// Represents an update order request payload.
@@ -312,6 +317,9 @@ pub struct TradeInfo {
     pub order_type: String,
     /// The price type.
     pub price_type: String,
+    /// The adapter token for order adoption (max 6 ASCII).
+    #[serde(default)]
+    pub custom_field: Option<String>,
 }
 
 /// Represents an account position from the gateway.

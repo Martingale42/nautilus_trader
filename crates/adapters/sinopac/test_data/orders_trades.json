@@ -7,6 +7,7 @@
     "quantity": 1000,
     "status": "Filled",
     "order_type": "ROD",
-    "price_type": "LMT"
+    "price_type": "LMT",
+    "custom_field": "tok123"
   }
 ]
