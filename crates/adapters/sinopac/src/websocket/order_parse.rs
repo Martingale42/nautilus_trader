@@ -60,6 +60,7 @@ fn set_deal_fields(
     dict: &Bound<'_, PyDict>,
     event_type: &str,
     trade_id: &str,
+    seqno: &str,
     ordno: &str,
     action: &str,
     code: &str,
@@ -69,6 +70,10 @@ fn set_deal_fields(
 ) -> PyResult<()> {
     dict.set_item("event_type", event_type)?;
     dict.set_item("trade_id", trade_id)?;
+    // `seqno` is unique per fill, unlike `ordno` (brokerage order number) which is
+    // shared across all partial fills of one order. The Python client builds the NT
+    // TradeId from `seqno` so partial fills do not collide and corrupt the ledger.
+    dict.set_item("seqno", seqno)?;
     dict.set_item("ordno", ordno)?;
     dict.set_item("action", action)?;
     dict.set_item("code", code)?;
@@ -101,6 +106,7 @@ pub fn order_event_to_pydict(py: Python<'_>, event: &OrderEvent) -> PyResult<Py<
             &dict,
             "stock_deal",
             &data.trade_id,
+            &data.seqno,
             &data.ordno,
             &data.action,
             &data.code,
@@ -126,6 +132,7 @@ pub fn order_event_to_pydict(py: Python<'_>, event: &OrderEvent) -> PyResult<Py<
             &dict,
             "futures_deal",
             &data.trade_id,
+            &data.seqno,
             &data.ordno,
             &data.action,
             &data.code,
@@ -136,4 +143,62 @@ pub fn order_event_to_pydict(py: Python<'_>, event: &OrderEvent) -> PyResult<Py<
     }
 
     Ok(dict.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Once;
+
+    use pyo3::Python;
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{common::testing::load_test_json_as, websocket::messages::WsIncomingMsg};
+
+    fn ensure_python_initialized() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            Python::initialize();
+        });
+    }
+
+    #[rstest]
+    fn test_deal_pydict_contains_unique_seqno() {
+        // A stock deal event must expose the per-fill unique `seqno` to Python so
+        // the execution client can build a non-colliding NT TradeId (avoids the
+        // duplicate-TradeId ledger corruption when an order has multiple partial
+        // fills sharing the same `ordno`).
+        ensure_python_initialized();
+        let msg: WsIncomingMsg = load_test_json_as("ws_deal_stock.json");
+        let WsIncomingMsg::OrderUpdate(update) = msg else {
+            panic!("Expected OrderUpdate message");
+        };
+        let event = update.parse_event().expect("parse_event failed");
+
+        Python::attach(|py| {
+            let dict = order_event_to_pydict(py, &event).expect("order_event_to_pydict failed");
+            let bound = dict.bind(py);
+
+            assert!(
+                bound.contains("seqno").expect("contains failed"),
+                "deal pydict must contain seqno",
+            );
+            let seqno: String = bound
+                .get_item("seqno")
+                .expect("get_item failed")
+                .expect("seqno missing")
+                .extract()
+                .expect("seqno not a string");
+            assert_eq!(seqno, "123456");
+
+            // `seqno` must be distinct from `ordno` (the shared order number).
+            let ordno: String = bound
+                .get_item("ordno")
+                .expect("get_item failed")
+                .expect("ordno missing")
+                .extract()
+                .expect("ordno not a string");
+            assert_ne!(seqno, ordno);
+        });
+    }
 }

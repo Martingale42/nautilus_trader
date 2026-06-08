@@ -330,6 +330,10 @@ class SinopacExecutionClient(LiveExecutionClient):
     def _handle_deal_event(self, event: dict[str, Any]) -> None:
         trade_id_str = event.get("trade_id", "")
         ordno = event.get("ordno", "")
+        # `seqno` is unique per fill; `ordno` (brokerage order number) is shared by
+        # all partial fills of one order. Prefer `seqno` so partial-fill TradeIds do
+        # not collide and corrupt the ledger; fall back to `ordno` if `seqno` absent.
+        seq = event.get("seqno") or ordno
         code = event.get("code", "")
         price = event.get("price", 0.0)
         quantity = event.get("quantity", 0)
@@ -365,7 +369,7 @@ class SinopacExecutionClient(LiveExecutionClient):
             client_order_id=client_order_id,
             venue_order_id=venue_order_id,
             venue_position_id=None,
-            trade_id=TradeId(f"{trade_id_str}-{ordno}"),
+            trade_id=TradeId(f"{trade_id_str}-{seq}"),
             order_side=order.side,
             order_type=order.order_type,
             last_qty=instrument.make_qty(quantity),
