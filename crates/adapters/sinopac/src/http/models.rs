@@ -104,6 +104,16 @@ pub struct StockContract {
     pub update_date: String,
     /// The day trade eligibility flag.
     pub day_trade: String,
+    /// The round-lot / contract unit (shares per lot). `#[serde(default)]` so
+    /// older/partial gateway responses still deserialize.
+    #[serde(default)]
+    pub unit: f64,
+    /// The contract multiplier (0 for stocks).
+    #[serde(default)]
+    pub multiplier: i64,
+    /// The quote currency code (e.g. "TWD").
+    #[serde(default)]
+    pub currency: String,
 }
 
 /// Represents a futures contract from the gateway.
@@ -131,6 +141,19 @@ pub struct FuturesContract {
     pub reference: f64,
     /// The contract update date.
     pub update_date: String,
+    /// The contract unit (lot size; 1 contract by default). `#[serde(default)]`
+    /// so older/partial gateway responses still deserialize.
+    #[serde(default)]
+    pub unit: f64,
+    /// The contract multiplier (TWD per index point; 0 → fall back to table).
+    #[serde(default)]
+    pub multiplier: i64,
+    /// The quote currency code (e.g. "TWD").
+    #[serde(default)]
+    pub currency: String,
+    /// The underlying instrument code (e.g. "TXF"); empty → fall back to root symbol.
+    #[serde(default)]
+    pub underlying_code: String,
 }
 
 /// Represents an options contract from the gateway.
@@ -162,6 +185,19 @@ pub struct OptionsContract {
     pub reference: f64,
     /// The contract update date.
     pub update_date: String,
+    /// The contract unit (lot size; 1 contract by default). `#[serde(default)]`
+    /// so older/partial gateway responses still deserialize.
+    #[serde(default)]
+    pub unit: f64,
+    /// The contract multiplier (TWD per index point; 0 → fall back to table).
+    #[serde(default)]
+    pub multiplier: i64,
+    /// The quote currency code (e.g. "TWD").
+    #[serde(default)]
+    pub currency: String,
+    /// The underlying instrument code (e.g. "TXO"); empty → fall back to root symbol.
+    #[serde(default)]
+    pub underlying_code: String,
 }
 
 /// Represents market snapshot data from the gateway.
