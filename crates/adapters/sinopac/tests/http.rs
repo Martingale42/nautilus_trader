@@ -118,7 +118,10 @@ async fn test_list_options() {
     assert_eq!(options.len(), 1);
     assert_eq!(options[0].code, "TXO20000C6");
     assert_eq!(options[0].strike_price, 20000.0);
-    assert_eq!(options[0].option_right, "Call");
+    // WS-A now serializes option_right as the enum value "C"/"P" (was "Call"/"Put").
+    assert_eq!(options[0].option_right, "C");
+    assert_eq!(options[0].multiplier, 50);
+    assert_eq!(options[0].underlying_code, "TXO");
 }
 
 #[rstest]

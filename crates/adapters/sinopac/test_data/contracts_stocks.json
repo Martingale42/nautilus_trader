@@ -9,7 +9,10 @@
     "limit_down": 522.0,
     "reference": 580.0,
     "update_date": "2026-03-02",
-    "day_trade": "Yes"
+    "day_trade": "Yes",
+    "unit": 1000.0,
+    "multiplier": 0,
+    "currency": "TWD"
   },
   {
     "code": "2317",

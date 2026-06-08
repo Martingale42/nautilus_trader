@@ -128,7 +128,8 @@ pub fn parse_kbars_response(
 ///
 /// - `InstrumentId` = `{code}.SINOPAC`
 /// - Tick size and precision derived from reference price via TWSE schedule
-/// - Lot size = 1000 shares (standard Taiwan market lot)
+/// - Currency from `contract.currency` (fallback TWD)
+/// - Lot size from `contract.unit` (fallback `STOCK_LOT_SIZE` = 1000 shares)
 pub fn parse_stock_to_equity(
     contract: &StockContract,
     ts_event: UnixNanos,
@@ -136,11 +137,16 @@ pub fn parse_stock_to_equity(
 ) -> anyhow::Result<InstrumentAny> {
     let instrument_id = parse_instrument_id(&contract.code)?;
     let raw_symbol = Symbol::new(&contract.code);
-    let currency = Currency::TWD();
+    let currency = parse_currency_or_twd(&contract.currency);
 
     let (tick_size, price_precision) = twse_stock_tick_size(contract.reference);
     let price_increment = Price::new(tick_size, price_precision);
-    let lot_size = Some(Quantity::new(STOCK_LOT_SIZE, SIZE_PRECISION));
+    let lot_size_val = if contract.unit > 0.0 {
+        contract.unit
+    } else {
+        STOCK_LOT_SIZE
+    };
+    let lot_size = Some(Quantity::new(lot_size_val, SIZE_PRECISION));
 
     let max_price = Some(Price::new(contract.limit_up, price_precision));
     let min_price = Some(Price::new(contract.limit_down, price_precision));
@@ -171,9 +177,12 @@ pub fn parse_stock_to_equity(
 
 /// Parses a gateway `FuturesContract` into a Nautilus `FuturesContract` instrument.
 ///
-/// - Root symbol and multiplier derived from `category` field
-/// - Tick size from `futures_tick_size()` lookup
-/// - Expiration parsed from `delivery_date`
+/// - Multiplier from `contract.multiplier` (Shioaji authoritative); falls back
+///   to the `futures_multiplier(root_symbol)` table only when `multiplier == 0`
+/// - Lot size from `contract.unit` (fallback `CONTRACT_LOT_SIZE`)
+/// - Underlying from `contract.underlying_code` (fallback root symbol / category)
+/// - Currency from `contract.currency` (fallback TWD)
+/// - Tick size from `futures_tick_size()` lookup; expiration from `delivery_date`
 pub fn parse_futures_to_contract(
     contract: &FuturesContract,
     ts_event: UnixNanos,
@@ -181,13 +190,28 @@ pub fn parse_futures_to_contract(
 ) -> anyhow::Result<InstrumentAny> {
     let instrument_id = parse_instrument_id(&contract.code)?;
     let raw_symbol = Symbol::new(&contract.code);
-    let currency = Currency::TWD();
+    let currency = parse_currency_or_twd(&contract.currency);
 
     let root_symbol = &contract.category;
     let (tick_size, price_precision) = futures_tick_size(root_symbol);
     let price_increment = Price::new(tick_size, price_precision);
-    let multiplier = Quantity::new(futures_multiplier(root_symbol), 0);
-    let lot_size = Quantity::new(CONTRACT_LOT_SIZE, SIZE_PRECISION);
+    let multiplier_val = if contract.multiplier > 0 {
+        contract.multiplier as f64
+    } else {
+        futures_multiplier(root_symbol)
+    };
+    let multiplier = Quantity::new(multiplier_val, 0);
+    let lot_size_val = if contract.unit > 0.0 {
+        contract.unit
+    } else {
+        CONTRACT_LOT_SIZE
+    };
+    let lot_size = Quantity::new(lot_size_val, SIZE_PRECISION);
+    let underlying = if contract.underlying_code.is_empty() {
+        Ustr::from(root_symbol)
+    } else {
+        Ustr::from(contract.underlying_code.as_str())
+    };
 
     let expiration_ns = parse_date_to_nanos(&contract.delivery_date)?;
     let activation_ns = parse_date_to_nanos(&contract.update_date).unwrap_or(ts_event);
@@ -205,7 +229,7 @@ pub fn parse_futures_to_contract(
         raw_symbol,
         asset_class,
         Some(Ustr::from("TAIFEX")),
-        Ustr::from(root_symbol),
+        underlying,
         activation_ns,
         expiration_ns,
         currency,
@@ -231,9 +255,13 @@ pub fn parse_futures_to_contract(
 
 /// Parses a gateway `OptionsContract` into a Nautilus `OptionContract` instrument.
 ///
-/// - Root symbol and multiplier derived from `category` field
+/// - Multiplier from `contract.multiplier` (Shioaji authoritative); falls back
+///   to the `options_multiplier(root_symbol)` table only when `multiplier == 0`
+/// - Lot size from `contract.unit` (fallback `CONTRACT_LOT_SIZE`)
+/// - Underlying from `contract.underlying_code` (fallback root symbol / category)
+/// - Currency from `contract.currency` (fallback TWD)
 /// - Tick size from `options_tick_size()` based on reference premium
-/// - Option kind parsed from `option_right` ("Call" / "Put")
+/// - Option kind parsed from `option_right` ("C" = Call / "P" = Put)
 pub fn parse_options_to_contract(
     contract: &OptionsContract,
     ts_event: UnixNanos,
@@ -241,18 +269,33 @@ pub fn parse_options_to_contract(
 ) -> anyhow::Result<InstrumentAny> {
     let instrument_id = parse_instrument_id(&contract.code)?;
     let raw_symbol = Symbol::new(&contract.code);
-    let currency = Currency::TWD();
+    let currency = parse_currency_or_twd(&contract.currency);
 
     let root_symbol = &contract.category;
     let (tick_size, price_precision) = options_tick_size(contract.reference);
     let price_increment = Price::new(tick_size, price_precision);
-    let multiplier = Quantity::new(options_multiplier(root_symbol), 0);
-    let lot_size = Quantity::new(CONTRACT_LOT_SIZE, SIZE_PRECISION);
+    let multiplier_val = if contract.multiplier > 0 {
+        contract.multiplier as f64
+    } else {
+        options_multiplier(root_symbol)
+    };
+    let multiplier = Quantity::new(multiplier_val, 0);
+    let lot_size_val = if contract.unit > 0.0 {
+        contract.unit
+    } else {
+        CONTRACT_LOT_SIZE
+    };
+    let lot_size = Quantity::new(lot_size_val, SIZE_PRECISION);
+    let underlying = if contract.underlying_code.is_empty() {
+        Ustr::from(root_symbol)
+    } else {
+        Ustr::from(contract.underlying_code.as_str())
+    };
 
     let option_kind = match contract.option_right.as_str() {
-        "Call" => OptionKind::Call,
-        "Put" => OptionKind::Put,
-        other => anyhow::bail!("Unknown option_right: {other}"),
+        "C" => OptionKind::Call,
+        "P" => OptionKind::Put,
+        other => anyhow::bail!("Unknown option_right {other:?} (expected 'C'/'P')"),
     };
 
     let strike_price = Price::new(contract.strike_price, 0);
@@ -273,7 +316,7 @@ pub fn parse_options_to_contract(
         raw_symbol,
         asset_class,
         Some(Ustr::from("TAIFEX")),
-        Ustr::from(root_symbol),
+        underlying,
         option_kind,
         strike_price,
         currency,
@@ -297,6 +340,18 @@ pub fn parse_options_to_contract(
     );
 
     Ok(InstrumentAny::OptionContract(option))
+}
+
+/// Resolves a gateway currency code string to a Nautilus `Currency`.
+///
+/// Falls back to TWD when the code is empty or not a recognized ISO code, so a
+/// missing/partial gateway field never panics. All Taiwan venue instruments are
+/// quoted in TWD, making it a safe default.
+fn parse_currency_or_twd(code: &str) -> Currency {
+    if code.is_empty() {
+        return Currency::TWD();
+    }
+    Currency::try_from_str(code).unwrap_or_else(Currency::TWD)
 }
 
 /// Parses a date string like "2026/06/17" or "2026-06-17" to `UnixNanos`.
@@ -513,6 +568,9 @@ mod tests {
             reference: 8.0, // < 10 TWD -> tick=0.01, precision=2
             update_date: "2026-03-04".to_string(),
             day_trade: "No".to_string(),
+            unit: 0.0,
+            multiplier: 0,
+            currency: String::new(),
         };
 
         let instrument =
@@ -520,6 +578,222 @@ mod tests {
         match instrument {
             InstrumentAny::Equity(e) => {
                 assert_eq!(e.price_precision(), 2); // 0.01 tick -> 2 decimals
+            }
+            _ => panic!("Expected Equity"),
+        }
+    }
+
+    // --- Financial-correctness helpers + tests for WS-B authoritative parsing ----------
+
+    /// Builds a minimal `FuturesContract` for parse tests with explicit
+    /// `multiplier`/`unit` so we can verify authoritative-vs-fallback behaviour.
+    fn make_futures_contract(multiplier: i64, unit: f64) -> FuturesContract {
+        FuturesContract {
+            code: "TXFC6".to_string(),
+            symbol: "TXFC6".to_string(),
+            name: "Test".to_string(),
+            category: "TXF".to_string(),
+            delivery_month: "2026/06".to_string(),
+            delivery_date: "2026/06/17".to_string(),
+            underlying_kind: "I".to_string(),
+            limit_up: 22000.0,
+            limit_down: 18000.0,
+            reference: 20000.0,
+            update_date: "2026-03-02".to_string(),
+            unit,
+            multiplier,
+            currency: "TWD".to_string(),
+            underlying_code: "TXF".to_string(),
+        }
+    }
+
+    /// Builds a minimal `OptionsContract` for parse tests with explicit
+    /// `option_right`/`multiplier`/`unit`.
+    fn make_options_contract(option_right: &str, multiplier: i64, unit: f64) -> OptionsContract {
+        OptionsContract {
+            code: "TXO20000C6".to_string(),
+            symbol: "TXO20000C6".to_string(),
+            name: "Test".to_string(),
+            category: "TXO".to_string(),
+            delivery_month: "2026/06".to_string(),
+            delivery_date: "2026/06/17".to_string(),
+            strike_price: 20000.0,
+            option_right: option_right.to_string(),
+            underlying_kind: "I".to_string(),
+            limit_up: 2200.0,
+            limit_down: 0.1,
+            reference: 500.0,
+            update_date: "2026-03-02".to_string(),
+            unit,
+            multiplier,
+            currency: "TWD".to_string(),
+            underlying_code: "TXO".to_string(),
+        }
+    }
+
+    #[rstest]
+    fn test_option_right_c_parses_call() {
+        let contract = make_options_contract("C", 50, 1.0);
+        let instrument =
+            parse_options_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::OptionContract(o) => {
+                assert_eq!(o.option_kind(), Some(OptionKind::Call));
+            }
+            _ => panic!("Expected OptionContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_option_right_p_parses_put() {
+        let contract = make_options_contract("P", 50, 1.0);
+        let instrument =
+            parse_options_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::OptionContract(o) => {
+                assert_eq!(o.option_kind(), Some(OptionKind::Put));
+            }
+            _ => panic!("Expected OptionContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_option_right_unknown_bails() {
+        // Pre-WS-A spelling "Call" is now an unknown value and must bail!.
+        let contract = make_options_contract("Call", 50, 1.0);
+        let result =
+            parse_options_to_contract(&contract, UnixNanos::default(), UnixNanos::default());
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_futures_uses_authoritative_multiplier() {
+        // 777 is NOT in the hardcoded table -> proves contract.multiplier is used.
+        let contract = make_futures_contract(777, 1.0);
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.multiplier().as_f64(), 777.0);
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_futures_multiplier_zero_falls_back_to_table() {
+        // multiplier == 0 -> fallback to futures_multiplier("TXF") == 200.
+        let contract = make_futures_contract(0, 1.0);
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.multiplier().as_f64(), 200.0);
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_options_uses_authoritative_multiplier() {
+        // 99 is NOT the TXO table value (50) -> proves contract.multiplier is used.
+        let contract = make_options_contract("C", 99, 1.0);
+        let instrument =
+            parse_options_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::OptionContract(o) => {
+                assert_eq!(o.multiplier().as_f64(), 99.0);
+            }
+            _ => panic!("Expected OptionContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_options_multiplier_zero_falls_back_to_table() {
+        // multiplier == 0 -> fallback to options_multiplier("TXO") == 50.
+        let contract = make_options_contract("C", 0, 1.0);
+        let instrument =
+            parse_options_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::OptionContract(o) => {
+                assert_eq!(o.multiplier().as_f64(), 50.0);
+            }
+            _ => panic!("Expected OptionContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_futures_unit_sets_lot_size() {
+        // Non-default unit (5) must flow through to lot_size.
+        let contract = make_futures_contract(200, 5.0);
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.lot_size().unwrap().as_f64(), 5.0);
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_stock_unit_sets_lot_size() {
+        let contract = StockContract {
+            code: "2330".to_string(),
+            symbol: "TSE2330".to_string(),
+            name: "Test".to_string(),
+            exchange: "TSE".to_string(),
+            category: "Electronics".to_string(),
+            limit_up: 638.0,
+            limit_down: 522.0,
+            reference: 580.0,
+            update_date: "2026-03-02".to_string(),
+            day_trade: "Yes".to_string(),
+            unit: 100.0, // odd-lot style unit -> lot_size must follow
+            multiplier: 0,
+            currency: "TWD".to_string(),
+        };
+        let instrument =
+            parse_stock_to_equity(&contract, UnixNanos::default(), UnixNanos::default()).unwrap();
+        match instrument {
+            InstrumentAny::Equity(e) => {
+                assert_eq!(e.lot_size().unwrap().as_f64(), 100.0);
+            }
+            _ => panic!("Expected Equity"),
+        }
+    }
+
+    #[rstest]
+    fn test_stock_missing_unit_falls_back_to_default_lot() {
+        // unit == 0 -> fallback to STOCK_LOT_SIZE (1000).
+        let contract = StockContract {
+            code: "2330".to_string(),
+            symbol: "TSE2330".to_string(),
+            name: "Test".to_string(),
+            exchange: "TSE".to_string(),
+            category: "Electronics".to_string(),
+            limit_up: 638.0,
+            limit_down: 522.0,
+            reference: 580.0,
+            update_date: "2026-03-02".to_string(),
+            day_trade: "Yes".to_string(),
+            unit: 0.0,
+            multiplier: 0,
+            currency: String::new(), // empty -> TWD fallback
+        };
+        let instrument =
+            parse_stock_to_equity(&contract, UnixNanos::default(), UnixNanos::default()).unwrap();
+        match instrument {
+            InstrumentAny::Equity(e) => {
+                assert_eq!(e.lot_size().unwrap().as_f64(), 1000.0);
+                assert_eq!(e.quote_currency().code.as_str(), "TWD");
             }
             _ => panic!("Expected Equity"),
         }

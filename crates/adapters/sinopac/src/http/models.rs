@@ -431,7 +431,13 @@ mod tests {
         assert!(!contracts[0].name.is_empty());
         assert_eq!(contracts[0].exchange, "TSE");
         assert_eq!(contracts[0].limit_up, 638.0);
+        assert_eq!(contracts[0].unit, 1000.0);
+        assert_eq!(contracts[0].currency, "TWD");
         assert_eq!(contracts[1].code, "2317");
+        // 2317 omits the new fields entirely -> serde(default) fallbacks.
+        assert_eq!(contracts[1].unit, 0.0);
+        assert_eq!(contracts[1].multiplier, 0);
+        assert!(contracts[1].currency.is_empty());
     }
 
     #[rstest]
@@ -441,6 +447,10 @@ mod tests {
         assert_eq!(contracts[0].code, "TXFC6");
         assert_eq!(contracts[0].delivery_month, "2026/06");
         assert_eq!(contracts[0].underlying_kind, "I");
+        assert_eq!(contracts[0].multiplier, 200);
+        assert_eq!(contracts[0].unit, 1.0);
+        assert_eq!(contracts[0].currency, "TWD");
+        assert_eq!(contracts[0].underlying_code, "TXF");
     }
 
     #[rstest]
@@ -449,7 +459,11 @@ mod tests {
         assert_eq!(contracts.len(), 1);
         assert_eq!(contracts[0].code, "TXO20000C6");
         assert_eq!(contracts[0].strike_price, 20000.0);
-        assert_eq!(contracts[0].option_right, "Call");
+        assert_eq!(contracts[0].option_right, "C");
+        assert_eq!(contracts[0].multiplier, 50);
+        assert_eq!(contracts[0].unit, 1.0);
+        assert_eq!(contracts[0].currency, "TWD");
+        assert_eq!(contracts[0].underlying_code, "TXO");
     }
 
     #[rstest]
