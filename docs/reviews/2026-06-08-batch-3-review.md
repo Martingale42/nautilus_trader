@@ -186,3 +186,113 @@ test_p3_business_rejection_still_rejects PASSED
    `seqno` 不可作唯一鍵。先以模擬/真倉抓一筆 multi-fill 成交回報實證欄位值。
 2. **[Critical] C1**：同步修正 P1 測試輸入，使其符合官方語義（`seqno`/`trade_id` 跨筆相同、唯一鍵欄位跨筆不同）。
 3. **[Important] I2**：修正 P3 commit/註解對「adopt」的過度宣稱，或補實對帳收斂路徑 + 一條對帳測試。
+
+---
+
+## Fix Verification (2026-06-08)
+
+- 驗證者：Code Reviewer
+- 分支：`sinopac-adapter-clean`（已確認 `git branch --show-current`）
+- 修復 commits：`85ee21e2e8`（C1）、`b4ad1c1e17`（I2）
+
+### C1 — **RESOLVED** ✓（Critical）
+
+唯一鍵已從逐單的 `seqno` 改為逐筆唯一的 `exchange_seq`（fallback `ordno`）：
+
+- **Python**（`execution.py:337`）：`seq = event.get("exchange_seq") or ordno`。
+  `seqno` 已**不再**出現在成交路徑的鍵組成中（`grep` 確認）。誤導註解（「seqno is unique per fill」）已改正為「seqno is per-ORDER … NEVER key on seqno」。
+- **Rust**（`order_parse.rs`）：`set_deal_fields` 新增參數 `exchange_seq: Option<&str>`，以
+  `dict.set_item("exchange_seq", exchange_seq)?` 寫入 pydict（pyo3 將 `None` → Python `None`，
+  故 Python 端 `.get("exchange_seq") or ordno` 在缺席時正確 fallback）。**StockDeal 與 FuturesDeal 兩個 caller**
+  皆透傳 `data.exchange_seq.as_deref()`（`:123`、`:150`）。`exchange_seq` 來源為
+  `StockDealEventData`/`FuturesDealEventData` 的 `#[serde(default)] exchange_seq: Option<String>`
+  （`messages.rs:314,361`），wire 反序列化安全、缺席即 `None`，**外部資料無 `unwrap()`/`expect()` 可 panic**。
+  誤導註解（Rust + 測試）已全數改正。
+- **測試品質**：P1 測試已重寫為**符合官方語義的輸入**——兩筆 partial fill 的 `trade_id`、`seqno`
+  皆相同，僅 `exchange_seq`/`ordno` 逐筆不同 → TradeId 必相異、兩筆皆計入（`captured_qtys == [1000, 1000]`）。
+  新增 `test_p1_seqno_key_would_collide_proves_regression`（identical `seqno`）與 fallback 測試。
+- **Regression guard 獨立再確認（scratch-flip）**：暫時把鍵改回 `seq = event.get("seqno") or ordno`，
+  3 條 P1 測試**全部 FAIL**，錯誤即為預期碰撞：
+
+  ```
+  >       assert captured[0] != captured[1], "identical seqno must NOT cause a TradeId collision"
+  E       AssertionError: identical seqno must NOT cause a TradeId collision
+  E       assert TradeId('T0001-999999') != TradeId('T0001-999999')
+  FAILED ... test_p1_partial_fills_same_seqno_distinct_exchange_seq_yield_distinct_trade_ids
+  FAILED ... test_p1_falls_back_to_ordno_when_exchange_seq_absent
+  FAILED ... test_p1_seqno_key_would_collide_proves_regression
+  3 failed, 5 deselected
+  ```
+
+  scratch 改動已 revert，工作樹該檔案無殘留。測試確實守住帳本正確性，非杜撰情境。
+
+### I2 — **RESOLVED** ✓（Important）
+
+過度宣稱的「乾淨 adopt」措辭已改正，並補上釘住真實收斂行為的對帳測試：
+
+- **註解改正**（`execution.py:444-462` `_submit_order` 逾時分支、`:630-643` `generate_order_status_reports`）：
+  明確描述超時單**沒有 venue_order_id**、對帳以合成 `client_order_id`（`SINOPAC-{trade_id}`）+ venue
+  `trade_id` 重建 `OrderStatusReport`，因不匹配本地單而**被 NT 當成外部單**（消除隱性曝險），
+  本地原單收斂依賴 NT 既有外部單處理、可能需人工介入。不再宣稱乾淨 adopt。
+- **新增測試** `test_p3_reconciliation_surfaces_timed_out_order_as_external`：逾時 → `list_trades`
+  回 working 單 → 對帳產出 1 筆報告；斷言 `report.client_order_id == ClientOrderId("SINOPAC-T9999")`
+  且 `!= order.client_order_id`（外部單語義）、本地單仍 `SUBMITTED` 且 `venue_order_id is None`。
+  狀態映射 `"Submitted" → ACCEPTED` 亦與程式碼（`execution.py:78`）一致。
+
+### M3 / M4 — 無需修改（Minor，沿用原評估）
+
+- **M3**：C1 採方案 2 後，鍵已是顯式 `event.get("exchange_seq") or ordno`；`exchange_seq` 為
+  `Option<String>`、缺席對應 Python `None`，`or` fallback 行為正確、無 falsy 誤回退。已自然消解。
+- **M4**：P2 guard 含 `FILLED` 屬防禦性、無害，無需修改。
+
+### 回歸檢查（P2/P3 原件未被 C1/I2 破壞）
+
+- **P2 guard**（`execution.py:258-272` 晚到 "New" 失敗不非法 reject 已接受單）邏輯未動，
+  `test_p2_*` 兩條皆綠。
+- **P3 transport/business split**（`:443` `(asyncio.TimeoutError, OSError)` → 留 SUBMITTED；
+  `:468` `Exception` → reject）邏輯未動，僅改註解；`test_p3_timeout_does_not_reject_order`、
+  `test_p3_business_rejection_still_rejects` 皆綠。
+
+### 乾淨範圍確認
+
+兩個修復 commit 僅動 `order_parse.rs`、`execution.py`、`test_execution.py`
+（`git show --stat`），**無 `Cargo.lock`/`uv.lock`/shioaji-server 污染**。
+（工作樹中 `Cargo.lock` 版本號與 `uv.lock` 的變動為 build/uv-run 環境 churn，與本次修復與本次驗證
+提交無關，不納入提交。）
+
+### 重跑驗證輸出
+
+#### `cargo test -p nautilus-sinopac --features python`（tail）
+
+```
+test websocket::order_parse::tests::test_deal_pydict_exposes_per_fill_unique_keys ... ok
+test result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out   (tests/http.rs)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out   (tests/websocket.rs)
+```
+
+#### `uv run --active --no-sync pytest tests/integration_tests/adapters/sinopac/ -v`（tail）
+
+```
+test_p1_partial_fills_same_seqno_distinct_exchange_seq_yield_distinct_trade_ids PASSED
+test_p1_falls_back_to_ordno_when_exchange_seq_absent PASSED
+test_p1_seqno_key_would_collide_proves_regression PASSED
+test_p2_late_new_failure_on_accepted_order_is_ignored PASSED
+test_p2_new_failure_before_accept_still_rejects PASSED
+test_p3_timeout_does_not_reject_order PASSED
+test_p3_business_rejection_still_rejects PASSED
+test_p3_reconciliation_surfaces_timed_out_order_as_external PASSED
+... (config/factories) ...
+============================== 18 passed in 0.14s ==============================
+```
+
+---
+
+## 更新後結論：**APPROVED**
+
+C1（Critical）已以逐筆唯一的 `exchange_seq`（fallback deal-level `ordno`）取代逐單 `seqno`，
+Rust 端 `exchange_seq` 確實透傳至 Python（stock/futures 兩路徑、`Option`/`None` 安全），
+測試輸入已符合官方語義，且 regression guard 經 scratch-flip 獨立驗證確實會在退回 `seqno` 時失敗。
+I2（Important）的過度宣稱已改正並補對帳測試釘住真實外部單收斂行為。
+M3/M4（Minor）沿用原評估、無需修改。P2/P3 原件未回歸，cargo（80 tests）與 pytest（18 tests）全綠，
+無跨倉污染。**可合併。**
