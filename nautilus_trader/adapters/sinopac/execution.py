@@ -435,7 +435,23 @@ class SinopacExecutionClient(LiveExecutionClient):
                 ts_event=self._clock.timestamp_ns(),
             )
 
+        except (asyncio.TimeoutError, OSError) as e:
+            # Transport failure: the request may have actually reached the gateway
+            # and the order may be LIVE on the exchange. Rejecting here would create
+            # hidden exposure (we report REJECTED while the venue holds a working
+            # order). Leave the order in SUBMITTED and let WS deal/order events or
+            # reconciliation (`generate_order_status_reports` -> `list_trades`)
+            # adopt the true state. Reconciliation keys on the venue `trade_id`, so
+            # it can re-establish the order even though the in-memory
+            # `_trade_id_to_client_order_id` mapping was never set (we never received
+            # a `trade_id` on timeout).
+            self._log.error(
+                f"place_order transport failure for {order.client_order_id}: {e!r}; "
+                f"leaving order SUBMITTED for WS/reconciliation to resolve",
+            )
         except Exception as e:
+            # Genuine business rejection (validation, margin, unsupported params, ...):
+            # the order definitively did not reach a working state, so reject is safe.
             self.generate_order_rejected(
                 strategy_id=order.strategy_id,
                 instrument_id=instrument_id,
