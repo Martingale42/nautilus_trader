@@ -21,6 +21,7 @@ import pytest
 
 from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
 from nautilus_trader.adapters.sinopac.execution import SinopacExecutionClient
+from nautilus_trader.adapters.sinopac.execution import _coid_token
 from nautilus_trader.adapters.sinopac.providers import SinopacInstrumentProvider
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import MessageBus
@@ -410,23 +411,18 @@ async def test_p3_business_rejection_still_rejects(exec_client, sinopac_equity):
 
 
 @pytest.mark.asyncio
-async def test_p3_reconciliation_surfaces_timed_out_order_as_external(
+async def test_p3_reconciliation_with_token_adopts_timed_out_order(
     exec_client,
     sinopac_equity,
 ):
     """
-    Document the ACTUAL convergence behavior after a place_order timeout (I2).
+    After a place_order timeout, reconciliation via list_trades recovers the
+    original client_order_id through the custom_field token round-trip, enabling
+    NT to adopt the SUBMITTED order instead of creating an external duplicate.
 
-    On timeout the local order stays SUBMITTED but never received a `trade_id`, so
-    `_trade_id_to_client_order_id` has no entry for the venue order. When that order
-    is still working at the venue, `generate_order_status_reports` -> `list_trades`
-    returns it and rebuilds an OrderStatusReport keyed on the venue `trade_id`.
-
-    Because no mapping exists, the report carries a SYNTHESIZED client_order_id
-    (`SINOPAC-{trade_id}`), NOT the local order's client_order_id. NT therefore
-    surfaces this as an EXTERNAL order rather than cleanly adopting the local
-    SUBMITTED one -- this test pins that real behavior so the (corrected) code
-    comment cannot drift back into an overstated "clean adopt" claim.
+    This is the BL-1 fix: the 6-char token stored in custom_field at submit time
+    is echoed back by list_trades. The adapter recomputes the token for each
+    cached non-closed order and matches, recovering the real client_order_id.
 
     """
     from nautilus_trader.execution.messages import GenerateOrderStatusReports
@@ -447,7 +443,11 @@ async def test_p3_reconciliation_surfaces_timed_out_order_as_external(
     assert order.venue_order_id is None
     assert "T9999" not in exec_client._trade_id_to_client_order_id
 
-    # The venue actually holds the order as a working (Submitted) trade.
+    # Compute the token that _submit_order would have set
+    token = _coid_token(order.client_order_id.value)
+
+    # The venue actually holds the order as a working (Submitted) trade,
+    # with the custom_field token round-tripped.
     exec_client._http_client.list_trades = AsyncMock(
         return_value=[
             {
@@ -460,6 +460,7 @@ async def test_p3_reconciliation_surfaces_timed_out_order_as_external(
                 "quantity": 2000,
                 "filled_qty": 0,
                 "price": 580.0,
+                "custom_field": token,
             },
         ],
     )
@@ -476,18 +477,311 @@ async def test_p3_reconciliation_surfaces_timed_out_order_as_external(
     # Act
     reports = await exec_client.generate_order_status_reports(command)
 
-    # Assert -- reconciliation produced exactly one report for the working order.
+    # Assert -- reconciliation recovered the REAL client_order_id via token.
     assert len(reports) == 1
     report = reports[0]
     assert report.venue_order_id == VenueOrderId("T9999")
     assert report.order_status == NTOrderStatus.ACCEPTED  # gateway "Submitted" -> ACCEPTED
 
-    # Real behavior: the report is keyed on a SYNTHESIZED client_order_id (external),
-    # NOT the local SUBMITTED order's own id -> NT treats it as an external order.
-    assert report.client_order_id == ClientOrderId("SINOPAC-T9999")
-    assert report.client_order_id != order.client_order_id
+    # The report carries the REAL client_order_id (not the synthetic one).
+    # This is the BL-1 fix: NT can match this to the cached SUBMITTED order
+    # and adopt it, attaching venue_order_id and advancing state.
+    assert report.client_order_id == order.client_order_id
+    assert report.client_order_id != ClientOrderId("SINOPAC-T9999")
 
-    # The local order is NOT mutated by report generation (no clean adopt happens here);
-    # it remains SUBMITTED with no venue_order_id until NT's external-order handling runs.
-    assert order.status == OrderStatus.SUBMITTED
-    assert order.venue_order_id is None
+    # The mapping was backfilled by _resolve_client_order_id for future events.
+    assert exec_client._trade_id_to_client_order_id["T9999"] == order.client_order_id.value
+
+
+@pytest.mark.asyncio
+async def test_p3_reconciliation_without_token_falls_back_to_synthetic(
+    exec_client,
+    sinopac_equity,
+):
+    """
+    When custom_field is absent (e.g. orders placed before token feature),
+    reconciliation falls back to the synthetic SINOPAC-{trade_id} id.
+    This is the pre-BL-1 behavior, preserved for backward compatibility.
+
+    """
+    from nautilus_trader.execution.messages import GenerateOrderStatusReports
+    from nautilus_trader.model.enums import OrderStatus as NTOrderStatus
+    from nautilus_trader.model.identifiers import ClientOrderId
+    from nautilus_trader.model.identifiers import VenueOrderId
+
+    # No local submitted order with matching token in cache.
+    exec_client._http_client.list_trades = AsyncMock(
+        return_value=[
+            {
+                "trade_id": "T8888",
+                "code": "2330",
+                "status": "Submitted",
+                "action": "Buy",
+                "price_type": "LMT",
+                "order_type": "ROD",
+                "quantity": 1000,
+                "filled_qty": 0,
+                "price": 580.0,
+                # No custom_field -> fallback to synthetic
+            },
+        ],
+    )
+
+    command = GenerateOrderStatusReports(
+        instrument_id=None,
+        start=None,
+        end=None,
+        open_only=False,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+
+    # Act
+    reports = await exec_client.generate_order_status_reports(command)
+
+    # Assert -- synthetic client_order_id (unchanged pre-BL-1 behavior).
+    assert len(reports) == 1
+    report = reports[0]
+    assert report.client_order_id == ClientOrderId("SINOPAC-T8888")
+
+
+# -- BL-1: custom_field token round-trip for timed-out order adoption ----------------------------
+
+
+def test_coid_token_deterministic():
+    """The token must be deterministic (restart-safe)."""
+    coid = "O-20260608-001-000-001"
+    assert _coid_token(coid) == _coid_token(coid)
+
+
+def test_coid_token_length_and_ascii():
+    """Token must be exactly 6 ASCII chars (fits ConStrAsciiMax6)."""
+    token = _coid_token("any-client-order-id-value")
+    assert len(token) == 6
+    assert all(c.isalnum() for c in token)
+
+
+def test_coid_token_different_inputs_differ():
+    """Different client_order_ids should produce different tokens (low collision)."""
+    t1 = _coid_token("O-20260608-001-000-001")
+    t2 = _coid_token("O-20260608-001-000-002")
+    assert t1 != t2
+
+
+@pytest.mark.asyncio
+async def test_bl1_submit_order_sends_custom_field_token(exec_client, sinopac_equity):
+    """
+    _submit_order must send the token as custom_field in the HTTP place_order call.
+    """
+    order = TestExecStubs.limit_order(
+        instrument=sinopac_equity,
+        order_side=OrderSide.BUY,
+        quantity=sinopac_equity.make_qty(2000),
+        price=sinopac_equity.make_price(580.0),
+    )
+    exec_client._cache.add_order(order)
+    exec_client.generate_order_submitted = MagicMock()
+    exec_client.generate_order_accepted = MagicMock()
+
+    exec_client._http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-NEW", "code": "2330", "action": "Buy", "status": "PendingSubmit"},
+    )
+
+    command = SubmitOrder(
+        trader_id=order.trader_id,
+        strategy_id=order.strategy_id,
+        order=order,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+
+    await exec_client._submit_order(command)
+
+    # Verify custom_field was passed
+    call_kwargs = exec_client._http_client.place_order.call_args.kwargs
+    expected_token = _coid_token(order.client_order_id.value)
+    assert call_kwargs["custom_field"] == expected_token
+
+
+def test_bl1_order_status_event_with_token_resolves_timed_out_order(
+    exec_client,
+    sinopac_equity,
+):
+    """
+    An order-status WS event carrying custom_field token resolves a timed-out
+    order (no trade_id mapping) back to the original client_order_id.
+    """
+    # Create a submitted order (simulating timeout: no venue mapping).
+    order = TestExecStubs.make_submitted_order(
+        instrument=sinopac_equity,
+        order_side=OrderSide.BUY,
+        quantity=sinopac_equity.make_qty(2000),
+        price=sinopac_equity.make_price(580.0),
+    )
+    exec_client._cache.add_order(order)
+
+    token = _coid_token(order.client_order_id.value)
+
+    # Simulate a "New" op_code="00" (accepted) event with the token but no
+    # trade_id mapping. "New" with success is a no-op in the handler (comment
+    # in the code: "already handled in _submit_order"), but crucially the
+    # client_order_id resolution runs BEFORE the op_type switch, so the mapping
+    # is backfilled. We verify the backfill.
+    event = {
+        "event_type": "stock_order",
+        "op_type": "New",
+        "op_code": "00",
+        "op_msg": "",
+        "order_id": "T-VENUE-001",
+        "code": "2330",
+        "custom_field": token,
+    }
+
+    exec_client._handle_order_status_event(event)
+
+    # Mapping was backfilled by _resolve_client_order_id during the lookup
+    assert exec_client._trade_id_to_client_order_id["T-VENUE-001"] == order.client_order_id.value
+
+    # Now verify a subsequent cancel works using the backfilled mapping
+    exec_client.generate_order_canceled = MagicMock()
+    cancel_event = {
+        "event_type": "stock_order",
+        "op_type": "Cancel",
+        "op_code": "00",
+        "op_msg": "",
+        "order_id": "T-VENUE-001",
+        "code": "2330",
+        "custom_field": token,
+    }
+    exec_client._handle_order_status_event(cancel_event)
+
+    exec_client.generate_order_canceled.assert_called_once()
+    call_kwargs = exec_client.generate_order_canceled.call_args.kwargs
+    assert call_kwargs["client_order_id"].value == order.client_order_id.value
+
+
+def test_bl1_deal_event_resolves_via_backfilled_mapping(
+    exec_client,
+    sinopac_equity,
+):
+    """
+    After an order-status event backfills the mapping via token, a subsequent
+    deal event resolves via the fast-path (direct mapping) and generates a fill.
+    """
+    # Create a submitted order, no venue mapping (timeout scenario).
+    order = TestExecStubs.make_submitted_order(
+        instrument=sinopac_equity,
+        order_side=OrderSide.BUY,
+        quantity=sinopac_equity.make_qty(2000),
+        price=sinopac_equity.make_price(580.0),
+    )
+    exec_client._cache.add_order(order)
+
+    token = _coid_token(order.client_order_id.value)
+    trade_id = "T-VENUE-002"
+
+    # Simulate order-status event to backfill mapping
+    exec_client.generate_order_canceled = MagicMock()
+    event_order = {
+        "event_type": "stock_order",
+        "op_type": "New",
+        "op_code": "00",
+        "op_msg": "",
+        "order_id": trade_id,
+        "code": "2330",
+        "custom_field": token,
+    }
+    exec_client._handle_order_status_event(event_order)
+
+    # Mapping is now populated
+    assert trade_id in exec_client._trade_id_to_client_order_id
+
+    # Now a deal event arrives without custom_field (deals may not carry it)
+    exec_client.generate_order_filled = MagicMock()
+    deal_event = {
+        "event_type": "stock_deal",
+        "trade_id": trade_id,
+        "seqno": "100",
+        "ordno": "ABC001",
+        "exchange_seq": "E999",
+        "code": "2330",
+        "action": "Buy",
+        "price": 580.0,
+        "quantity": 2000,
+        "ts": 1709352601.0,
+    }
+
+    exec_client._handle_deal_event(deal_event)
+
+    # Fill was generated using the correct client_order_id
+    exec_client.generate_order_filled.assert_called_once()
+    call_kwargs = exec_client.generate_order_filled.call_args.kwargs
+    assert call_kwargs["client_order_id"].value == order.client_order_id.value
+
+
+@pytest.mark.asyncio
+async def test_bl1_restart_adopt_via_recomputed_hash(exec_client, sinopac_equity):
+    """
+    After restart, in-memory mapping is empty. Reconciliation recomputes the
+    token hash from cached orders and still resolves the timed-out order.
+    """
+    from nautilus_trader.execution.messages import GenerateOrderStatusReports
+    from nautilus_trader.model.identifiers import ClientOrderId
+
+    # Simulate post-restart: submitted order in cache, mapping cleared.
+    order = TestExecStubs.make_submitted_order(
+        instrument=sinopac_equity,
+        order_side=OrderSide.BUY,
+        quantity=sinopac_equity.make_qty(2000),
+        price=sinopac_equity.make_price(580.0),
+    )
+    exec_client._cache.add_order(order)
+    exec_client._trade_id_to_client_order_id.clear()
+
+    token = _coid_token(order.client_order_id.value)
+
+    exec_client._http_client.list_trades = AsyncMock(
+        return_value=[
+            {
+                "trade_id": "T-RESTART",
+                "code": "2330",
+                "status": "Submitted",
+                "action": "Buy",
+                "price_type": "LMT",
+                "order_type": "ROD",
+                "quantity": 2000,
+                "filled_qty": 0,
+                "price": 580.0,
+                "custom_field": token,
+            },
+        ],
+    )
+
+    command = GenerateOrderStatusReports(
+        instrument_id=None,
+        start=None,
+        end=None,
+        open_only=False,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+
+    reports = await exec_client.generate_order_status_reports(command)
+
+    assert len(reports) == 1
+    report = reports[0]
+    # Recovered the REAL client_order_id via hash recompute
+    assert report.client_order_id == order.client_order_id
+    assert report.client_order_id != ClientOrderId("SINOPAC-T-RESTART")
+
+
+def test_bl1_external_order_no_token_no_mapping_returns_none(exec_client):
+    """
+    _resolve_client_order_id returns None for truly external orders
+    (no mapping, no token).
+    """
+    result = exec_client._resolve_client_order_id("UNKNOWN-TRADE", None)
+    assert result is None
+
+    result2 = exec_client._resolve_client_order_id("UNKNOWN-TRADE", "")
+    assert result2 is None

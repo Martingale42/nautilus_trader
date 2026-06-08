@@ -16,7 +16,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
+import string
 from typing import Any
 
 from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
@@ -70,6 +72,31 @@ from nautilus_trader.model.instruments import FuturesContract
 from nautilus_trader.model.instruments import OptionContract
 from nautilus_trader.model.objects import AccountBalance
 from nautilus_trader.model.objects import Money
+
+
+_B62 = string.digits + string.ascii_letters
+
+
+def _coid_token(client_order_id: str) -> str:
+    """Deterministic 6-char base62 hash of a client_order_id.
+
+    Definition: Computes a short, restart-safe token that fits within
+        Shioaji's ``custom_field`` constraint (``ConStrAsciiMax6``, max 6 ASCII).
+    Formula:    token = base62_encode(blake2s(coid, digest_size=8))[:6]
+        Each character indexes ``_B62`` (62 symbols = [0-9a-zA-Z]) via
+        ``(h >> (6*i)) % 62`` for i in 0..5.
+    Domain:     Input must be a non-empty UTF-8 string. The 62^6 ~ 5.7e10
+        address space makes collisions negligible among the O(10) active
+        orders in a typical session. Deterministic: same input always yields
+        the same token, so restart reconciliation can recompute the hash
+        from cached orders without a persisted map.
+    Returns:    A 6-character ASCII string suitable for ``custom_field``.
+    """
+    h = int.from_bytes(
+        hashlib.blake2s(client_order_id.encode(), digest_size=8).digest(),
+        "big",
+    )
+    return "".join(_B62[(h >> (6 * i)) % 62] for i in range(6))
 
 
 _SINOPAC_STATUS_MAP = {
@@ -234,11 +261,12 @@ class SinopacExecutionClient(LiveExecutionClient):
         op_type = event.get("op_type", "")
         order_id = event.get("order_id", "")
         code = event.get("code", "")
+        custom_field = event.get("custom_field")
 
         instrument_id = InstrumentId.from_str(f"{code}.{SINOPAC}")
 
-        # Look up the NT order via trade_id → client_order_id mapping
-        client_order_id_str = self._trade_id_to_client_order_id.get(order_id)
+        # Look up the NT order: direct mapping first, then token round-trip
+        client_order_id_str = self._resolve_client_order_id(order_id, custom_field)
         if client_order_id_str is None:
             self._log.info(f"External order event: {op_type} {order_id} {code}")
             return
@@ -339,6 +367,7 @@ class SinopacExecutionClient(LiveExecutionClient):
         price = event.get("price", 0.0)
         quantity = event.get("quantity", 0)
         ts = event.get("ts", 0.0)
+        custom_field = event.get("custom_field")
 
         instrument_id = InstrumentId.from_str(f"{code}.{SINOPAC}")
         instrument = self._cache.instrument(instrument_id)
@@ -346,8 +375,8 @@ class SinopacExecutionClient(LiveExecutionClient):
             self._log.error(f"Cannot process deal: instrument {instrument_id} not in cache")
             return
 
-        # Look up the NT order
-        client_order_id_str = self._trade_id_to_client_order_id.get(trade_id_str)
+        # Look up the NT order: direct mapping first, then token round-trip
+        client_order_id_str = self._resolve_client_order_id(trade_id_str, custom_field)
         if client_order_id_str is None:
             self._log.info(
                 f"External deal: {code} {event.get('action', '')} {price}x{quantity}",
@@ -386,6 +415,45 @@ class SinopacExecutionClient(LiveExecutionClient):
         if order is not None and order.is_closed:
             self._trade_id_to_client_order_id.pop(trade_id_str, None)
 
+    def _resolve_client_order_id(
+        self,
+        lookup_key: str,
+        custom_field: str | None,
+    ) -> str | None:
+        """Resolve the original client_order_id for a venue event/trade.
+
+        Definition: Attempts to recover the NT client_order_id that was used
+            when placing the order, using two strategies in priority order.
+        Formula:    (1) Direct lookup in ``_trade_id_to_client_order_id`` by
+            ``lookup_key`` (trade_id or order_id). (2) If not found, match
+            the ``custom_field`` token against in-cache orders by recomputing
+            ``_coid_token`` for each open/submitted order.
+        Domain:     ``custom_field`` may be None/empty for orders placed before
+            this feature was deployed, or for external orders. In that case
+            only the direct mapping can resolve. Hash collisions among active
+            orders are negligible (62^6 ~ 5.7e10 vs O(10) active orders).
+        Returns:    The ``client_order_id`` string, or None if unresolvable
+            (caller should fall back to synthetic id or log as external).
+        """
+        # Fast path: in-memory mapping populated by _submit_order on success
+        coid = self._trade_id_to_client_order_id.get(lookup_key)
+        if coid is not None:
+            return coid
+
+        # Slow path: recover via custom_field token round-trip
+        if custom_field:
+            for o in self._cache.orders():
+                if o.is_closed:
+                    continue
+                if _coid_token(o.client_order_id.value) == custom_field:
+                    # Backfill the mapping so subsequent events are fast-path
+                    self._trade_id_to_client_order_id[lookup_key] = (
+                        o.client_order_id.value
+                    )
+                    return o.client_order_id.value
+
+        return None
+
     # -- Order operations -----------------------------------------------------
 
     async def _submit_order(self, command: SubmitOrder) -> None:
@@ -417,6 +485,8 @@ class SinopacExecutionClient(LiveExecutionClient):
             instrument = self._cache.instrument(instrument_id)
             market = self._determine_market(instrument)
 
+            token = _coid_token(order.client_order_id.value)
+
             response = await self._http_client.place_order(
                 code=code,
                 action=action,
@@ -425,6 +495,7 @@ class SinopacExecutionClient(LiveExecutionClient):
                 price_type=price_type,
                 order_type=order_type,
                 market=market,
+                custom_field=token,
             )
 
             trade_id = response["trade_id"]
@@ -629,15 +700,19 @@ class SinopacExecutionClient(LiveExecutionClient):
                 time_in_force = tif_map.get(tif_key, TimeInForce.DAY)
 
                 trade_id = trade_dict["trade_id"]
-                client_order_id_str = self._trade_id_to_client_order_id.get(trade_id)
-                # When the in-memory mapping is missing (e.g. a place_order that timed
-                # out and never returned a `trade_id`), we synthesize a deterministic
-                # `client_order_id`. NOTE: this synthesized id does NOT match the local
-                # SUBMITTED order's own client_order_id, so NT will most likely surface
-                # this report as an EXTERNAL order rather than cleanly adopting the local
-                # one. The report still removes hidden exposure by making the venue's
-                # working order visible; full convergence of the original local order
-                # depends on NT's external-order handling.
+                custom_field = trade_dict.get("custom_field")
+                client_order_id_str = self._resolve_client_order_id(
+                    trade_id, custom_field,
+                )
+                # When neither the in-memory mapping nor the custom_field token
+                # can recover the original client_order_id (e.g. external orders,
+                # or orders placed before the token feature), we synthesize a
+                # deterministic client_order_id. NOTE: this synthesized id does
+                # NOT match the local SUBMITTED order's own client_order_id, so
+                # NT surfaces this report as an EXTERNAL order. The report still
+                # removes hidden exposure by making the venue's working order
+                # visible; full convergence of the original local order depends
+                # on NT's external-order handling.
                 client_order_id = (
                     ClientOrderId(client_order_id_str)
                     if client_order_id_str
