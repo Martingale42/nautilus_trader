@@ -256,6 +256,20 @@ class SinopacExecutionClient(LiveExecutionClient):
             # Operation failed
             reason = event.get("op_msg", f"Operation failed: {op_type} code={op_code}")
             if op_type == "New":
+                # A "New" failure that arrives AFTER the order was already accepted
+                # (HTTP place_order succeeded) would drive an illegal
+                # ACCEPTED/PARTIALLY_FILLED/FILLED -> REJECTED transition and panic
+                # NT's Rust state machine. Only reject orders that are still pending.
+                if order.status in (
+                    OrderStatus.ACCEPTED,
+                    OrderStatus.PARTIALLY_FILLED,
+                    OrderStatus.FILLED,
+                ):
+                    self._log.warning(
+                        f"Late 'New' failure for {client_order_id} in {order.status!r} "
+                        f"(reason={reason}); ignoring to avoid illegal state transition",
+                    )
+                    return
                 self.generate_order_rejected(
                     strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
