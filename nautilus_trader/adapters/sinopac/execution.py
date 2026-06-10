@@ -813,7 +813,17 @@ class SinopacExecutionClient(LiveExecutionClient):
                     else ClientOrderId(f"SINOPAC-{trade_id}")
                 )
 
-                filled_qty = trade_dict.get("filled_qty", 0)
+                # Quantities are share-denominated end-to-end (D1): the gateway
+                # normalizes Shioaji lots to shares at its SDK boundary, so
+                # `filled_qty` is the gateway-reported filled share count. A None
+                # value means an older gateway that does not report it; fall back
+                # to 0 and warn once that reconciliation may be incomplete.
+                filled_qty = trade_dict.get("filled_qty")
+                if filled_qty is None:
+                    self._log.warning(
+                        "Gateway did not report filled_qty; reconciliation may be incomplete",
+                    )
+                    filled_qty = 0
 
                 report = OrderStatusReport(
                     account_id=self.account_id,

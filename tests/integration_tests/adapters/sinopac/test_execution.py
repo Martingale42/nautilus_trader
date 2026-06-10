@@ -1150,3 +1150,93 @@ def test_data_client_drops_order_event_dict_without_warning():
     mock_self._log.warning.assert_not_called()
     mock_self._log.debug.assert_called_once()
     mock_self._handle_data.assert_not_called()
+
+
+# -- Task 3.4: consume the gateway-reported filled_qty in order status reports ---------------------
+
+
+@pytest.mark.asyncio
+async def test_order_status_report_uses_gateway_filled_qty(exec_client, sinopac_equity):
+    """
+    A PartFilled trade must report the gateway-reported filled_qty (shares, D1).
+    """
+    from nautilus_trader.execution.messages import GenerateOrderStatusReports
+
+    exec_client._http_client.list_trades = AsyncMock(
+        return_value=[
+            {
+                "trade_id": "T-PART",
+                "code": "2330",
+                "status": "PartFilled",
+                "action": "Buy",
+                "price_type": "LMT",
+                "order_type": "ROD",
+                "quantity": 2000,
+                "filled_qty": 1000,
+                "price": 580.0,
+            },
+        ],
+    )
+
+    command = GenerateOrderStatusReports(
+        instrument_id=None,
+        start=None,
+        end=None,
+        open_only=False,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+
+    # Act
+    reports = await exec_client.generate_order_status_reports(command)
+
+    # Assert -- filled_qty echoes the gateway value (in shares).
+    assert len(reports) == 1
+    assert reports[0].filled_qty == sinopac_equity.make_qty(1000)
+
+
+@pytest.mark.asyncio
+async def test_order_status_report_falls_back_to_zero_when_filled_qty_missing(
+    exec_client,
+    sinopac_equity,
+):
+    """
+    A missing filled_qty must fall back to 0 (the warned-incomplete path).
+
+    The warning itself is emitted through NT's Rust logger, which does not
+    propagate to pytest's caplog; the observable contract under test is the
+    explicit 0 fallback that distinguishes "missing" from a real reported value.
+    """
+    from nautilus_trader.execution.messages import GenerateOrderStatusReports
+
+    exec_client._http_client.list_trades = AsyncMock(
+        return_value=[
+            {
+                "trade_id": "T-OLD",
+                "code": "2330",
+                "status": "Submitted",
+                "action": "Buy",
+                "price_type": "LMT",
+                "order_type": "ROD",
+                "quantity": 1000,
+                "price": 580.0,
+                # No filled_qty key -> older gateway
+            },
+        ],
+    )
+
+    command = GenerateOrderStatusReports(
+        instrument_id=None,
+        start=None,
+        end=None,
+        open_only=False,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+
+    # Act
+    reports = await exec_client.generate_order_status_reports(command)
+
+    # Assert -- explicit 0 fallback (not a silently-assumed default).
+    assert len(reports) == 1
+    assert reports[0].filled_qty == sinopac_equity.make_qty(0)
