@@ -78,7 +78,8 @@ _B62 = string.digits + string.ascii_letters
 
 
 def _coid_token(client_order_id: str) -> str:
-    """Deterministic 6-char base62 hash of a client_order_id.
+    """
+    Deterministic 6-char base62 hash of a client_order_id.
 
     Definition: Computes a short, restart-safe token that fits within
         Shioaji's ``custom_field`` constraint (``ConStrAsciiMax6``, max 6 ASCII).
@@ -150,6 +151,9 @@ class SinopacExecutionClient(LiveExecutionClient):
         The configuration for the client.
     name : str, optional
         The custom client ID.
+    ws_dispatcher : _WsDispatcher, optional
+        The shared-WS dispatcher that fans out messages to data and exec
+        clients. If None, the client dispatches to ``self._handle_msg`` only.
 
     """
 
@@ -164,6 +168,7 @@ class SinopacExecutionClient(LiveExecutionClient):
         instrument_provider: SinopacInstrumentProvider,
         config: SinopacExecClientConfig,
         name: str | None = None,
+        ws_dispatcher: object | None = None,
     ) -> None:
         account_id_str = config.account_id or os.environ.get(
             "SINOPAC_ACCOUNT_ID",
@@ -188,6 +193,7 @@ class SinopacExecutionClient(LiveExecutionClient):
         self._http_client = client
         self._ws_client = ws_client
         self._config = config
+        self._ws_dispatcher = ws_dispatcher
         self._set_account_id(account_id)
         self._client_futures: set[asyncio.Future] = set()
 
@@ -197,7 +203,15 @@ class SinopacExecutionClient(LiveExecutionClient):
     # -- Connection lifecycle -------------------------------------------------
 
     async def _connect(self) -> None:
+        # Standard exec-client order (adapters.md "Execution client"):
+        # instruments -> shared WS -> account state. The exec client establishes
+        # the shared WS itself so order/fill events arrive even with no data
+        # client; connect() is idempotent (refcounted in the dispatcher).
         await self._instrument_provider.initialize()
+        instruments = self._instrument_provider.instruments_pyo3()
+        self._ws_dispatcher.register(self._handle_msg)
+        await self._ws_dispatcher.ensure_connected(instruments)
+        await self._ws_client.wait_until_active(timeout_secs=10.0)
         await self._update_account_state()
         self._log.info(
             f"Connected to Sinopac gateway at {self._config.gateway_base_url}",
@@ -205,6 +219,11 @@ class SinopacExecutionClient(LiveExecutionClient):
         )
 
     async def _disconnect(self) -> None:
+        # Unregister our handler and release our WS refcount before cancelling
+        # background futures; the shared socket closes only at refcount zero.
+        self._ws_dispatcher.unregister(self._handle_msg)
+        await self._ws_dispatcher.release()
+
         await cancel_tasks_with_timeout(
             self._client_futures,
             self._log,
@@ -420,7 +439,8 @@ class SinopacExecutionClient(LiveExecutionClient):
         lookup_key: str,
         custom_field: str | None,
     ) -> str | None:
-        """Resolve the original client_order_id for a venue event/trade.
+        """
+        Resolve the original client_order_id for a venue event/trade.
 
         Definition: Attempts to recover the NT client_order_id that was used
             when placing the order, using two strategies in priority order.
@@ -447,9 +467,7 @@ class SinopacExecutionClient(LiveExecutionClient):
                     continue
                 if _coid_token(o.client_order_id.value) == custom_field:
                     # Backfill the mapping so subsequent events are fast-path
-                    self._trade_id_to_client_order_id[lookup_key] = (
-                        o.client_order_id.value
-                    )
+                    self._trade_id_to_client_order_id[lookup_key] = o.client_order_id.value
                     return o.client_order_id.value
 
         return None
@@ -511,7 +529,7 @@ class SinopacExecutionClient(LiveExecutionClient):
                 ts_event=self._clock.timestamp_ns(),
             )
 
-        except (asyncio.TimeoutError, OSError) as e:
+        except (TimeoutError, OSError) as e:
             # Transport failure: the request may have actually reached the gateway
             # and the order may be LIVE on the exchange. Rejecting here would create
             # hidden exposure (we report REJECTED while the venue holds a working
@@ -702,7 +720,8 @@ class SinopacExecutionClient(LiveExecutionClient):
                 trade_id = trade_dict["trade_id"]
                 custom_field = trade_dict.get("custom_field")
                 client_order_id_str = self._resolve_client_order_id(
-                    trade_id, custom_field,
+                    trade_id,
+                    custom_field,
                 )
                 # When neither the in-memory mapping nor the custom_field token
                 # can recover the original client_order_id (e.g. external orders,

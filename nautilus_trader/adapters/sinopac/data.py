@@ -76,9 +76,9 @@ class SinopacDataClient(LiveMarketDataClient):
         The configuration for the client.
     name : str, optional
         The custom client ID.
-    ws_callback : object, optional
-        Factory-provided callback dispatcher for shared WS connection.
-        If None, defaults to ``self._handle_msg``.
+    ws_dispatcher : _WsDispatcher, optional
+        The shared-WS dispatcher that fans out messages to data and exec
+        clients. If None, the client dispatches to ``self._handle_msg`` only.
 
     """
 
@@ -93,7 +93,7 @@ class SinopacDataClient(LiveMarketDataClient):
         instrument_provider: SinopacInstrumentProvider,
         config: SinopacDataClientConfig,
         name: str | None = None,
-        ws_callback: object | None = None,
+        ws_dispatcher: object | None = None,
     ) -> None:
         super().__init__(
             loop=loop,
@@ -108,7 +108,7 @@ class SinopacDataClient(LiveMarketDataClient):
         self._http_client = client
         self._ws_client = ws_client
         self._config = config
-        self._ws_callback = ws_callback or self._handle_msg
+        self._ws_dispatcher = ws_dispatcher
 
         # Subscription tracking
         self._subscribed_trades: set[InstrumentId] = set()
@@ -130,12 +130,13 @@ class SinopacDataClient(LiveMarketDataClient):
         await self._instrument_provider.initialize()
         self._send_all_instruments_to_data_engine()
 
-        # 2. Connect WS with callback
+        # 2. Register this client's handler, then ensure the shared WS is up.
+        # The dispatcher owns the singleton socket; connect() is idempotent so
+        # either the data or exec client may establish it (events broadcast to
+        # all connections).
         instruments_pyo3 = self.sinopac_instrument_provider.instruments_pyo3()
-        await self._ws_client.connect(
-            instruments=instruments_pyo3,
-            callback=self._ws_callback,
-        )
+        self._ws_dispatcher.register(self._handle_msg)
+        await self._ws_dispatcher.ensure_connected(instruments_pyo3)
         await self._ws_client.wait_until_active(timeout_secs=10.0)
 
         self._log.info(
@@ -146,10 +147,11 @@ class SinopacDataClient(LiveMarketDataClient):
     async def _disconnect(self) -> None:
         await asyncio.sleep(1.0)  # Grace period for pending WS messages
 
-        if self._ws_client.is_connected():
-            self._log.info("Disconnecting Sinopac WebSocket")
-            await self._ws_client.disconnect()
-            self._log.info("Sinopac WebSocket disconnected", LogColor.BLUE)
+        # Unregister our handler and release our WS refcount. The shared socket
+        # is torn down only when the last client (data or exec) releases, so the
+        # data client disconnecting never severs the exec client's event stream.
+        self._ws_dispatcher.unregister(self._handle_msg)
+        await self._ws_dispatcher.release()
 
         await cancel_tasks_with_timeout(
             self._client_futures,

@@ -113,14 +113,78 @@ def get_sinopac_instrument_provider(
 # ---------------------------------------------------------------------------
 
 
+class _WsDispatcher:
+    """
+    Fan out shared-WS messages to registered client handlers.
+
+    Own the handler registry and a connection refcount so the singleton socket
+    is closed only when the last registered client disconnects. The data and
+    exec clients share one WS; either may establish it, and order/fill events
+    are broadcast to every connection, so a single fan-out keeps both clients in
+    sync without a second socket.
+
+    Parameters
+    ----------
+    ws_client : pyo3_sinopac.SinopacWebSocketClient
+        The shared Sinopac gateway WebSocket client.
+
+    """
+
+    def __init__(self, ws_client: pyo3_sinopac.SinopacWebSocketClient) -> None:
+        self._ws_client = ws_client
+        self._handlers: list[Callable[[object], None]] = []
+        self._refcount = 0
+
+    def dispatch(self, msg: object) -> None:
+        # Iterate a copy so a handler can (un)register during dispatch
+        for handler in list(self._handlers):
+            handler(msg)
+
+    def register(self, handler: Callable[[object], None]) -> None:
+        if handler not in self._handlers:
+            self._handlers.append(handler)
+        self._refcount += 1
+
+    def unregister(self, handler: Callable[[object], None]) -> None:
+        if handler in self._handlers:
+            self._handlers.remove(handler)
+
+    async def ensure_connected(self, instruments: list) -> None:
+        # Idempotent: SinopacWebSocketClient.connect() early-returns when active,
+        # so the first client to connect wins and later callers are no-ops.
+        if not self._ws_client.is_connected():
+            await self._ws_client.connect(
+                instruments=instruments,
+                callback=self.dispatch,
+            )
+
+    async def release(self) -> None:
+        # Decrement the refcount; disconnect the shared WS only at zero so the
+        # data client disconnecting does not kill the exec client's event stream.
+        if self._refcount > 0:
+            self._refcount -= 1
+        if self._refcount == 0 and self._ws_client.is_connected():
+            await self._ws_client.disconnect()
+
+
 @lru_cache(1)
-def _get_ws_msg_handlers() -> list[Callable]:
-    return []
+def get_sinopac_ws_dispatcher(
+    ws_client: pyo3_sinopac.SinopacWebSocketClient,
+) -> _WsDispatcher:
+    """
+    Cache and return the shared Sinopac WS dispatcher.
 
+    Parameters
+    ----------
+    ws_client : pyo3_sinopac.SinopacWebSocketClient
+        The shared Sinopac gateway WebSocket client.
 
-def _ws_dispatch_callback(msg: object) -> None:
-    for handler in _get_ws_msg_handlers():
-        handler(msg)
+    Returns
+    -------
+    _WsDispatcher
+
+    """
+    return _WsDispatcher(ws_client)
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +242,7 @@ class SinopacLiveDataClientFactory(LiveDataClientFactory):
             client=http_client,
             config=config.instrument_provider,
         )
+        ws_dispatcher = get_sinopac_ws_dispatcher(ws_client=ws_client)
 
         client = SinopacDataClient(
             loop=loop,
@@ -189,12 +254,8 @@ class SinopacLiveDataClientFactory(LiveDataClientFactory):
             instrument_provider=provider,
             config=config,
             name=name,
-            ws_callback=_ws_dispatch_callback,
+            ws_dispatcher=ws_dispatcher,
         )
-
-        # Register this client's handler for WS dispatch
-        handlers = _get_ws_msg_handlers()
-        handlers.append(client._handle_msg)
 
         return client
 
@@ -249,6 +310,7 @@ class SinopacLiveExecClientFactory(LiveExecClientFactory):
             client=http_client,
             config=config.instrument_provider,
         )
+        ws_dispatcher = get_sinopac_ws_dispatcher(ws_client=ws_client)
 
         client = SinopacExecutionClient(
             loop=loop,
@@ -260,10 +322,7 @@ class SinopacLiveExecClientFactory(LiveExecClientFactory):
             instrument_provider=provider,
             config=config,
             name=name,
+            ws_dispatcher=ws_dispatcher,
         )
-
-        # Register this client's handler for WS dispatch
-        handlers = _get_ws_msg_handlers()
-        handlers.append(client._handle_msg)
 
         return client
