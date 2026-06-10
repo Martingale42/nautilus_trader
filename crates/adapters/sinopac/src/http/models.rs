@@ -353,6 +353,15 @@ pub struct TradeInfo {
     pub order_type: String,
     /// The price type.
     pub price_type: String,
+    /// The cumulative filled quantity (shares for stocks, contracts for
+    /// futures/options). `#[serde(default)]` keeps compatibility with an older
+    /// gateway that omits the field (defaults to 0).
+    #[serde(default)]
+    pub filled_qty: i64,
+    /// The average fill price across all fills. `#[serde(default)]` keeps
+    /// compatibility with an older gateway that omits the field (defaults to 0.0).
+    #[serde(default)]
+    pub avg_fill_price: f64,
     /// The adapter token for order adoption (max 6 ASCII).
     #[serde(default)]
     pub custom_field: Option<String>,
@@ -532,10 +541,18 @@ mod tests {
     #[rstest]
     fn test_deserialize_trades() {
         let trades: Vec<TradeInfo> = load_test_json_as("orders_trades.json");
-        assert_eq!(trades.len(), 1);
+        assert_eq!(trades.len(), 2);
         assert_eq!(trades[0].trade_id, "trade-001");
         assert_eq!(trades[0].code, "2330");
         assert_eq!(trades[0].action, "Buy");
         assert_eq!(trades[0].status, "Filled");
+        // New fill fields present on the newer-gateway response.
+        assert_eq!(trades[0].filled_qty, 1000);
+        assert_eq!(trades[0].avg_fill_price, 580.5);
+
+        // Older-gateway response omits the fill fields -> serde(default) 0 / 0.0.
+        assert_eq!(trades[1].trade_id, "trade-002");
+        assert_eq!(trades[1].filled_qty, 0);
+        assert_eq!(trades[1].avg_fill_price, 0.0);
     }
 }

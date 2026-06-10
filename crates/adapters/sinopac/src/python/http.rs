@@ -394,6 +394,8 @@ impl SinopacHttpClient {
                     dict.set_item("status", &t.status)?;
                     dict.set_item("order_type", &t.order_type)?;
                     dict.set_item("price_type", &t.price_type)?;
+                    dict.set_item("filled_qty", t.filled_qty)?;
+                    dict.set_item("avg_fill_price", t.avg_fill_price)?;
                     // `custom_field` is `Option<String>`; maps `None` -> Python `None`.
                     dict.set_item("custom_field", t.custom_field.as_deref())?;
                     list.append(dict)?;

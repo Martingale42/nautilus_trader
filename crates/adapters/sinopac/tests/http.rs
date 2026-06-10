@@ -55,6 +55,10 @@ async fn start_test_server() -> SocketAddr {
         .route(
             "/api/market/snapshots",
             get(|| async { load_test_json("market_snapshots.json") }),
+        )
+        .route(
+            "/api/orders/trades",
+            get(|| async { load_test_json("orders_trades.json") }),
         );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -151,4 +155,24 @@ async fn test_snapshots() {
     assert_eq!(snapshots[0].close, 580.0);
     assert_eq!(snapshots[0].buy_price, 580.0);
     assert_eq!(snapshots[0].sell_price, 581.0);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_list_trades_filled_fields() {
+    let addr = start_test_server().await;
+    let client = create_client(addr);
+
+    let trades = client.list_trades().await.expect("list_trades failed");
+    assert_eq!(trades.len(), 2);
+
+    // Newer-gateway response carries the fill fields end-to-end (SINOPAC-05).
+    assert_eq!(trades[0].trade_id, "trade-001");
+    assert_eq!(trades[0].filled_qty, 1000);
+    assert_eq!(trades[0].avg_fill_price, 580.5);
+
+    // Older-gateway response omits them -> serde(default) 0 / 0.0.
+    assert_eq!(trades[1].trade_id, "trade-002");
+    assert_eq!(trades[1].filled_qty, 0);
+    assert_eq!(trades[1].avg_fill_price, 0.0);
 }
