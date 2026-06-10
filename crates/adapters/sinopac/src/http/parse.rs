@@ -24,7 +24,7 @@ use nautilus_model::{
         Equity, FuturesContract as NautilusFuturesContract, InstrumentAny,
         OptionContract as NautilusOptionContract,
     },
-    types::{Currency, Quantity},
+    types::Currency,
 };
 use ustr::Ustr;
 
@@ -123,8 +123,9 @@ pub fn parse_ticks_response(
 ///
 /// # Errors
 ///
-/// Returns an error if the OHLCV arrays have mismatched lengths, or if any
-/// price/volume value is malformed (NaN, infinite, or out of range).
+/// Returns an error if the OHLCV arrays have mismatched lengths, if any
+/// price/volume value is malformed (NaN, infinite, or out of range), or if the
+/// OHLC values violate bar cross-field invariants (e.g. `high < low`).
 pub fn parse_kbars_response(
     kbars: &KBarsResponse,
     bar_type: BarType,
@@ -146,7 +147,7 @@ pub fn parse_kbars_response(
     let mut result = Vec::with_capacity(n);
 
     for i in 0..n {
-        let bar = Bar::new(
+        let bar = Bar::new_checked(
             bar_type,
             try_price(kbars.open[i], price_precision)?,
             try_price(kbars.high[i], price_precision)?,
@@ -155,7 +156,8 @@ pub fn parse_kbars_response(
             try_qty(kbars.volume[i] as f64, size_precision)?,
             UnixNanos::from(kbars.ts[i]),
             ts_init,
-        );
+        )
+        .map_err(|e| anyhow::anyhow!("invalid kbar OHLC for {}: {e}", kbars.code))?;
         result.push(bar);
     }
 
@@ -191,7 +193,7 @@ pub fn parse_stock_to_equity(
     } else {
         STOCK_LOT_SIZE
     };
-    let lot_size = Some(Quantity::new(lot_size_val, SIZE_PRECISION));
+    let lot_size = Some(try_qty(lot_size_val, SIZE_PRECISION)?);
 
     let max_price = Some(try_price(contract.limit_up, price_precision)?);
     let min_price = Some(try_price(contract.limit_down, price_precision)?);
@@ -245,13 +247,13 @@ pub fn parse_futures_to_contract(
     } else {
         futures_multiplier(root_symbol)
     };
-    let multiplier = Quantity::new(multiplier_val, 0);
+    let multiplier = try_qty(multiplier_val, 0)?;
     let lot_size_val = if contract.unit > 0.0 {
         contract.unit
     } else {
         CONTRACT_LOT_SIZE
     };
-    let lot_size = Quantity::new(lot_size_val, SIZE_PRECISION);
+    let lot_size = try_qty(lot_size_val, SIZE_PRECISION)?;
     let underlying = if contract.underlying_code.is_empty() {
         Ustr::from(root_symbol)
     } else {
@@ -324,13 +326,13 @@ pub fn parse_options_to_contract(
     } else {
         options_multiplier(root_symbol)
     };
-    let multiplier = Quantity::new(multiplier_val, 0);
+    let multiplier = try_qty(multiplier_val, 0)?;
     let lot_size_val = if contract.unit > 0.0 {
         contract.unit
     } else {
         CONTRACT_LOT_SIZE
     };
-    let lot_size = Quantity::new(lot_size_val, SIZE_PRECISION);
+    let lot_size = try_qty(lot_size_val, SIZE_PRECISION)?;
     let underlying = if contract.underlying_code.is_empty() {
         Ustr::from(root_symbol)
     } else {
@@ -947,6 +949,71 @@ mod tests {
             AggregationSource::External,
         );
         let result = parse_kbars_response(&kbars, bar_type, 1, 0, UnixNanos::default());
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_parse_kbars_scrambled_ohlc_errors_not_panics() {
+        // Each field is individually valid (finite, in range), but the OHLC
+        // ordering is logically inconsistent (high < low). `Bar::new` would
+        // panic on this cross-field invariant; `Bar::new_checked` must Err.
+        let kbars = KBarsResponse {
+            code: "2330".to_string(),
+            ts: vec![1_000],
+            open: vec![580.0],
+            high: vec![570.0], // high < low: invariant violation
+            low: vec![590.0],
+            close: vec![580.0],
+            volume: vec![5_000],
+        };
+        let bar_type = BarType::new(
+            test_instrument_id(),
+            BarSpecification::new(1, BarAggregation::Minute, PriceType::Last),
+            AggregationSource::External,
+        );
+        let result = parse_kbars_response(&kbars, bar_type, 1, 0, UnixNanos::default());
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_parse_stock_infinite_unit_errors_not_panics() {
+        // `f64::INFINITY > 0.0` is true, so an infinite gateway `unit` defeats
+        // the `unit > 0.0` guard and would reach the panicking `Quantity::new`.
+        // Routing through `try_qty(...)?` must Err instead of aborting the
+        // provider load.
+        let contract = StockContract {
+            code: "2330".to_string(),
+            symbol: "TSE2330".to_string(),
+            name: "Test".to_string(),
+            exchange: "TSE".to_string(),
+            category: "Electronics".to_string(),
+            limit_up: 638.0,
+            limit_down: 522.0,
+            reference: 580.0,
+            update_date: "2026-03-02".to_string(),
+            day_trade: "Yes".to_string(),
+            unit: f64::INFINITY,
+            multiplier: 0,
+            currency: "TWD".to_string(),
+        };
+        let result =
+            parse_stock_to_equity(&contract, UnixNanos::default(), UnixNanos::default());
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_parse_futures_infinite_unit_errors_not_panics() {
+        let contract = make_futures_contract(200, f64::INFINITY);
+        let result =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default());
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_parse_options_infinite_unit_errors_not_panics() {
+        let contract = make_options_contract("C", 50, f64::INFINITY);
+        let result =
+            parse_options_to_contract(&contract, UnixNanos::default(), UnixNanos::default());
         assert!(result.is_err());
     }
 
