@@ -264,7 +264,8 @@ impl SinopacHttpClient {
                 price_precision,
                 size_precision,
                 ts_init,
-            );
+            )
+            .map_err(to_pyruntime_err)?;
 
             Python::attach(|py| {
                 let py_bars: PyResult<Vec<Py<PyAny>>> =

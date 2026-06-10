@@ -24,7 +24,7 @@ use nautilus_model::{
         Equity, FuturesContract as NautilusFuturesContract, InstrumentAny,
         OptionContract as NautilusOptionContract,
     },
-    types::{Currency, Price, Quantity},
+    types::{Currency, Quantity},
 };
 use ustr::Ustr;
 
@@ -35,9 +35,26 @@ use crate::common::{
     instrument::{
         CONTRACT_LOT_SIZE, SIZE_PRECISION, STOCK_LOT_SIZE, futures_multiplier, options_multiplier,
     },
-    parse::{parse_instrument_id, taiwan_naive_to_unix_nanos},
+    parse::{parse_instrument_id, taiwan_naive_to_unix_nanos, try_price, try_qty},
     tick_size::{futures_tick_size, options_tick_size, twse_etf_tick_size, twse_stock_tick_size},
 };
+
+/// Returns the decimal precision required to represent an option strike price.
+///
+/// Definition: The number of decimal places needed so the strike round-trips
+/// exactly, distinguishing TAIFEX single-stock-option half-point strikes
+/// (e.g. `67.5`) from integer index-option strikes (e.g. `20000`).
+/// Formula:    precision = 1 if frac(strike) != 0 else 0,
+///             where frac(x) = x - floor(x).
+/// Domain:     `strike` is a non-negative gateway strike price. TAIFEX strikes
+///             step at whole points for index options and at 0.5 for some
+///             single-stock options, so one decimal place is always sufficient;
+///             NaN/infinite inputs fall through to precision 0 and are rejected
+///             downstream by `try_price`.
+/// Returns:    `0` for integer-valued strikes, `1` for half-point strikes.
+fn strike_precision(strike: f64) -> u8 {
+    u8::from(strike.fract() != 0.0)
+}
 
 /// Parses a `SnapshotData` into a `QuoteTick` (top-of-book bid/ask).
 pub fn parse_snapshot_to_quote_tick(
@@ -49,10 +66,10 @@ pub fn parse_snapshot_to_quote_tick(
 ) -> anyhow::Result<QuoteTick> {
     QuoteTick::new_checked(
         instrument_id,
-        Price::new(snapshot.buy_price, price_precision),
-        Price::new(snapshot.sell_price, price_precision),
-        Quantity::new(snapshot.buy_volume, size_precision),
-        Quantity::new(snapshot.sell_volume, size_precision),
+        try_price(snapshot.buy_price, price_precision)?,
+        try_price(snapshot.sell_price, price_precision)?,
+        try_qty(snapshot.buy_volume, size_precision)?,
+        try_qty(snapshot.sell_volume, size_precision)?,
         UnixNanos::from(snapshot.ts),
         ts_init,
     )
@@ -69,10 +86,16 @@ pub fn parse_ticks_response(
     size_precision: u8,
     ts_init: UnixNanos,
 ) -> anyhow::Result<Vec<TradeTick>> {
-    let len = ticks.ts.len();
-    let mut result = Vec::with_capacity(len);
+    let n = ticks.ts.len();
+    anyhow::ensure!(
+        ticks.close.len() == n && ticks.volume.len() == n && ticks.tick_type.len() == n,
+        "ticks arrays length mismatch for {}",
+        ticks.code
+    );
 
-    for i in 0..len {
+    let mut result = Vec::with_capacity(n);
+
+    for i in 0..n {
         let aggressor_side = match ticks.tick_type[i] {
             1 => AggressorSide::Buyer,
             2 => AggressorSide::Seller,
@@ -81,8 +104,8 @@ pub fn parse_ticks_response(
 
         let trade = TradeTick::new_checked(
             instrument_id,
-            Price::new(ticks.close[i], price_precision),
-            Quantity::new(ticks.volume[i] as f64, size_precision),
+            try_price(ticks.close[i], price_precision)?,
+            try_qty(ticks.volume[i] as f64, size_precision)?,
             aggressor_side,
             TradeId::new(format!("{}-{}", ticks.code, ticks.ts[i])),
             UnixNanos::from(ticks.ts[i]),
@@ -97,31 +120,46 @@ pub fn parse_ticks_response(
 /// Parses a gateway `KBarsResponse` into `Vec<Bar>`.
 ///
 /// Iterates parallel arrays: ts, open, high, low, close, volume.
+///
+/// # Errors
+///
+/// Returns an error if the OHLCV arrays have mismatched lengths, or if any
+/// price/volume value is malformed (NaN, infinite, or out of range).
 pub fn parse_kbars_response(
     kbars: &KBarsResponse,
     bar_type: BarType,
     price_precision: u8,
     size_precision: u8,
     ts_init: UnixNanos,
-) -> Vec<Bar> {
-    let len = kbars.ts.len();
-    let mut result = Vec::with_capacity(len);
+) -> anyhow::Result<Vec<Bar>> {
+    let n = kbars.ts.len();
+    anyhow::ensure!(
+        kbars.open.len() == n
+            && kbars.high.len() == n
+            && kbars.low.len() == n
+            && kbars.close.len() == n
+            && kbars.volume.len() == n,
+        "kbars arrays length mismatch for {}",
+        kbars.code
+    );
 
-    for i in 0..len {
+    let mut result = Vec::with_capacity(n);
+
+    for i in 0..n {
         let bar = Bar::new(
             bar_type,
-            Price::new(kbars.open[i], price_precision),
-            Price::new(kbars.high[i], price_precision),
-            Price::new(kbars.low[i], price_precision),
-            Price::new(kbars.close[i], price_precision),
-            Quantity::new(kbars.volume[i] as f64, size_precision),
+            try_price(kbars.open[i], price_precision)?,
+            try_price(kbars.high[i], price_precision)?,
+            try_price(kbars.low[i], price_precision)?,
+            try_price(kbars.close[i], price_precision)?,
+            try_qty(kbars.volume[i] as f64, size_precision)?,
             UnixNanos::from(kbars.ts[i]),
             ts_init,
         );
         result.push(bar);
     }
 
-    result
+    Ok(result)
 }
 
 /// Parses a gateway `StockContract` into a Nautilus `Equity` instrument.
@@ -147,7 +185,7 @@ pub fn parse_stock_to_equity(
     } else {
         twse_stock_tick_size(contract.reference)
     };
-    let price_increment = Price::new(tick_size, price_precision);
+    let price_increment = try_price(tick_size, price_precision)?;
     let lot_size_val = if contract.unit > 0.0 {
         contract.unit
     } else {
@@ -155,8 +193,8 @@ pub fn parse_stock_to_equity(
     };
     let lot_size = Some(Quantity::new(lot_size_val, SIZE_PRECISION));
 
-    let max_price = Some(Price::new(contract.limit_up, price_precision));
-    let min_price = Some(Price::new(contract.limit_down, price_precision));
+    let max_price = Some(try_price(contract.limit_up, price_precision)?);
+    let min_price = Some(try_price(contract.limit_down, price_precision)?);
 
     let equity = Equity::new(
         instrument_id,
@@ -201,7 +239,7 @@ pub fn parse_futures_to_contract(
 
     let root_symbol = &contract.category;
     let (tick_size, price_precision) = futures_tick_size(root_symbol);
-    let price_increment = Price::new(tick_size, price_precision);
+    let price_increment = try_price(tick_size, price_precision)?;
     let multiplier_val = if contract.multiplier > 0 {
         contract.multiplier as f64
     } else {
@@ -228,8 +266,8 @@ pub fn parse_futures_to_contract(
         _ => AssetClass::Equity,
     };
 
-    let max_price = Some(Price::new(contract.limit_up, price_precision));
-    let min_price = Some(Price::new(contract.limit_down, price_precision));
+    let max_price = Some(try_price(contract.limit_up, price_precision)?);
+    let min_price = Some(try_price(contract.limit_down, price_precision)?);
 
     let futures = NautilusFuturesContract::new(
         instrument_id,
@@ -280,7 +318,7 @@ pub fn parse_options_to_contract(
 
     let root_symbol = &contract.category;
     let (tick_size, price_precision) = options_tick_size(contract.reference);
-    let price_increment = Price::new(tick_size, price_precision);
+    let price_increment = try_price(tick_size, price_precision)?;
     let multiplier_val = if contract.multiplier > 0 {
         contract.multiplier as f64
     } else {
@@ -305,7 +343,10 @@ pub fn parse_options_to_contract(
         other => anyhow::bail!("Unknown option_right {other:?} (expected 'C'/'P')"),
     };
 
-    let strike_price = Price::new(contract.strike_price, 0);
+    let strike_price = try_price(
+        contract.strike_price,
+        strike_precision(contract.strike_price),
+    )?;
 
     let expiration_ns = parse_date_to_nanos(&contract.delivery_date)?;
     let activation_ns = parse_date_to_nanos(&contract.update_date).unwrap_or(ts_event);
@@ -315,8 +356,8 @@ pub fn parse_options_to_contract(
         _ => AssetClass::Equity,
     };
 
-    let max_price = Some(Price::new(contract.limit_up, price_precision));
-    let min_price = Some(Price::new(contract.limit_down, price_precision));
+    let max_price = Some(try_price(contract.limit_up, price_precision)?);
+    let min_price = Some(try_price(contract.limit_down, price_precision)?);
 
     let option = NautilusOptionContract::new(
         instrument_id,
@@ -380,6 +421,7 @@ mod tests {
         enums::{AggregationSource, BarAggregation, PriceType},
         identifiers::{Symbol, Venue},
         instruments::Instrument,
+        types::Price,
     };
     use rstest::rstest;
 
@@ -431,7 +473,7 @@ mod tests {
             BarSpecification::new(1, BarAggregation::Minute, PriceType::Last),
             AggregationSource::External,
         );
-        let bars = parse_kbars_response(&kbars, bar_type, 1, 0, UnixNanos::default());
+        let bars = parse_kbars_response(&kbars, bar_type, 1, 0, UnixNanos::default()).unwrap();
 
         assert_eq!(bars.len(), 2);
         assert_eq!(bars[0].open, Price::new(578.0, 1));
@@ -867,5 +909,84 @@ mod tests {
             }
             _ => panic!("Expected Equity"),
         }
+    }
+
+    // --- Bounds-safety and value-range validation (Task 2.3) -------------------------------
+
+    #[rstest]
+    fn test_parse_ticks_mismatched_lengths_errors() {
+        // `close` is shorter than `ts`: indexing would panic without the guard.
+        let ticks = TicksResponse {
+            code: "2330".to_string(),
+            ts: vec![1_000, 2_000, 3_000],
+            close: vec![580.0, 581.0],
+            volume: vec![100, 200, 300],
+            bid_price: vec![],
+            ask_price: vec![],
+            tick_type: vec![1, 2, 1],
+        };
+        let result = parse_ticks_response(&ticks, test_instrument_id(), 1, 0, UnixNanos::default());
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_parse_kbars_mismatched_lengths_errors() {
+        // `volume` is shorter than `ts`: indexing would panic without the guard.
+        let kbars = KBarsResponse {
+            code: "2330".to_string(),
+            ts: vec![1_000, 2_000],
+            open: vec![578.0, 580.0],
+            high: vec![582.0, 583.0],
+            low: vec![577.0, 579.0],
+            close: vec![580.0, 581.0],
+            volume: vec![5_000],
+        };
+        let bar_type = BarType::new(
+            test_instrument_id(),
+            BarSpecification::new(1, BarAggregation::Minute, PriceType::Last),
+            AggregationSource::External,
+        );
+        let result = parse_kbars_response(&kbars, bar_type, 1, 0, UnixNanos::default());
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_strike_precision_fractional_and_integer() {
+        assert_eq!(strike_precision(12.5), 1);
+        assert_eq!(strike_precision(67.5), 1);
+        assert_eq!(strike_precision(20000.0), 0);
+    }
+
+    #[rstest]
+    fn test_parse_options_fractional_strike_round_trips() {
+        // TAIFEX single-stock-option half-point strike (live-confirmed) must
+        // round-trip exactly at precision 1, not truncate to an integer.
+        let mut contract = make_options_contract("C", 50, 1.0);
+        contract.strike_price = 12.5;
+        let instrument =
+            parse_options_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::OptionContract(o) => {
+                let strike = o.strike_price().unwrap();
+                assert_eq!(strike.as_f64(), 12.5);
+                assert_eq!(strike.precision, 1);
+            }
+            _ => panic!("Expected OptionContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_parse_snapshot_nan_price_errors() {
+        let mut snapshots: Vec<SnapshotData> = load_test_json_as("market_snapshots.json");
+        snapshots[0].buy_price = f64::NAN;
+        let result = parse_snapshot_to_quote_tick(
+            &snapshots[0],
+            test_instrument_id(),
+            1,
+            0,
+            UnixNanos::default(),
+        );
+        assert!(result.is_err());
     }
 }
