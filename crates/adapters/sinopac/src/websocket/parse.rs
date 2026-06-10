@@ -23,11 +23,10 @@ use nautilus_model::{
     },
     enums::{AggressorSide, BookAction, OrderSide, RecordFlag},
     identifiers::{InstrumentId, TradeId},
-    types::{Price, Quantity},
 };
 
 use super::messages::{WsBidAskMsg, WsTickMsg};
-use crate::common::parse::taiwan_naive_to_unix_nanos;
+use crate::common::parse::{taiwan_naive_to_unix_nanos, try_price, try_qty};
 
 /// Parses a Taiwan local-time timestamp string to `UnixNanos`.
 ///
@@ -59,8 +58,8 @@ pub fn parse_ws_tick_to_trade_tick(
 
     TradeTick::new_checked(
         instrument_id,
-        Price::new(msg.data.close, price_precision),
-        Quantity::new(msg.data.volume as f64, size_precision),
+        try_price(msg.data.close, price_precision)?,
+        try_qty(msg.data.volume as f64, size_precision)?,
         aggressor_side,
         TradeId::new(format!("{}-{}", msg.code, msg.data.timestamp)),
         ts_event,
@@ -80,8 +79,17 @@ pub fn parse_ws_bidask_to_quote_tick(
     ts_event: UnixNanos,
     ts_init: UnixNanos,
 ) -> anyhow::Result<QuoteTick> {
-    if msg.data.bid_price.is_empty() || msg.data.ask_price.is_empty() {
-        anyhow::bail!("Empty bid/ask price arrays for {code}", code = msg.code);
+    // Guard both price AND volume arrays: a price array with data but an empty
+    // volume array (or vice versa) must error here rather than panic on `[0]`.
+    if msg.data.bid_price.is_empty()
+        || msg.data.ask_price.is_empty()
+        || msg.data.bid_volume.is_empty()
+        || msg.data.ask_volume.is_empty()
+    {
+        anyhow::bail!(
+            "Empty bid/ask price or volume arrays for {code}",
+            code = msg.code
+        );
     }
 
     if msg.data.bid_volume[0] <= 0 || msg.data.ask_volume[0] <= 0 {
@@ -90,10 +98,10 @@ pub fn parse_ws_bidask_to_quote_tick(
 
     QuoteTick::new_checked(
         instrument_id,
-        Price::new(msg.data.bid_price[0], price_precision),
-        Price::new(msg.data.ask_price[0], price_precision),
-        Quantity::new(msg.data.bid_volume[0] as f64, size_precision),
-        Quantity::new(msg.data.ask_volume[0] as f64, size_precision),
+        try_price(msg.data.bid_price[0], price_precision)?,
+        try_price(msg.data.ask_price[0], price_precision)?,
+        try_qty(msg.data.bid_volume[0] as f64, size_precision)?,
+        try_qty(msg.data.ask_volume[0] as f64, size_precision)?,
         ts_event,
         ts_init,
     )
@@ -128,8 +136,8 @@ pub fn parse_ws_bidask_to_order_book_depth10(
         }
         bids[bid_idx] = BookOrder::new(
             OrderSide::Buy,
-            Price::new(price, price_precision),
-            Quantity::new(volume as f64, size_precision),
+            try_price(price, price_precision)?,
+            try_qty(volume as f64, size_precision)?,
             0,
         );
         bid_counts[bid_idx] = 1;
@@ -143,8 +151,8 @@ pub fn parse_ws_bidask_to_order_book_depth10(
         }
         asks[ask_idx] = BookOrder::new(
             OrderSide::Sell,
-            Price::new(price, price_precision),
-            Quantity::new(volume as f64, size_precision),
+            try_price(price, price_precision)?,
+            try_qty(volume as f64, size_precision)?,
             0,
         );
         ask_counts[ask_idx] = 1;
@@ -200,8 +208,8 @@ pub fn parse_ws_bidask_to_order_book_deltas(
             BookAction::Add,
             BookOrder::new(
                 OrderSide::Buy,
-                Price::new(price, price_precision),
-                Quantity::new(volume as f64, size_precision),
+                try_price(price, price_precision)?,
+                try_qty(volume as f64, size_precision)?,
                 0,
             ),
             0,
@@ -220,8 +228,8 @@ pub fn parse_ws_bidask_to_order_book_deltas(
             BookAction::Add,
             BookOrder::new(
                 OrderSide::Sell,
-                Price::new(price, price_precision),
-                Quantity::new(volume as f64, size_precision),
+                try_price(price, price_precision)?,
+                try_qty(volume as f64, size_precision)?,
                 0,
             ),
             0,
@@ -243,6 +251,7 @@ mod tests {
     use nautilus_model::{
         enums::BookAction,
         identifiers::{Symbol, Venue},
+        types::{Price, Quantity},
     };
     use rstest::rstest;
 
@@ -571,5 +580,84 @@ mod tests {
         } else {
             panic!("Expected BidAsk message");
         }
+    }
+
+    // --- Malformed gateway values must return an error, never panic ------------------------
+
+    fn load_tick_msg() -> WsTickMsg {
+        match load_test_json_as("ws_tick_stock.json") {
+            WsIncomingMsg::Tick(tick) => tick,
+            _ => panic!("Expected Tick message"),
+        }
+    }
+
+    fn load_bidask_msg() -> WsBidAskMsg {
+        match load_test_json_as("ws_bidask.json") {
+            WsIncomingMsg::BidAsk(ba) => ba,
+            _ => panic!("Expected BidAsk message"),
+        }
+    }
+
+    #[rstest]
+    fn test_parse_ws_tick_nan_close_errors() {
+        let mut tick = load_tick_msg();
+        tick.data.close = f64::NAN;
+        let result = parse_ws_tick_to_trade_tick(
+            &tick,
+            test_instrument_id(),
+            1,
+            0,
+            UnixNanos::from(1u64),
+            UnixNanos::default(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_parse_ws_tick_negative_volume_errors() {
+        let mut tick = load_tick_msg();
+        tick.data.volume = -1;
+        let result = parse_ws_tick_to_trade_tick(
+            &tick,
+            test_instrument_id(),
+            1,
+            0,
+            UnixNanos::from(1u64),
+            UnixNanos::default(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_parse_ws_bidask_empty_volume_array_errors_not_panics() {
+        // Price array has data but volume array is empty: indexing `[0]` would
+        // panic without the extended emptiness guard.
+        let mut ba = load_bidask_msg();
+        ba.data.bid_price = vec![580.0];
+        ba.data.bid_volume = vec![];
+        let result = parse_ws_bidask_to_quote_tick(
+            &ba,
+            test_instrument_id(),
+            1,
+            0,
+            UnixNanos::from(1u64),
+            UnixNanos::default(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_parse_ws_bidask_nan_price_errors() {
+        let mut ba = load_bidask_msg();
+        ba.data.bid_price[0] = f64::NAN;
+        let result = parse_ws_bidask_to_quote_tick(
+            &ba,
+            test_instrument_id(),
+            1,
+            0,
+            UnixNanos::from(1u64),
+            UnixNanos::default(),
+        );
+        assert!(result.is_err());
     }
 }
