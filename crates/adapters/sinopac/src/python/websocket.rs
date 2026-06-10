@@ -15,7 +15,7 @@
 
 //! Python bindings for the Sinopac WebSocket client.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
 
 use nautilus_common::live::get_runtime;
 use nautilus_core::{UnixNanos, python::to_pyruntime_err};
@@ -24,7 +24,7 @@ use nautilus_model::{
     instruments::Instrument,
     python::{data::data_to_pycapsule, instruments::pyobject_to_instrument_any},
 };
-use pyo3::prelude::*;
+use pyo3::{prelude::*, types::PyDict};
 
 use crate::{
     common::enums::SinopacQuoteType,
@@ -93,7 +93,7 @@ impl SinopacWebSocketClient {
 
     /// Sets which data types to emit from BidAsk messages for a contract.
     #[pyo3(name = "set_bidask_outputs")]
-    fn py_set_bidask_outputs(&self, code: String, quote: bool, depth: bool, deltas: bool) {
+    fn py_set_bidask_outputs(&self, code: &str, quote: bool, depth: bool, deltas: bool) {
         let mut flags = 0u8;
         if quote {
             flags |= BIDASK_EMIT_QUOTE;
@@ -104,7 +104,7 @@ impl SinopacWebSocketClient {
         if deltas {
             flags |= BIDASK_EMIT_DELTAS;
         }
-        self.set_bidask_emit_for(&code, flags);
+        self.set_bidask_emit_for(code, flags);
     }
 
     /// Connects to the gateway WS and starts the message processing loop.
@@ -147,11 +147,14 @@ impl SinopacWebSocketClient {
 
                     while let Some(msg) = rx.recv().await {
                         msg_count += 1;
-                        match msg {
+                        // Defense-in-depth behind the Result-based parsers (Tasks 2.1-2.3):
+                        // a residual panic in message processing must not kill the loop and
+                        // silently stop all subsequent market-data and order events.
+                        let result = std::panic::catch_unwind(AssertUnwindSafe(|| match msg {
                             WsIncomingMsg::Tick(ref tick_msg) => {
                                 let Some(inst) = instruments.get(&tick_msg.code) else {
                                     log::debug!("Tick for unknown code: {}", tick_msg.code);
-                                    continue;
+                                    return;
                                 };
                                 let ts_event =
                                     match parse_taiwan_timestamp(&tick_msg.data.timestamp) {
@@ -161,7 +164,7 @@ impl SinopacWebSocketClient {
                                                 "Bad timestamp for tick {}: {e}",
                                                 tick_msg.code
                                             );
-                                            continue;
+                                            return;
                                         }
                                     };
                                 let ts_init = UnixNanos::default();
@@ -189,20 +192,20 @@ impl SinopacWebSocketClient {
                             WsIncomingMsg::BidAsk(ref ba_msg) => {
                                 let Some(inst) = instruments.get(&ba_msg.code) else {
                                     log::debug!("BidAsk for unknown code: {}", ba_msg.code);
-                                    continue;
+                                    return;
                                 };
                                 let ts_event = match parse_taiwan_timestamp(&ba_msg.data.timestamp)
                                 {
                                     Ok(ts) => ts,
                                     Err(e) => {
                                         log::warn!("Bad timestamp for bidask {}: {e}", ba_msg.code);
-                                        continue;
+                                        return;
                                     }
                                 };
                                 let ts_init = UnixNanos::default();
                                 let emit = _client_guard.bidask_emit_for(&ba_msg.code);
                                 if emit == 0 {
-                                    continue;
+                                    return;
                                 }
 
                                 let id = inst.id();
@@ -299,6 +302,23 @@ impl SinopacWebSocketClient {
                             WsIncomingMsg::Error(ref e) => {
                                 log::error!("WS error: {}", e.detail);
                             }
+                            WsIncomingMsg::Reconnected => {
+                                Python::attach(|py| {
+                                    let dict = PyDict::new(py);
+                                    match dict.set_item("event", "reconnected") {
+                                        Ok(()) => {
+                                            call_python(py, &callback, dict.into_any().unbind());
+                                        }
+                                        Err(e) => log::error!(
+                                            "Failed to build reconnected event dict: {e}"
+                                        ),
+                                    }
+                                });
+                            }
+                        }));
+
+                        if result.is_err() {
+                            log::error!("Sinopac WS message processing panicked, continuing loop");
                         }
                     }
 

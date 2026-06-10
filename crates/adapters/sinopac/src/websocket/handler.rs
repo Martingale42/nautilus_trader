@@ -147,7 +147,10 @@ impl FeedHandler {
                             if text.as_str() == nautilus_network::RECONNECTED {
                                 log::info!("Received WebSocket reconnected signal");
                                 self.resubscribe_all().await;
-                                continue;
+                                // Emit the sentinel on the out-channel in order, after the
+                                // re-subscription commands, so downstream consumers can trigger
+                                // reconnect reconciliation (SINOPAC-02).
+                                return Some(WsIncomingMsg::Reconnected);
                             }
 
                             match serde_json::from_str::<WsIncomingMsg>(&text) {

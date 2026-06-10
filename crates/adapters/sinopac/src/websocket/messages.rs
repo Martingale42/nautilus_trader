@@ -52,6 +52,11 @@ pub enum WsIncomingMsg {
     /// An error message from the gateway.
     #[serde(rename = "error")]
     Error(WsErrorMsg),
+    /// A synthetic reconnection sentinel emitted by the feed handler after a
+    /// transport reconnect and successful re-subscription. It is never received
+    /// from the gateway wire, so `#[serde(skip)]` keeps it out of deserialization.
+    #[serde(skip)]
+    Reconnected,
 }
 
 /// Represents a WebSocket tick message.
