@@ -33,10 +33,14 @@ use super::models::{
 };
 use crate::common::{
     instrument::{
-        CONTRACT_LOT_SIZE, SIZE_PRECISION, STOCK_LOT_SIZE, futures_multiplier, options_multiplier,
+        CONTRACT_LOT_SIZE, DEFAULT_CONTRACT_MULTIPLIER, SIZE_PRECISION, STOCK_LOT_SIZE,
+        futures_multiplier, options_multiplier,
     },
     parse::{parse_instrument_id, taiwan_naive_to_unix_nanos, try_price, try_qty},
-    tick_size::{futures_tick_size, options_tick_size, twse_etf_tick_size, twse_stock_tick_size},
+    tick_size::{
+        index_futures_tick_size, options_tick_size, single_stock_futures_tick_size,
+        twse_etf_tick_size, twse_stock_tick_size,
+    },
 };
 
 /// Returns the decimal precision required to represent an option strike price.
@@ -222,14 +226,54 @@ pub fn parse_stock_to_equity(
     Ok(InstrumentAny::Equity(equity))
 }
 
+/// Selects the TAIFEX tick size and precision for a futures contract from its
+/// contract evidence (SINOPAC-09/10).
+///
+/// Definition: Routes a futures contract to the correct TAIFEX minimum-price-
+/// fluctuation schedule using the live-verified `underlying_kind` /
+/// `underlying_code` semantics rather than the inconsistent `category` field.
+/// Formula:    - `underlying_kind == "I"` (index, empty `underlying_code`):
+///               look up the index/sector root table; unknown root warns and
+///               falls back to `(1.0, 0)`.
+///             - equity / ETF underlying (`underlying_kind` in {"S","E"}, i.e.
+///               single-stock or ETF futures, non-empty `underlying_code`):
+///               price-tiered [`single_stock_futures_tick_size`] on `reference`.
+///             - any other kind (e.g. commodity `"C"`, for which TAIFEX ticks
+///               are product-specific and not tabled here): warn and fall back
+///               to `(1.0, 0)`.
+/// Domain:     `contract.underlying_kind` is one of the live-dumped values
+///             {"S","I","E","C"}; `reference` is the contract reference price.
+/// Returns:    `(tick_size, precision)` in TWD for the contract's price grid.
+fn futures_tick_for_contract(contract: &FuturesContract) -> (f64, u8) {
+    let root = contract.category.as_str();
+    match contract.underlying_kind.as_str() {
+        // Index / sector-index futures (TXF, MXF, sector roots, ...).
+        "I" => index_futures_tick_size(root).unwrap_or_else(|| {
+            log::warn!("Unknown futures root {root}, using default tick 1.0");
+            (1.0, 0)
+        }),
+        // Single-stock ("S") and ETF-underlying ("E") futures trade on the
+        // price-tiered equity grid keyed off the reference price.
+        "S" | "E" => single_stock_futures_tick_size(contract.reference),
+        // Commodity ("C") and any future kind: no tabled tick -> documented
+        // unknown-root fallback.
+        _ => {
+            log::warn!("Unknown futures root {root}, using default tick 1.0");
+            (1.0, 0)
+        }
+    }
+}
+
 /// Parses a gateway `FuturesContract` into a Nautilus `FuturesContract` instrument.
 ///
 /// - Multiplier from `contract.multiplier` (Shioaji authoritative); falls back
-///   to the `futures_multiplier(root_symbol)` table only when `multiplier == 0`
+///   to the `futures_multiplier(root_symbol)` table when `multiplier == 0`, and
+///   to `DEFAULT_CONTRACT_MULTIPLIER` (with a warn) for an unknown root
 /// - Lot size from `contract.unit` (fallback `CONTRACT_LOT_SIZE`)
 /// - Underlying from `contract.underlying_code` (fallback root symbol / category)
 /// - Currency from `contract.currency` (fallback TWD)
-/// - Tick size from `futures_tick_size()` lookup; expiration from `delivery_date`
+/// - Tick size selected by contract evidence via [`futures_tick_for_contract`];
+///   expiration from `delivery_date`
 pub fn parse_futures_to_contract(
     contract: &FuturesContract,
     ts_event: UnixNanos,
@@ -240,12 +284,20 @@ pub fn parse_futures_to_contract(
     let currency = parse_currency_or_twd(&contract.currency);
 
     let root_symbol = &contract.category;
-    let (tick_size, price_precision) = futures_tick_size(root_symbol);
+    let (tick_size, price_precision) = futures_tick_for_contract(contract);
     let price_increment = try_price(tick_size, price_precision)?;
     let multiplier_val = if contract.multiplier > 0 {
+        // SDK-authoritative multiplier takes priority (no fallback, no warn).
         contract.multiplier as f64
     } else {
-        futures_multiplier(root_symbol)
+        // SDK did not transmit a multiplier (the normal sim path): use the known
+        // root table silently; only an unknown root warrants a warn.
+        futures_multiplier(root_symbol).unwrap_or_else(|| {
+            log::warn!(
+                "Unknown futures root {root_symbol}, using default multiplier {DEFAULT_CONTRACT_MULTIPLIER}"
+            );
+            DEFAULT_CONTRACT_MULTIPLIER
+        })
     };
     let multiplier = try_qty(multiplier_val, 0)?;
     let lot_size_val = if contract.unit > 0.0 {
@@ -303,7 +355,8 @@ pub fn parse_futures_to_contract(
 /// Parses a gateway `OptionsContract` into a Nautilus `OptionContract` instrument.
 ///
 /// - Multiplier from `contract.multiplier` (Shioaji authoritative); falls back
-///   to the `options_multiplier(root_symbol)` table only when `multiplier == 0`
+///   to the `options_multiplier(root_symbol)` table when `multiplier == 0`, and
+///   to `DEFAULT_CONTRACT_MULTIPLIER` (with a warn) for an unknown root
 /// - Lot size from `contract.unit` (fallback `CONTRACT_LOT_SIZE`)
 /// - Underlying from `contract.underlying_code` (fallback root symbol / category)
 /// - Currency from `contract.currency` (fallback TWD)
@@ -322,9 +375,17 @@ pub fn parse_options_to_contract(
     let (tick_size, price_precision) = options_tick_size(contract.reference);
     let price_increment = try_price(tick_size, price_precision)?;
     let multiplier_val = if contract.multiplier > 0 {
+        // SDK-authoritative multiplier takes priority (no fallback, no warn).
         contract.multiplier as f64
     } else {
-        options_multiplier(root_symbol)
+        // SDK did not transmit a multiplier (the normal sim path): use the known
+        // root table silently; only an unknown root warrants a warn.
+        options_multiplier(root_symbol).unwrap_or_else(|| {
+            log::warn!(
+                "Unknown options root {root_symbol}, using default multiplier {DEFAULT_CONTRACT_MULTIPLIER}"
+            );
+            DEFAULT_CONTRACT_MULTIPLIER
+        })
     };
     let multiplier = try_qty(multiplier_val, 0)?;
     let lot_size_val = if contract.unit > 0.0 {
@@ -1055,5 +1116,206 @@ mod tests {
             UnixNanos::default(),
         );
         assert!(result.is_err());
+    }
+
+    // --- Task 2.5: schedule selection from live contract-dump evidence ----------------------
+    //
+    // Fixtures mirror the field shapes of
+    // `shioaji-server/tests/fixtures/contracts_dump/*.json` (live sim dump, Task
+    // 0.1): every futures/options `multiplier` is 0 (the SDK does not transmit
+    // it in sim), so the table-fallback path is the normal path. Schedule is
+    // keyed off `underlying_kind` + `underlying_code`, NOT `category`.
+
+    /// Builds a `FuturesContract` mirroring the live single-stock-future dump
+    /// (e.g. `CDFF6`: TSMC future, root `CDF`, `underlying_kind == "S"`,
+    /// `underlying_code == "2330"`, `multiplier == 0`).
+    fn dump_single_stock_future() -> FuturesContract {
+        FuturesContract {
+            code: "CDFF6".to_string(),
+            symbol: "CDF202606".to_string(),
+            name: "台積電期貨06".to_string(),
+            category: "CDF".to_string(),
+            delivery_month: "202606".to_string(),
+            delivery_date: "2026/06/17".to_string(),
+            underlying_kind: "S".to_string(),
+            limit_up: 2485.0,
+            limit_down: 2035.0,
+            reference: 2260.0,
+            update_date: "2026/06/10".to_string(),
+            unit: 1.0,
+            multiplier: 0,
+            currency: "TWD".to_string(),
+            underlying_code: "2330".to_string(),
+        }
+    }
+
+    /// Builds a `FuturesContract` mirroring the live index-future dump
+    /// (e.g. `TXFF6`: TAIEX future, root `TXF`, `underlying_kind == "I"`,
+    /// empty `underlying_code`, `multiplier == 0`).
+    fn dump_index_future() -> FuturesContract {
+        FuturesContract {
+            code: "TXFF6".to_string(),
+            symbol: "TXF202606".to_string(),
+            name: "臺股期貨06".to_string(),
+            category: "TXF".to_string(),
+            delivery_month: "202606".to_string(),
+            delivery_date: "2026/06/17".to_string(),
+            underlying_kind: "I".to_string(),
+            limit_up: 47703.0,
+            limit_down: 39031.0,
+            reference: 43367.0,
+            update_date: "2026/06/10".to_string(),
+            unit: 1.0,
+            multiplier: 0,
+            currency: "TWD".to_string(),
+            underlying_code: String::new(),
+        }
+    }
+
+    #[rstest]
+    fn test_dump_single_stock_future_uses_price_tiered_tick() {
+        // CDFF6 ref=2260 -> single-stock-futures tier (>=1000) tick 5.0,
+        // precision 1. Root CDF has no multiplier table entry -> default 2000.
+        let contract = dump_single_stock_future();
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.price_increment().as_f64(), 5.0);
+                assert_eq!(f.price_precision(), 1);
+                assert_eq!(f.multiplier().as_f64(), 2000.0); // unknown-root default
+                assert_eq!(f.underlying().unwrap().as_str(), "2330");
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_dump_index_future_uses_root_table_tick_and_multiplier() {
+        // TXFF6: index root TXF -> tick 1.0 precision 0, multiplier 200 from the
+        // known table (silent, no warn, even though SDK multiplier == 0).
+        let contract = dump_index_future();
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.price_increment().as_f64(), 1.0);
+                assert_eq!(f.price_precision(), 0);
+                assert_eq!(f.multiplier().as_f64(), 200.0); // known TXF table value
+                assert_eq!(f.underlying().unwrap().as_str(), "TXF");
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_dump_single_stock_future_low_price_tier() {
+        // A single-stock future on a low-priced underlying (ref 31.7, the CAO
+        // underlying tier) -> tick 0.05, precision 2.
+        let mut contract = dump_single_stock_future();
+        contract.reference = 31.7;
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.price_increment().as_f64(), 0.05);
+                assert_eq!(f.price_precision(), 2);
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_etf_underlying_future_uses_price_tiered_tick() {
+        // ETF-underlying futures (underlying_kind == "E", 59 in the dump) behave
+        // like equity-underlying single-stock futures: price-tiered schedule.
+        let mut contract = dump_single_stock_future();
+        contract.underlying_kind = "E".to_string();
+        contract.underlying_code = "0050".to_string();
+        contract.reference = 103.5; // 0050 dump reference -> 100..500 tier
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.price_increment().as_f64(), 0.50);
+                assert_eq!(f.price_precision(), 2);
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_unknown_index_root_falls_back_to_default_tick() {
+        // An index future with a root absent from the table must fall back to
+        // (1.0, 0) (the warn fires; the instrument still parses).
+        let mut contract = dump_index_future();
+        contract.category = "ZZZ".to_string();
+        contract.underlying_kind = "I".to_string();
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.price_increment().as_f64(), 1.0);
+                assert_eq!(f.price_precision(), 0);
+                assert_eq!(f.multiplier().as_f64(), 2000.0); // unknown-root default
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_commodity_future_falls_back_to_default_tick() {
+        // Commodity futures (underlying_kind == "C", 23 in the dump) have no
+        // tabled tick here -> documented (1.0, 0) fallback.
+        let mut contract = dump_single_stock_future();
+        contract.underlying_kind = "C".to_string();
+        contract.category = "GDF".to_string(); // e.g. gold future root
+        contract.reference = 5000.0;
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.price_increment().as_f64(), 1.0);
+                assert_eq!(f.price_precision(), 0);
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_dump_etf_uses_etf_tick_category_00() {
+        // ETF 0050 dump: category "00" -> ETF tick schedule. ref 103.5 (>=50) ->
+        // 0.05 (NOT the stock-tier 0.50). Confirms the `category == "00"` branch
+        // against the live dump.
+        let contract = StockContract {
+            code: "0050".to_string(),
+            symbol: "TSE0050".to_string(),
+            name: "元大台灣50".to_string(),
+            exchange: "TSE".to_string(),
+            category: "00".to_string(),
+            limit_up: 113.85,
+            limit_down: 93.15,
+            reference: 103.5,
+            update_date: "2026/06/10".to_string(),
+            day_trade: "Yes".to_string(),
+            unit: 1000.0,
+            multiplier: 0,
+            currency: "TWD".to_string(),
+        };
+        let instrument =
+            parse_stock_to_equity(&contract, UnixNanos::default(), UnixNanos::default()).unwrap();
+        match instrument {
+            InstrumentAny::Equity(e) => {
+                assert_eq!(e.price_increment().as_f64(), 0.05);
+                assert_eq!(e.price_precision(), 2);
+            }
+            _ => panic!("Expected Equity"),
+        }
     }
 }

@@ -56,15 +56,71 @@ pub fn twse_etf_tick_size(reference: f64) -> (f64, u8) {
     if reference < 50.0 { (0.01, 2) } else { (0.05, 2) }
 }
 
-/// Returns the tick size and precision for TAIFEX futures contracts.
+/// Returns the tick size and precision for a TAIFEX index / sector futures root.
 ///
-/// TXF (TAIEX futures) and most index futures: tick = 1.0, precision 0.
-/// Some sector futures have finer increments.
-pub fn futures_tick_size(symbol: &str) -> (f64, u8) {
-    match symbol {
-        "TXF" | "MXF" | "T5F" | "XIF" => (1.0, 0),
-        "ZEF" | "ZFF" => (0.2, 1),
-        _ => (1.0, 0),
+/// Definition: Looks up the official TAIFEX minimum price fluctuation for an
+/// index or sector-index futures product by its root symbol, returning `None`
+/// for an unrecognized root so the caller can apply a documented fallback.
+/// Formula:    tick_size(root) = table[root]; precision = decimals(tick_size).
+///             TAIEX-family index futures quote in index points (tick 1.0,
+///             precision 0); electronics/finance sector index futures use a
+///             0.2-point tick (precision 1) per the TAIFEX product specs.
+/// Domain:     `root` is the futures root symbol (e.g. "TXF"), i.e. the gateway
+///             `category` for an index future. Only index / sector roots belong
+///             here; equity- and ETF-underlying (single-stock) futures use
+///             [`single_stock_futures_tick_size`] instead, and commodity roots
+///             are not tabled.
+/// Returns:    `Some((tick_size, precision))` for a known index/sector root,
+///             else `None`.
+///
+/// Source: TAIFEX Equity-Index futures specs, <https://www.taifex.com.tw/enl/eng2/tX>.
+pub fn index_futures_tick_size(root: &str) -> Option<(f64, u8)> {
+    match root {
+        // TAIEX / Mini-TAIEX / TAIEX-50 / Non-Fin-Non-Elec: 1 index point.
+        "TXF" | "MXF" | "T5F" | "XIF" => Some((1.0, 0)),
+        // Electronics / Finance sector index futures: 0.2 index points.
+        "ZEF" | "ZFF" => Some((0.2, 1)),
+        _ => None,
+    }
+}
+
+/// Returns the tick size and price precision for a TAIFEX single-stock /
+/// ETF-underlying (equity) futures contract by its reference price.
+///
+/// Definition: The TAIFEX minimum price fluctuation for equity-underlying
+/// futures, which is price-tiered on the contract's reference price and mirrors
+/// the underlying TWSE cash-equity schedule (single-stock futures trade in the
+/// same price grid as their underlying stock).
+/// Formula:    tick(P) = 0.01  if P < 10
+///                       0.05  if 10  <= P < 50
+///                       0.10  if 50  <= P < 100
+///                       0.50  if 100 <= P < 500
+///                       1.00  if 500 <= P < 1000
+///                       5.00  if P >= 1000
+///             precision(P) = 2 for P < 500, else 1.
+/// Domain:     `reference` is the contract reference price (TWD, prior close /
+///             listing price), assumed finite and non-negative. A NaN/negative
+///             reference falls through to the lowest tier and is rejected
+///             downstream by `try_price`.
+/// Returns:    `(tick_size, precision)` in TWD; e.g. a TSMC single-stock future
+///             at 2260 TWD ticks at 5.0 (precision 1), a 67.5 TWD name at 0.05
+///             (precision 2).
+///
+/// Source: TAIFEX Single Stock Futures / ETF Futures specs,
+/// <https://www.taifex.com.tw/enl/eng2/sSF> (minimum price fluctuation table).
+pub fn single_stock_futures_tick_size(reference: f64) -> (f64, u8) {
+    if reference < 10.0 {
+        (0.01, 2)
+    } else if reference < 50.0 {
+        (0.05, 2)
+    } else if reference < 100.0 {
+        (0.10, 2)
+    } else if reference < 500.0 {
+        (0.50, 2)
+    } else if reference < 1000.0 {
+        (1.0, 1)
+    } else {
+        (5.0, 1)
     }
 }
 
@@ -145,8 +201,42 @@ mod tests {
     }
 
     #[rstest]
-    fn test_futures_tick_size_txf() {
-        assert_eq!(futures_tick_size("TXF"), (1.0, 0));
+    fn test_index_futures_tick_size_txf() {
+        assert_eq!(index_futures_tick_size("TXF"), Some((1.0, 0)));
+    }
+
+    #[rstest]
+    fn test_index_futures_tick_size_sector() {
+        // Electronics / Finance sector index futures tick at 0.2 (precision 1).
+        assert_eq!(index_futures_tick_size("ZEF"), Some((0.2, 1)));
+        assert_eq!(index_futures_tick_size("ZFF"), Some((0.2, 1)));
+    }
+
+    #[rstest]
+    fn test_index_futures_tick_size_unknown_root_is_none() {
+        // An unknown index root returns None so the caller can warn + fall back.
+        assert_eq!(index_futures_tick_size("ZZZ"), None);
+    }
+
+    #[rstest]
+    #[case(8.0, (0.01, 2))]
+    #[case(9.99, (0.01, 2))]
+    #[case(10.0, (0.05, 2))]
+    #[case(49.99, (0.05, 2))]
+    #[case(50.0, (0.10, 2))]
+    #[case(99.99, (0.10, 2))]
+    #[case(100.0, (0.50, 2))]
+    #[case(499.99, (0.50, 2))]
+    #[case(500.0, (1.0, 1))]
+    #[case(999.99, (1.0, 1))]
+    #[case(1000.0, (5.0, 1))]
+    #[case(2260.0, (5.0, 1))] // CDFF6 (TSMC single-stock future) reference.
+    #[case(31.7, (0.05, 2))] // CAO underlying-tier price.
+    fn test_single_stock_futures_tick_size_tiers(
+        #[case] reference: f64,
+        #[case] expected: (f64, u8),
+    ) {
+        assert_eq!(single_stock_futures_tick_size(reference), expected);
     }
 
     #[rstest]
