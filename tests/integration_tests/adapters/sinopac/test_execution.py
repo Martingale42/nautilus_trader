@@ -13,7 +13,6 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
-import asyncio
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
@@ -353,7 +352,7 @@ async def test_p3_timeout_does_not_reject_order(exec_client, sinopac_equity):
     exec_client.generate_order_submitted = MagicMock()
     exec_client.generate_order_accepted = MagicMock()
     exec_client.generate_order_rejected = MagicMock()
-    exec_client._http_client.place_order = AsyncMock(side_effect=asyncio.TimeoutError())
+    exec_client._http_client.place_order = AsyncMock(side_effect=TimeoutError())
 
     command = SubmitOrder(
         trader_id=order.trader_id,
@@ -505,9 +504,7 @@ async def test_p3_reconciliation_without_token_falls_back_to_synthetic(
 
     """
     from nautilus_trader.execution.messages import GenerateOrderStatusReports
-    from nautilus_trader.model.enums import OrderStatus as NTOrderStatus
     from nautilus_trader.model.identifiers import ClientOrderId
-    from nautilus_trader.model.identifiers import VenueOrderId
 
     # No local submitted order with matching token in cache.
     exec_client._http_client.list_trades = AsyncMock(
@@ -584,7 +581,12 @@ async def test_bl1_submit_order_sends_custom_field_token(exec_client, sinopac_eq
     exec_client.generate_order_accepted = MagicMock()
 
     exec_client._http_client.place_order = AsyncMock(
-        return_value={"trade_id": "T-NEW", "code": "2330", "action": "Buy", "status": "PendingSubmit"},
+        return_value={
+            "trade_id": "T-NEW",
+            "code": "2330",
+            "action": "Buy",
+            "status": "PendingSubmit",
+        },
     )
 
     command = SubmitOrder(
@@ -785,3 +787,137 @@ def test_bl1_external_order_no_token_no_mapping_returns_none(exec_client):
 
     result2 = exec_client._resolve_client_order_id("UNKNOWN-TRADE", "")
     assert result2 is None
+
+
+# -- Task 3.2: exec client establishes the shared WS independently ---------------------------------
+
+
+@pytest.fixture
+def stateful_ws_client():
+    """
+    Stub a pyo3 WS client whose is_connected tracks connect/disconnect calls.
+    """
+    stub = MagicMock(spec=pyo3_sinopac.SinopacWebSocketClient)
+    state = {"connected": False}
+
+    async def _connect(*args, **kwargs):
+        state["connected"] = True
+
+    async def _disconnect(*args, **kwargs):
+        state["connected"] = False
+
+    async def _wait_until_active(*args, **kwargs):
+        return None
+
+    stub.connect = AsyncMock(side_effect=_connect)
+    stub.disconnect = AsyncMock(side_effect=_disconnect)
+    stub.wait_until_active = AsyncMock(side_effect=_wait_until_active)
+    stub.is_connected = MagicMock(side_effect=lambda: state["connected"])
+    return stub
+
+
+def _build_exec_client(event_loop, instrument, ws_client, ws_dispatcher):
+    clock = LiveClock()
+    trader_id = TestIdStubs.trader_id()
+    msgbus = MessageBus(trader_id, clock)
+    cache = TestComponentStubs.cache()
+    cache.add_instrument(instrument)
+
+    http_client = MagicMock(spec=pyo3_sinopac.SinopacHttpClient)
+    http_client.place_order = AsyncMock()
+    http_client.account_balance = AsyncMock(return_value={"balance": 1_000_000.0})
+
+    provider = MagicMock(spec=SinopacInstrumentProvider)
+    provider.initialize = AsyncMock()
+    provider.instruments_pyo3 = MagicMock(return_value=[])
+
+    return SinopacExecutionClient(
+        loop=event_loop,
+        client=http_client,
+        ws_client=ws_client,
+        msgbus=msgbus,
+        cache=cache,
+        clock=clock,
+        instrument_provider=provider,
+        config=SinopacExecClientConfig(),
+        name=None,
+        ws_dispatcher=ws_dispatcher,
+    )
+
+
+@pytest.mark.asyncio
+async def test_exec_only_connect_establishes_ws_and_dispatches_order_event(
+    event_loop,
+    sinopac_equity,
+    stateful_ws_client,
+):
+    """
+    An exec-only node (no data client) must connect the shared WS itself and then
+    receive an order event dispatched through that WS.
+    """
+    from nautilus_trader.adapters.sinopac.factories import _WsDispatcher
+
+    dispatcher = _WsDispatcher(stateful_ws_client)
+    client = _build_exec_client(event_loop, sinopac_equity, stateful_ws_client, dispatcher)
+
+    # Act -- run the exec client's connect sequence directly.
+    await client._connect()
+
+    # Assert -- the exec client established the WS with no data client present.
+    assert stateful_ws_client.is_connected()
+    stateful_ws_client.connect.assert_awaited_once()
+
+    # A dispatched order event reaches the exec client's order-event path.
+    order, venue_order_id = _add_accepted_order(client, sinopac_equity)
+    client.generate_order_canceled = MagicMock()
+    cancel_event = {
+        "event_type": "stock_order",
+        "op_type": "Cancel",
+        "op_code": "00",
+        "op_msg": "",
+        "order_id": venue_order_id.value,
+        "code": "2330",
+    }
+    dispatcher.dispatch(cancel_event)
+
+    client.generate_order_canceled.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_data_disconnect_leaves_ws_up_for_exec(
+    event_loop,
+    sinopac_equity,
+    stateful_ws_client,
+):
+    """
+    With both clients registered, the data client releasing must not tear down
+    the shared WS while the exec client is still registered.
+    """
+    from nautilus_trader.adapters.sinopac.factories import _WsDispatcher
+
+    dispatcher = _WsDispatcher(stateful_ws_client)
+    client = _build_exec_client(event_loop, sinopac_equity, stateful_ws_client, dispatcher)
+
+    # Exec connects (registers + establishes WS).
+    await client._connect()
+    assert stateful_ws_client.is_connected()
+
+    # Simulate a data client sharing the same WS: register a second handler and
+    # establish (idempotent no-op), then have it release.
+    def data_handler(msg: object) -> None:
+        pass
+
+    dispatcher.register(data_handler)
+    await dispatcher.ensure_connected(instruments=[])
+
+    dispatcher.unregister(data_handler)
+    await dispatcher.release()
+
+    # Exec is still registered -> WS must remain connected.
+    assert stateful_ws_client.is_connected(), "data release severed the exec event stream"
+    stateful_ws_client.disconnect.assert_not_called()
+
+    # Now exec disconnects -> WS finally tears down.
+    await client._disconnect()
+    assert not stateful_ws_client.is_connected()
+    stateful_ws_client.disconnect.assert_awaited_once()
