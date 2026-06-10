@@ -1240,3 +1240,161 @@ async def test_order_status_report_falls_back_to_zero_when_filled_qty_missing(
     # Assert -- explicit 0 fallback (not a silently-assumed default).
     assert len(reports) == 1
     assert reports[0].filled_qty == sinopac_equity.make_qty(0)
+
+
+# -- Task 3.5: snap submitted prices onto the instrument tick grid ---------------------------------
+
+
+def _equity_with_increment(symbol, increment, precision):
+    from nautilus_trader.model.currencies import Currency
+    from nautilus_trader.model.identifiers import InstrumentId
+    from nautilus_trader.model.identifiers import Symbol
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.instruments import Equity
+    from nautilus_trader.model.objects import Price
+    from nautilus_trader.model.objects import Quantity
+
+    return Equity(
+        instrument_id=InstrumentId(symbol=Symbol(symbol), venue=Venue("SINOPAC")),
+        raw_symbol=Symbol(symbol),
+        currency=Currency.from_str("TWD"),
+        price_precision=precision,
+        price_increment=Price.from_str(increment),
+        lot_size=Quantity.from_int(1000),
+        ts_event=0,
+        ts_init=0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "increment", "precision", "expected"),
+    [
+        ("85.35", "0.05", 2, "85.35"),  # on-grid -> unchanged
+        ("85.37", "0.05", 2, "85.35"),  # off-grid -> snap down to nearest tick
+        ("85.38", "0.05", 2, "85.40"),  # off-grid -> snap up to nearest tick
+        ("580.50", "1.00", 0, "580"),  # integer grid -> snap to whole tick
+    ],
+)
+def test_snap_price_to_grid(raw, increment, precision, expected):
+    """
+    Snap a raw price to the nearest tick multiple with round-half-even.
+    """
+    from decimal import Decimal
+
+    from nautilus_trader.adapters.sinopac.execution import _snap_price_to_grid
+
+    snapped = _snap_price_to_grid(Decimal(raw), Decimal(increment))
+    assert snapped == Decimal(expected)
+
+
+@pytest.mark.asyncio
+async def test_submit_order_snaps_off_grid_price(event_loop):
+    """
+    An off-grid limit price must be snapped onto the tick grid before sending.
+    """
+    instrument = _equity_with_increment("2454", "0.05", 2)
+
+    clock = LiveClock()
+    msgbus = MessageBus(TestIdStubs.trader_id(), clock)
+    cache = TestComponentStubs.cache()
+    cache.add_instrument(instrument)
+
+    http_client = MagicMock(spec=pyo3_sinopac.SinopacHttpClient)
+    http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-SNAP", "code": "2454", "status": "PendingSubmit"},
+    )
+    ws_client = MagicMock(spec=pyo3_sinopac.SinopacWebSocketClient)
+    provider = MagicMock(spec=SinopacInstrumentProvider)
+
+    client = SinopacExecutionClient(
+        loop=event_loop,
+        client=http_client,
+        ws_client=ws_client,
+        msgbus=msgbus,
+        cache=cache,
+        clock=clock,
+        instrument_provider=provider,
+        config=SinopacExecClientConfig(),
+        name=None,
+    )
+
+    order = TestExecStubs.limit_order(
+        instrument=instrument,
+        order_side=OrderSide.BUY,
+        quantity=instrument.make_qty(1000),
+        price=instrument.make_price(85.37),  # off-grid for a 0.05 tick
+    )
+    client._cache.add_order(order)
+    client.generate_order_submitted = MagicMock()
+    client.generate_order_accepted = MagicMock()
+
+    command = SubmitOrder(
+        trader_id=order.trader_id,
+        strategy_id=order.strategy_id,
+        order=order,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+
+    # Act
+    await client._submit_order(command)
+
+    # Assert -- the price sent to the gateway is the snapped on-grid value.
+    sent_price = http_client.place_order.call_args.kwargs["price"]
+    assert sent_price == pytest.approx(85.35)
+
+
+@pytest.mark.asyncio
+async def test_submit_order_leaves_on_grid_price_unchanged(event_loop):
+    """
+    An already on-grid price must be sent unchanged (no spurious snapping).
+    """
+    instrument = _equity_with_increment("2454", "0.05", 2)
+
+    clock = LiveClock()
+    msgbus = MessageBus(TestIdStubs.trader_id(), clock)
+    cache = TestComponentStubs.cache()
+    cache.add_instrument(instrument)
+
+    http_client = MagicMock(spec=pyo3_sinopac.SinopacHttpClient)
+    http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-OK", "code": "2454", "status": "PendingSubmit"},
+    )
+    provider = MagicMock(spec=SinopacInstrumentProvider)
+
+    client = SinopacExecutionClient(
+        loop=event_loop,
+        client=http_client,
+        ws_client=MagicMock(spec=pyo3_sinopac.SinopacWebSocketClient),
+        msgbus=msgbus,
+        cache=cache,
+        clock=clock,
+        instrument_provider=provider,
+        config=SinopacExecClientConfig(),
+        name=None,
+    )
+
+    order = TestExecStubs.limit_order(
+        instrument=instrument,
+        order_side=OrderSide.BUY,
+        quantity=instrument.make_qty(1000),
+        price=instrument.make_price(85.35),  # on-grid
+    )
+    client._cache.add_order(order)
+    client.generate_order_submitted = MagicMock()
+    client.generate_order_accepted = MagicMock()
+
+    command = SubmitOrder(
+        trader_id=order.trader_id,
+        strategy_id=order.strategy_id,
+        order=order,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+
+    # Act
+    await client._submit_order(command)
+
+    # Assert
+    sent_price = http_client.place_order.call_args.kwargs["price"]
+    assert sent_price == pytest.approx(85.35)

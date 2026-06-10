@@ -19,6 +19,8 @@ import asyncio
 import hashlib
 import os
 import string
+from decimal import ROUND_HALF_EVEN
+from decimal import Decimal
 from typing import Any
 
 from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
@@ -98,6 +100,26 @@ def _coid_token(client_order_id: str) -> str:
         "big",
     )
     return "".join(_B62[(h >> (6 * i)) % 62] for i in range(6))
+
+
+def _snap_price_to_grid(price: Decimal, increment: Decimal) -> Decimal:
+    """
+    Snap a price onto the venue tick grid.
+
+    Definition: Round a raw price to the nearest multiple of the instrument's
+        tick increment, breaking ties to even (banker's rounding).
+    Formula:    p_snapped = round_half_even(price / increment) * increment
+        where ``increment`` is ``instrument.price_increment`` (e.g. 0.05).
+    Domain:     ``increment`` must be > 0. ``price`` and ``increment`` are exact
+        ``Decimal`` values (never binary floats) so the grid is represented
+        precisely; a 0.05 tick grid cannot be expressed by price precision
+        alone (precision 2 would wrongly admit 85.37). Round-half-even avoids
+        the upward bias of round-half-up across many snaps.
+    Returns:    A ``Decimal`` on the tick grid, exact and ready for
+        ``instrument.make_price``. Units match ``price`` (venue quote currency).
+    """
+    steps = (price / increment).quantize(Decimal(1), rounding=ROUND_HALF_EVEN)
+    return steps * increment
 
 
 _SINOPAC_STATUS_MAP = {
@@ -551,11 +573,29 @@ class SinopacExecutionClient(LiveExecutionClient):
                 order.time_in_force,
                 SinopacOrderType.ROD,
             )
-            price = float(order.price) if order.price is not None else 0.0
             quantity = int(order.quantity)
 
             instrument = self._cache.instrument(instrument_id)
             market = self._determine_market(instrument)
+
+            # Snap the limit price onto the venue tick grid before sending.
+            # SINOPAC-09's residual risk: price precision alone cannot express a
+            # 0.05 tick grid, so an off-grid limit (e.g. 85.37) would be rejected
+            # by the venue. Market orders carry no price.
+            price = 0.0
+            if order.price is not None:
+                if instrument is not None and instrument.price_increment > 0:
+                    increment = instrument.price_increment.as_decimal()
+                    snapped = _snap_price_to_grid(order.price.as_decimal(), increment)
+                    snapped_price = instrument.make_price(snapped)
+                    if snapped_price != order.price:
+                        self._log.warning(
+                            f"Snapped off-grid price {order.price} -> {snapped_price} "
+                            f"(tick {instrument.price_increment}) for {order.client_order_id}",
+                        )
+                    price = float(snapped_price)
+                else:
+                    price = float(order.price)
 
             token = _coid_token(order.client_order_id.value)
 
