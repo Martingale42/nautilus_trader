@@ -63,8 +63,10 @@ pub fn twse_etf_tick_size(reference: f64) -> (f64, u8) {
 /// for an unrecognized root so the caller can apply a documented fallback.
 /// Formula:    tick_size(root) = table[root]; precision = decimals(tick_size).
 ///             TAIEX-family index futures quote in index points (tick 1.0,
-///             precision 0); electronics/finance sector index futures use a
-///             0.2-point tick (precision 1) per the TAIFEX product specs.
+///             precision 0). Sector-index ticks are product-specific: the
+///             Mini-Electronics (ZEF) tick is 0.05 index points (precision 2),
+///             while the Mini-Finance (ZFF) tick is 0.2 index points
+///             (precision 1), per the TAIFEX product specs.
 /// Domain:     `root` is the futures root symbol (e.g. "TXF"), i.e. the gateway
 ///             `category` for an index future. Only index / sector roots belong
 ///             here; equity- and ETF-underlying (single-stock) futures use
@@ -74,12 +76,20 @@ pub fn twse_etf_tick_size(reference: f64) -> (f64, u8) {
 ///             else `None`.
 ///
 /// Source: TAIFEX Equity-Index futures specs, <https://www.taifex.com.tw/enl/eng2/tX>.
+///   - XIF tick 1 index point: <https://www.taifex.com.tw/enl/eng2/xIF>.
+///   - ZEF tick 0.05 index points (NTD 25/tick): Mini Electronics Sector Index
+///     Futures Trading Rules Art. 6, <https://www.taifex.com.tw/enl/eng2/zEF>.
+///   - ZFF tick 0.2 index points (NTD 50/tick): <https://www.taifex.com.tw/enl/eng2/zFF>.
 pub fn index_futures_tick_size(root: &str) -> Option<(f64, u8)> {
     match root {
         // TAIEX / Mini-TAIEX / TAIEX-50 / Non-Fin-Non-Elec: 1 index point.
         "TXF" | "MXF" | "T5F" | "XIF" => Some((1.0, 0)),
-        // Electronics / Finance sector index futures: 0.2 index points.
-        "ZEF" | "ZFF" => Some((0.2, 1)),
+        // Mini-Electronics sector index futures: 0.05 index points (NTD 25/tick,
+        // tick_value = 0.05 * 500). NOT 0.2 (the full-size TE tick is also 0.05).
+        "ZEF" => Some((0.05, 2)),
+        // Mini-Finance sector index futures: 0.2 index points (NTD 50/tick,
+        // tick_value = 0.2 * 250).
+        "ZFF" => Some((0.2, 1)),
         _ => None,
     }
 }
@@ -207,8 +217,12 @@ mod tests {
 
     #[rstest]
     fn test_index_futures_tick_size_sector() {
-        // Electronics / Finance sector index futures tick at 0.2 (precision 1).
-        assert_eq!(index_futures_tick_size("ZEF"), Some((0.2, 1)));
+        // ZEF (Mini-Electronics): 0.05 index points, precision 2. Official
+        // tick value is NTD 25 = 0.05 * 500 (multiplier), per TAIFEX ZEF
+        // Trading Rules Art. 6 / <https://www.taifex.com.tw/enl/eng2/zEF>.
+        assert_eq!(index_futures_tick_size("ZEF"), Some((0.05, 2)));
+        // ZFF (Mini-Finance): 0.2 index points, precision 1. Official tick value
+        // is NTD 50 = 0.2 * 250 (multiplier), per <https://www.taifex.com.tw/enl/eng2/zFF>.
         assert_eq!(index_futures_tick_size("ZFF"), Some((0.2, 1)));
     }
 

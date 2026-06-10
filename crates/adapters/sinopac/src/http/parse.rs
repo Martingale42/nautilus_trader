@@ -235,15 +235,22 @@ pub fn parse_stock_to_equity(
 /// Formula:    - `underlying_kind == "I"` (index, empty `underlying_code`):
 ///               look up the index/sector root table; unknown root warns and
 ///               falls back to `(1.0, 0)`.
-///             - equity / ETF underlying (`underlying_kind` in {"S","E"}, i.e.
-///               single-stock or ETF futures, non-empty `underlying_code`):
-///               price-tiered [`single_stock_futures_tick_size`] on `reference`.
+///             - common-stock underlying (`underlying_kind == "S"`, non-empty
+///               `underlying_code`): price-tiered common-stock single-stock-
+///               futures grid via [`single_stock_futures_tick_size`].
+///             - ETF underlying (`underlying_kind == "E"`): the *ETF*-futures
+///               grid (< 50 -> 0.01, >= 50 -> 0.05) via [`twse_etf_tick_size`],
+///               which differs from the common-stock grid above 50 TWD. ETF
+///               futures share the cash-ETF schedule per the TAIFEX spec.
 ///             - any other kind (e.g. commodity `"C"`, for which TAIFEX ticks
 ///               are product-specific and not tabled here): warn and fall back
 ///               to `(1.0, 0)`.
 /// Domain:     `contract.underlying_kind` is one of the live-dumped values
 ///             {"S","I","E","C"}; `reference` is the contract reference price.
 /// Returns:    `(tick_size, precision)` in TWD for the contract's price grid.
+///
+/// Source: TAIFEX Single Stock Futures / ETF Futures spec (separate common-stock
+/// and ETF minimum-price-fluctuation tables), <https://www.taifex.com.tw/enl/eng2/sSF>.
 fn futures_tick_for_contract(contract: &FuturesContract) -> (f64, u8) {
     let root = contract.category.as_str();
     match contract.underlying_kind.as_str() {
@@ -252,9 +259,11 @@ fn futures_tick_for_contract(contract: &FuturesContract) -> (f64, u8) {
             log::warn!("Unknown futures root {root}, using default tick 1.0");
             (1.0, 0)
         }),
-        // Single-stock ("S") and ETF-underlying ("E") futures trade on the
-        // price-tiered equity grid keyed off the reference price.
-        "S" | "E" => single_stock_futures_tick_size(contract.reference),
+        // Common-stock single-stock futures: price-tiered common-stock grid.
+        "S" => single_stock_futures_tick_size(contract.reference),
+        // ETF-underlying futures use the distinct cash-ETF grid (< 50 -> 0.01,
+        // >= 50 -> 0.05), NOT the common-stock tiers (which are coarser above 50).
+        "E" => twse_etf_tick_size(contract.reference),
         // Commodity ("C") and any future kind: no tabled tick -> documented
         // unknown-root fallback.
         _ => {
@@ -1211,6 +1220,82 @@ mod tests {
     }
 
     #[rstest]
+    fn test_sector_future_zef_tick_and_multiplier() {
+        // ZEF (Mini-Electronics) index future: tick 0.05 (precision 2),
+        // multiplier 500. tick_value = 0.05 * 500 = NTD 25, matching the
+        // published ZEF tick value (TAIFEX ZEF Trading Rules Art. 5 & 6,
+        // <https://www.taifex.com.tw/enl/eng2/zEF>). The old wrong table gave
+        // 0.2 / 4000 (an off-grid tick and an 8x-too-large multiplier).
+        let mut contract = dump_index_future();
+        contract.code = "ZEFF6".to_string();
+        contract.category = "ZEF".to_string();
+        contract.reference = 1000.0;
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.price_increment().as_f64(), 0.05);
+                assert_eq!(f.price_precision(), 2);
+                assert_eq!(f.multiplier().as_f64(), 500.0);
+                // tick_value identity: 0.05 * 500 = NTD 25/tick.
+                assert_eq!(f.price_increment().as_f64() * f.multiplier().as_f64(), 25.0);
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_sector_future_zff_tick_and_multiplier() {
+        // ZFF (Mini-Finance) index future: tick 0.2 (precision 1), multiplier
+        // 250. tick_value = 0.2 * 250 = NTD 50, matching the published ZFF tick
+        // value (<https://www.taifex.com.tw/enl/eng2/zFF>). The old wrong table
+        // gave a 4x-too-large multiplier (1000, the full-size TF value).
+        let mut contract = dump_index_future();
+        contract.code = "ZFFF6".to_string();
+        contract.category = "ZFF".to_string();
+        contract.reference = 1500.0;
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.price_increment().as_f64(), 0.2);
+                assert_eq!(f.price_precision(), 1);
+                assert_eq!(f.multiplier().as_f64(), 250.0);
+                // tick_value identity: 0.2 * 250 = NTD 50/tick.
+                assert_eq!(f.price_increment().as_f64() * f.multiplier().as_f64(), 50.0);
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_sector_future_xif_tick_and_multiplier() {
+        // XIF (Non-Fin-Non-Elec) index future: tick 1.0 (precision 0),
+        // multiplier 100. tick_value = 1.0 * 100 = NTD 100/pt
+        // (<https://www.taifex.com.tw/enl/eng2/xIF>). The old wrong table gave a
+        // 2x-too-large multiplier (200).
+        let mut contract = dump_index_future();
+        contract.code = "XIFF6".to_string();
+        contract.category = "XIF".to_string();
+        contract.reference = 800.0;
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.price_increment().as_f64(), 1.0);
+                assert_eq!(f.price_precision(), 0);
+                assert_eq!(f.multiplier().as_f64(), 100.0);
+                // tick_value identity: 1.0 * 100 = NTD 100/pt.
+                assert_eq!(f.price_increment().as_f64() * f.multiplier().as_f64(), 100.0);
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
     fn test_dump_single_stock_future_low_price_tier() {
         // A single-stock future on a low-priced underlying (ref 31.7, the CAO
         // underlying tier) -> tick 0.05, precision 2.
@@ -1229,19 +1314,44 @@ mod tests {
     }
 
     #[rstest]
-    fn test_etf_underlying_future_uses_price_tiered_tick() {
-        // ETF-underlying futures (underlying_kind == "E", 59 in the dump) behave
-        // like equity-underlying single-stock futures: price-tiered schedule.
+    fn test_etf_underlying_future_uses_etf_tick_above_50() {
+        // ETF-underlying futures (underlying_kind == "E", 0050 in the dump) use
+        // the ETF-futures grid, NOT the common-stock single-stock-futures tiers.
+        // At ref 103.5 (>= 50) the ETF tick is 0.05 (precision 2); the common-
+        // stock tier would wrongly give 0.50. TAIFEX Single Stock / ETF Futures
+        // spec, ETF table: <https://www.taifex.com.tw/enl/eng2/sSF>.
         let mut contract = dump_single_stock_future();
         contract.underlying_kind = "E".to_string();
         contract.underlying_code = "0050".to_string();
-        contract.reference = 103.5; // 0050 dump reference -> 100..500 tier
+        contract.reference = 103.5; // 0050 dump reference -> ETF >=50 tier
         let instrument =
             parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
                 .unwrap();
         match instrument {
             InstrumentAny::FuturesContract(f) => {
-                assert_eq!(f.price_increment().as_f64(), 0.50);
+                assert_eq!(f.price_increment().as_f64(), 0.05);
+                assert_eq!(f.price_precision(), 2);
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    #[case(49.9, 0.01)] // ETF < 50 -> 0.01
+    #[case(50.0, 0.05)] // ETF boundary, >= 50 -> 0.05
+    fn test_etf_underlying_future_grid_boundary(#[case] reference: f64, #[case] expected_tick: f64) {
+        // ETF-futures grid boundary at 50 TWD (cash-ETF schedule):
+        // < 50 -> 0.01, >= 50 -> 0.05, both precision 2.
+        let mut contract = dump_single_stock_future();
+        contract.underlying_kind = "E".to_string();
+        contract.underlying_code = "0050".to_string();
+        contract.reference = reference;
+        let instrument =
+            parse_futures_to_contract(&contract, UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                assert_eq!(f.price_increment().as_f64(), expected_tick);
                 assert_eq!(f.price_precision(), 2);
             }
             _ => panic!("Expected FuturesContract"),
