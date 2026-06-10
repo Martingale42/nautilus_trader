@@ -188,6 +188,16 @@ class SinopacDataClient(LiveMarketDataClient):
                 data = capsule_to_data(msg)
                 self._handle_data(data)
                 return
+            if isinstance(msg, dict):
+                # The Rust WS layer already resubscribed market data on reconnect;
+                # log it and move on. All other dicts (order/fill events) are meant
+                # for the exec client on the shared WS -- drop them silently at DEBUG
+                # so the data client does not spam a WARNING per order event (A7).
+                if msg.get("event") == "reconnected":
+                    self._log.info("Sinopac WS reconnected; market data resubscribed")
+                else:
+                    self._log.debug(f"Ignoring non-data WS dict: {msg.get('event_type')}")
+                return
             self._log.warning(f"Unhandled WS message type: {type(msg)}")
         except Exception as e:
             self._log.exception("Error handling Sinopac WS message", e)

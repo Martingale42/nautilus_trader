@@ -267,6 +267,18 @@ class SinopacExecutionClient(LiveExecutionClient):
             self._log.exception("Error handling Sinopac exec WS message", e)
 
     def _handle_order_event(self, event: dict[str, Any]) -> None:
+        # The Rust WS layer emits a synthetic {"event": "reconnected"} dict after
+        # it re-establishes the socket and resubscribes (SINOPAC-02). Order/fill
+        # events that occurred during the gap are NOT replayed, so we trigger a
+        # reconciliation pass to converge the ledger within one reconnect cycle.
+        if event.get("event") == "reconnected":
+            self._log.warning(
+                "Sinopac WS reconnected; scheduling reconciliation to recover in-gap events",
+                LogColor.YELLOW,
+            )
+            self._loop.create_task(self._reconcile_after_reconnect())
+            return
+
         event_type = event.get("event_type")
         if event_type in ("stock_order", "futures_order"):
             self._handle_order_status_event(event)
@@ -274,6 +286,25 @@ class SinopacExecutionClient(LiveExecutionClient):
             self._handle_deal_event(event)
         else:
             self._log.warning(f"Unknown order event type: {event_type}")
+
+    async def _reconcile_after_reconnect(self) -> None:
+        # Drive the SAME reconciliation the engine runs at startup: regenerate the
+        # full ExecutionMassStatus (order/fill/position reports via list_trades and
+        # list_positions) and hand it to the engine's mass-status reconciliation
+        # entrypoint. This adopts any fills/cancels/rejections that landed while the
+        # WS was down (the venue rejection of SINOPAC-04 also surfaces here as a
+        # `Failed` order report).
+        try:
+            mass_status = await self.generate_mass_status(lookback_mins=None)
+        except Exception as e:
+            self._log.exception("Failed to reconcile after WS reconnect", e)
+            return
+
+        if mass_status is None:
+            self._log.warning("Reconnect reconciliation produced no mass status")
+            return
+
+        self._send_mass_status_report(mass_status)
 
     def _handle_order_status_event(self, event: dict[str, Any]) -> None:
         op_code = event.get("op_code", "")
@@ -300,49 +331,17 @@ class SinopacExecutionClient(LiveExecutionClient):
         ts_event = self._clock.timestamp_ns()
 
         if op_code != "00":
-            # Operation failed
-            reason = event.get("op_msg", f"Operation failed: {op_type} code={op_code}")
-            if op_type == "New":
-                # A "New" failure that arrives AFTER the order was already accepted
-                # (HTTP place_order succeeded) would drive an illegal
-                # ACCEPTED/PARTIALLY_FILLED/FILLED -> REJECTED transition and panic
-                # NT's Rust state machine. Only reject orders that are still pending.
-                if order.status in (
-                    OrderStatus.ACCEPTED,
-                    OrderStatus.PARTIALLY_FILLED,
-                    OrderStatus.FILLED,
-                ):
-                    self._log.warning(
-                        f"Late 'New' failure for {client_order_id} in {order.status!r} "
-                        f"(reason={reason}); ignoring to avoid illegal state transition",
-                    )
-                    return
-                self.generate_order_rejected(
-                    strategy_id=order.strategy_id,
-                    instrument_id=instrument_id,
-                    client_order_id=client_order_id,
-                    reason=reason,
-                    ts_event=ts_event,
-                )
-                self._trade_id_to_client_order_id.pop(order_id, None)
-            elif op_type == "Cancel":
-                self.generate_order_cancel_rejected(
-                    strategy_id=order.strategy_id,
-                    instrument_id=instrument_id,
-                    client_order_id=client_order_id,
-                    venue_order_id=venue_order_id,
-                    reason=reason,
-                    ts_event=ts_event,
-                )
-            elif op_type in ("UpdatePrice", "UpdateQty"):
-                self.generate_order_modify_rejected(
-                    strategy_id=order.strategy_id,
-                    instrument_id=instrument_id,
-                    client_order_id=client_order_id,
-                    venue_order_id=venue_order_id,
-                    reason=reason,
-                    ts_event=ts_event,
-                )
+            self._handle_order_op_failure(
+                event,
+                order,
+                op_type,
+                op_code,
+                order_id,
+                instrument_id,
+                venue_order_id,
+                client_order_id,
+                ts_event,
+            )
             return
 
         # Operation succeeded (op_code == "00")
@@ -373,6 +372,61 @@ class SinopacExecutionClient(LiveExecutionClient):
                     ts_event=ts_event,
                 )
         # "New" with op_code "00" = order accepted (already handled in _submit_order)
+
+    def _handle_order_op_failure(
+        self,
+        event: dict[str, Any],
+        order: Any,
+        op_type: str,
+        op_code: str,
+        order_id: str,
+        instrument_id: InstrumentId,
+        venue_order_id: VenueOrderId,
+        client_order_id: ClientOrderId,
+        ts_event: int,
+    ) -> None:
+        reason = event.get("op_msg", f"Operation failed: {op_type} code={op_code}")
+        if op_type == "New":
+            # PRIMARY closure of SINOPAC-04's dominant async path: the gateway
+            # returns HTTP 200 + PendingSubmit for venue rejections (off-tick,
+            # over-band) and the rejection surfaces LATER as a "New" order event
+            # with op_code != "00". By then `_submit_order` has already marked the
+            # order ACCEPTED, so this async failure must drive ACCEPTED -> REJECTED
+            # (a legal NT transition). Only PARTIALLY_FILLED/FILLED are protected,
+            # since rejecting a (partly) filled order is an illegal transition that
+            # would panic the Rust state machine.
+            if order.status in (OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED):
+                self._log.warning(
+                    f"Late 'New' failure for {client_order_id} in {order.status!r} "
+                    f"(reason={reason}); ignoring to avoid illegal state transition",
+                )
+                return
+            self.generate_order_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=instrument_id,
+                client_order_id=client_order_id,
+                reason=reason,
+                ts_event=ts_event,
+            )
+            self._trade_id_to_client_order_id.pop(order_id, None)
+        elif op_type == "Cancel":
+            self.generate_order_cancel_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=instrument_id,
+                client_order_id=client_order_id,
+                venue_order_id=venue_order_id,
+                reason=reason,
+                ts_event=ts_event,
+            )
+        elif op_type in ("UpdatePrice", "UpdateQty"):
+            self.generate_order_modify_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=instrument_id,
+                client_order_id=client_order_id,
+                venue_order_id=venue_order_id,
+                reason=reason,
+                ts_event=ts_event,
+            )
 
     def _handle_deal_event(self, event: dict[str, Any]) -> None:
         trade_id_str = event.get("trade_id", "")
@@ -515,6 +569,27 @@ class SinopacExecutionClient(LiveExecutionClient):
                 market=market,
                 custom_field=token,
             )
+
+            # Defensive (second line of defense): a synchronously-rejecting or
+            # stale gateway may return HTTP 200 with a terminal `Failed` status
+            # rather than a 422. The PRIMARY rejection paths are (a) the gateway
+            # 422 -> pyo3 raises -> the generic-Exception handler below rejects,
+            # and (b) the DOMINANT async path where the venue rejects later via a
+            # `New` order event with op_code != "00" (handled in
+            # _handle_order_op_failure). This check only catches a gateway that
+            # synchronously echoes a rejected status, and must NOT populate the
+            # trade_id mapping for such a non-working order.
+            raw_status = response.get("status", "")
+            status_key = raw_status.split(".")[-1] if "." in raw_status else raw_status
+            if _SINOPAC_STATUS_MAP.get(status_key) == OrderStatus.REJECTED:
+                self.generate_order_rejected(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=order.client_order_id,
+                    reason=f"Gateway status {raw_status}",
+                    ts_event=self._clock.timestamp_ns(),
+                )
+                return
 
             trade_id = response["trade_id"]
             venue_order_id = VenueOrderId(trade_id)
