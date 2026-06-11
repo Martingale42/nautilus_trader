@@ -1915,3 +1915,64 @@ async def test_common_lot_price_modify_proceeds(exec_client, sinopac_equity):
 
     exec_client.generate_order_modify_rejected.assert_not_called()
     exec_client._http_client.update_order.assert_awaited_once()
+
+
+# -- QA probes (SINOPAC-11): edge cases beyond the batch-1..4 suites --------------------------------
+#
+# These prove behaviour the existing matrix did not pin directly:
+#   - the IntradayOdd quantity band is accepted at its inclusive boundaries (1 and 999)
+#     -- the existing tests only pinned the rejected sides (0 and 1000);
+#   - daytrade_short is rejected against ShortSelling on the NT side, matching the
+#     gateway's ShortSelling coverage so the two layers stay consistent.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quantity", [1, 999])
+async def test_intraday_odd_boundary_quantities_are_accepted(
+    exec_client,
+    sinopac_equity,
+    quantity,
+):
+    """
+    A 1-share and a 999-share IntradayOdd LMT/ROD order are accepted (band is
+    inclusive).
+    """
+    exec_client._http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-ODD-BND", "code": "2330", "status": "PendingSubmit"},
+    )
+    exec_client.generate_order_rejected = MagicMock()
+    tags = [SinopacOrderTags(order_lot="IntradayOdd").value]
+    order = _odd_lot_order(sinopac_equity, quantity=quantity, tags=tags)
+
+    await _submit_built_order(exec_client, order)
+
+    exec_client.generate_order_rejected.assert_not_called()
+    kwargs = exec_client._http_client.place_order.call_args.kwargs
+    assert kwargs["order_lot"] == SinopacOrderLot.INTRADAY_ODD
+    assert kwargs["quantity"] == quantity
+
+
+@pytest.mark.asyncio
+async def test_daytrade_short_with_short_selling_is_rejected_locally(
+    exec_client,
+    sinopac_equity,
+):
+    """
+    daytrade_short=True with order_cond=ShortSelling is rejected locally (mirrors
+    gateway).
+    """
+    exec_client._http_client.place_order = AsyncMock()
+    exec_client.generate_order_rejected = MagicMock()
+    tags = [SinopacOrderTags(daytrade_short=True, order_cond="ShortSelling").value]
+    order = TestExecStubs.limit_order(
+        instrument=sinopac_equity,
+        order_side=OrderSide.SELL,
+        quantity=sinopac_equity.make_qty(1000),
+        price=sinopac_equity.make_price(580.0),
+        tags=tags,
+    )
+
+    await _submit_built_order(exec_client, order)
+
+    exec_client.generate_order_rejected.assert_called_once()
+    exec_client._http_client.place_order.assert_not_called()

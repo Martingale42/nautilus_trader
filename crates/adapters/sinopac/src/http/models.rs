@@ -565,4 +565,33 @@ mod tests {
         assert_eq!(trades[1].filled_qty, 0);
         assert_eq!(trades[1].avg_fill_price, 0.0);
     }
+
+    #[rstest]
+    fn test_trade_info_tolerates_gateway_order_lot_and_cond_fields() {
+        // Forward-compatibility: the order-semantics gateway adds order_lot and
+        // order_cond observability keys to the /orders/trades response. TradeInfo
+        // has no struct fields for them and (with no deny_unknown_fields) must
+        // ignore the extra keys rather than fail to deserialize, so a newer
+        // gateway never breaks an older adapter build.
+        let json = r#"{
+            "trade_id": "trade-009",
+            "code": "2330",
+            "action": "Buy",
+            "price": 580.0,
+            "quantity": 37,
+            "status": "Submitted",
+            "order_type": "ROD",
+            "price_type": "LMT",
+            "filled_qty": 0,
+            "avg_fill_price": 0.0,
+            "order_lot": "IntradayOdd",
+            "order_cond": "Cash"
+        }"#;
+
+        let trade: TradeInfo =
+            serde_json::from_str(json).expect("deserialize TradeInfo with semantics fields");
+
+        assert_eq!(trade.trade_id, "trade-009");
+        assert_eq!(trade.quantity, 37);
+    }
 }
