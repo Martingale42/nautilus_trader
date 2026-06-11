@@ -7,6 +7,40 @@ models and helper utilities that connect through a self-hosted **FastAPI gateway
 ([shioaji-server](https://github.com/Martingale42/shioaji-server)) bridging the
 [Shioaji](https://sinotrade.github.io/) Python SDK.
 
+## Wire-unit contract
+
+Stock order quantity is expressed in **shares** end-to-end (gateway →
+`list_trades` → NautilusTrader reconciliation). The gateway converts shares to
+Shioaji lots (÷1000) at its SDK boundary, so a common-lot order quantity must be
+a multiple of 1000 shares. Odd-lot quantities (1–999 shares) pass through as
+shares. Futures and options quantities are in contracts.
+
+## Panic safety
+
+This crate is a real-money trading adapter, so all gateway-fed numbers cross a
+hard panic-safety boundary before entering the domain model:
+
+- Prices and quantities are built through checked constructors (`try_price` /
+  `try_qty` in `common/parse.rs`) so NaN, infinite, negative, out-of-range, or
+  over-precision values return errors instead of panicking.
+- Length-mismatched bid/ask and OHLCV arrays are rejected rather than indexed
+  out of bounds.
+- KBar OHLC cross-field invariants are enforced via `Bar::new_checked`.
+- A non-finite instrument `unit` (lot size) is rejected.
+- A single poisoned WebSocket frame is contained with `catch_unwind` and logged,
+  without killing the WebSocket receive loop.
+
+## Production hardening
+
+- Complete TAIFEX tick-size and contract-multiplier schedules
+  (`common/tick_size.rs`, `common/instrument.rs`): index/sector roots
+  (TXF/MXF/T5F/XIF/ZEF/ZFF), price-tiered single-stock-futures ticks, and the
+  ETF-futures grid. Schedule selection keys off `underlying_kind` (S/I/E/C) plus
+  the underlying code; unknown roots fall back to a default with a warning;
+  fractional option strikes (e.g. 67.5) are preserved.
+- The WebSocket emits a `{"event":"reconnected"}` sentinel after resubscription
+  so the execution client can recover in-gap events via reconciliation.
+
 ## Platform
 
 [NautilusTrader](http://nautilustrader.io) is an open-source, high-performance, production-grade

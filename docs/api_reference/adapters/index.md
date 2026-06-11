@@ -19,5 +19,6 @@
    interactive_brokers.md
    okx.md
    polymarket.md
+   sinopac.md
    tardis.md
 ```
