@@ -1099,6 +1099,23 @@ class SinopacExecutionClient(LiveExecutionClient):
             )
             return
 
+        # Shioaji forbids price changes on intraday odd-lot orders; only quantity
+        # may be reduced. Reject a price modification locally rather than send it
+        # and let the gateway 422 the round-trip.
+        if (
+            command.price is not None
+            and SinopacOrderTags.from_tags(order.tags).order_lot == "IntradayOdd"
+        ):
+            self.generate_order_modify_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                venue_order_id=venue_order_id,
+                reason="IntradayOdd orders cannot change price, only reduce quantity",
+                ts_event=self._clock.timestamp_ns(),
+            )
+            return
+
         try:
             trade_id = venue_order_id.value
             price = float(command.price) if command.price is not None else None

@@ -33,6 +33,7 @@ from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOrderLot
 from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOrderType
 from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacPriceType
 from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.execution.messages import ModifyOrder
 from nautilus_trader.execution.messages import SubmitOrder
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import OrderStatus
@@ -42,6 +43,7 @@ from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import StrategyId
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import TraderId
+from nautilus_trader.model.identifiers import VenueOrderId
 from nautilus_trader.model.orders import LimitOrder
 from nautilus_trader.model.orders import MarketOrder
 from nautilus_trader.model.orders import MarketToLimitOrder
@@ -1817,3 +1819,99 @@ async def test_default_no_tags_passes_cash_common_auto(exec_client, sinopac_equi
     assert kwargs["order_lot"] == SinopacOrderLot.COMMON
     assert kwargs["octype"] == SinopacOCType.AUTO
     assert kwargs["daytrade_short"] is False
+
+
+# -- 3.4: odd-lot modify guard ----------------------------------------------------------------------
+#
+# Shioaji forbids price changes on intraday odd-lot orders; only quantity may be reduced.
+# The adapter rejects a price modification locally; a quantity-only modify proceeds.
+
+
+def _add_accepted_order_with_tags(client, instrument, *, tags, quantity=37, price=580.0):
+    venue_order_id = VenueOrderId("T-ODD-MOD")
+    order = TestExecStubs.make_accepted_order(
+        instrument=instrument,
+        order_side=OrderSide.BUY,
+        quantity=instrument.make_qty(quantity),
+        price=instrument.make_price(price),
+        time_in_force=TimeInForce.DAY,
+        tags=tags,
+        venue_order_id=venue_order_id,
+    )
+    client._cache.add_order(order)
+    client._trade_id_to_client_order_id[venue_order_id.value] = order.client_order_id.value
+    return order, venue_order_id
+
+
+def _modify_command(order, venue_order_id, *, price=None, quantity=None):
+    return ModifyOrder(
+        trader_id=order.trader_id,
+        strategy_id=order.strategy_id,
+        instrument_id=order.instrument_id,
+        client_order_id=order.client_order_id,
+        venue_order_id=venue_order_id,
+        quantity=quantity,
+        price=price,
+        trigger_price=None,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_intraday_odd_price_modify_is_rejected_locally(exec_client, sinopac_equity):
+    """
+    A price change on an intraday odd-lot order is rejected locally, never reaching the
+    gateway.
+    """
+    exec_client._http_client.update_order = AsyncMock()
+    exec_client.generate_order_modify_rejected = MagicMock()
+    tags = [SinopacOrderTags(order_lot="IntradayOdd").value]
+    order, venue_order_id = _add_accepted_order_with_tags(exec_client, sinopac_equity, tags=tags)
+    command = _modify_command(order, venue_order_id, price=sinopac_equity.make_price(590.0))
+
+    await exec_client._modify_order(command)
+
+    exec_client.generate_order_modify_rejected.assert_called_once()
+    exec_client._http_client.update_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_intraday_odd_quantity_only_modify_proceeds(exec_client, sinopac_equity):
+    """
+    A quantity-only modify of an intraday odd-lot order proceeds to the gateway.
+    """
+    exec_client._http_client.update_order = AsyncMock()
+    exec_client.generate_order_modify_rejected = MagicMock()
+    tags = [SinopacOrderTags(order_lot="IntradayOdd").value]
+    order, venue_order_id = _add_accepted_order_with_tags(exec_client, sinopac_equity, tags=tags)
+    command = _modify_command(order, venue_order_id, quantity=sinopac_equity.make_qty(20))
+
+    await exec_client._modify_order(command)
+
+    exec_client.generate_order_modify_rejected.assert_not_called()
+    exec_client._http_client.update_order.assert_awaited_once()
+    kwargs = exec_client._http_client.update_order.call_args.kwargs
+    assert kwargs["quantity"] == 20
+    assert kwargs["price"] is None
+
+
+@pytest.mark.asyncio
+async def test_common_lot_price_modify_proceeds(exec_client, sinopac_equity):
+    """
+    A price change on a common-lot order is not guarded and proceeds to the gateway.
+    """
+    exec_client._http_client.update_order = AsyncMock()
+    exec_client.generate_order_modify_rejected = MagicMock()
+    order, venue_order_id = _add_accepted_order_with_tags(
+        exec_client,
+        sinopac_equity,
+        tags=None,
+        quantity=2000,
+    )
+    command = _modify_command(order, venue_order_id, price=sinopac_equity.make_price(590.0))
+
+    await exec_client._modify_order(command)
+
+    exec_client.generate_order_modify_rejected.assert_not_called()
+    exec_client._http_client.update_order.assert_awaited_once()
