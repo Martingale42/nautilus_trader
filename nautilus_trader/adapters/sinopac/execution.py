@@ -20,6 +20,7 @@ import hashlib
 import os
 import string
 from collections.abc import Callable
+from dataclasses import dataclass
 from decimal import ROUND_HALF_EVEN
 from decimal import Decimal
 from typing import Any
@@ -29,6 +30,7 @@ from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
 from nautilus_trader.adapters.sinopac.constants import SINOPAC
 from nautilus_trader.adapters.sinopac.constants import SINOPAC_VENUE
 from nautilus_trader.adapters.sinopac.providers import SinopacInstrumentProvider
+from nautilus_trader.adapters.sinopac.tags import SinopacOrderTags
 from nautilus_trader.cache.cache import Cache
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import MessageBus
@@ -37,6 +39,9 @@ from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.nautilus_pyo3 import sinopac as pyo3_sinopac
 from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacAction
 from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacMarket
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOCType
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOrderCond
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOrderLot
 from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOrderType
 from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacPriceType
 from nautilus_trader.core.uuid import UUID4
@@ -73,9 +78,11 @@ from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import VenueOrderId
 from nautilus_trader.model.instruments import Equity
 from nautilus_trader.model.instruments import FuturesContract
+from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.instruments import OptionContract
 from nautilus_trader.model.objects import AccountBalance
 from nautilus_trader.model.objects import Money
+from nautilus_trader.model.orders import Order
 
 
 class WsDispatcherProtocol(Protocol):
@@ -219,6 +226,223 @@ def _resolve_order_type(
         return SinopacOrderType.ROD, "GTC not supported by TWSE; coerced to ROD"
 
     return None, f"unsupported time-in-force {time_in_force}"
+
+
+# Shioaji-verbatim string -> pyo3 enum. Only the in-scope values are accepted;
+# `Odd` (post-market odd lot) and `Fixing` (fixed-price session) are rejected as
+# unsupported even though the underlying enum can represent them.
+_ORDER_LOT_BY_NAME = {
+    "Common": SinopacOrderLot.COMMON,
+    "IntradayOdd": SinopacOrderLot.INTRADAY_ODD,
+}
+_ORDER_COND_BY_NAME = {
+    "Cash": SinopacOrderCond.CASH,
+    "MarginTrading": SinopacOrderCond.MARGIN_TRADING,
+    "ShortSelling": SinopacOrderCond.SHORT_SELLING,
+}
+_OCTYPE_BY_NAME = {
+    "Auto": SinopacOCType.AUTO,
+    "New": SinopacOCType.NEW,
+    "Cover": SinopacOCType.COVER,
+    "DayTrade": SinopacOCType.DAY_TRADE,
+}
+
+
+@dataclass(frozen=True)
+class _ValidatedTags:
+    """
+    The strongly-typed, validated Sinopac order parameters resolved from tags.
+    """
+
+    order_cond: SinopacOrderCond
+    order_lot: SinopacOrderLot
+    octype: SinopacOCType
+    daytrade_short: bool
+
+
+def _resolve_tag_enums(
+    tags: SinopacOrderTags,
+) -> tuple[SinopacOrderCond | None, SinopacOrderLot | None, SinopacOCType | None, str | None]:
+    """
+    Resolve the Shioaji-verbatim tag strings to pyo3 enums.
+
+    Only the in-scope values are accepted; an unknown (or out-of-scope ``Odd`` /
+    ``Fixing``) value yields a clear rejection reason.
+
+    Parameters
+    ----------
+    tags : SinopacOrderTags
+        The parsed venue-specific order tags.
+
+    Returns
+    -------
+    tuple[SinopacOrderCond | None, SinopacOrderLot | None, SinopacOCType | None, str | None]
+        The mapped order condition, lot, and open-close type, plus a rejection
+        reason (non-``None`` only when a value could not be mapped).
+
+    """
+    order_lot = _ORDER_LOT_BY_NAME.get(tags.order_lot)
+    if order_lot is None:
+        return (
+            None,
+            None,
+            None,
+            f"Unknown order_lot '{tags.order_lot}', expected Common|IntradayOdd",
+        )
+
+    order_cond = _ORDER_COND_BY_NAME.get(tags.order_cond)
+    if order_cond is None:
+        return (
+            None,
+            None,
+            None,
+            f"Unknown order_cond '{tags.order_cond}', expected Cash|MarginTrading|ShortSelling",
+        )
+
+    octype = _OCTYPE_BY_NAME.get(tags.octype)
+    if octype is None:
+        return None, None, None, f"Unknown octype '{tags.octype}', expected Auto|New|Cover|DayTrade"
+
+    return order_cond, order_lot, octype, None
+
+
+def _validate_stock_lot_rules(
+    *,
+    order_lot: SinopacOrderLot,
+    order_cond: SinopacOrderCond,
+    daytrade_short: bool,
+    price_type: SinopacPriceType,
+    order_type: SinopacOrderType,
+    quantity: int,
+) -> str | None:
+    """
+    Validate the stock-only lot/condition rules; return a reason on violation.
+
+    Shioaji hard rules: intraday odd lot must be ``LMT + ROD``, 1-999 shares, and
+    ``Cash``; common-lot quantity must be a multiple of 1000 shares;
+    ``daytrade_short`` requires ``Cash``.
+
+    Parameters
+    ----------
+    order_lot : SinopacOrderLot
+        The resolved order lot.
+    order_cond : SinopacOrderCond
+        The resolved order condition.
+    daytrade_short : bool
+        Whether the order is a day-trade short.
+    price_type : SinopacPriceType
+        The resolved Sinopac price type.
+    order_type : SinopacOrderType
+        The resolved Sinopac order type (time-in-force).
+    quantity : int
+        The order quantity in shares (the wire unit, D1).
+
+    Returns
+    -------
+    str | None
+        A rejection reason, or ``None`` when the order satisfies the rules.
+
+    """
+    if order_lot == SinopacOrderLot.INTRADAY_ODD:
+        if price_type != SinopacPriceType.LMT or order_type != SinopacOrderType.ROD:
+            return "IntradayOdd orders must be LMT + ROD"
+        if not 1 <= quantity <= 999:
+            return f"IntradayOdd quantity must be 1-999 shares, was {quantity}"
+        if order_cond != SinopacOrderCond.CASH:
+            return "IntradayOdd orders must be Cash"
+    elif order_lot == SinopacOrderLot.COMMON and quantity % 1000 != 0:
+        return f"Common-lot quantity must be a multiple of 1000 shares, was {quantity}"
+
+    if daytrade_short and order_cond != SinopacOrderCond.CASH:
+        return "daytrade_short requires order_cond=Cash"
+
+    return None
+
+
+def _validate_and_map_tags(
+    tags: SinopacOrderTags,
+    *,
+    market: SinopacMarket,
+    price_type: SinopacPriceType,
+    order_type: SinopacOrderType,
+    quantity: int,
+) -> tuple[_ValidatedTags | None, str | None, str | None]:
+    """
+    Map Sinopac order tags to pyo3 enums and validate the Taiwan order rules.
+
+    The gateway remains the authoritative validator (422); this fail-fast layer
+    blocks known-illegal combinations before they reach the wire and gives a
+    clear local reason. The range-market price type (``MKP``) is
+    futures/options-only on the Shioaji stock side, so a stock order routed to
+    ``MKP`` is rejected locally rather than left to 500 at the gateway. A stock
+    order carrying a futures ``octype`` is downgraded to ``Auto`` with a warning.
+
+    Parameters
+    ----------
+    tags : SinopacOrderTags
+        The parsed venue-specific order tags.
+    market : SinopacMarket
+        The resolved market (``STOCK``, ``FUTURES``, or ``OPTIONS``).
+    price_type : SinopacPriceType
+        The resolved Sinopac price type.
+    order_type : SinopacOrderType
+        The resolved Sinopac order type (time-in-force).
+    quantity : int
+        The order quantity in shares (the wire unit, D1).
+
+    Returns
+    -------
+    tuple[_ValidatedTags | None, str | None, str | None]
+        The validated parameters (``None`` when the order must be rejected), an
+        optional rejection reason, and an optional warning describing any
+        non-fatal coercion (for example a stock ``octype`` downgrade).
+
+    """
+    order_cond, order_lot, octype, reason = _resolve_tag_enums(tags)
+    if reason is not None:
+        return None, reason, None
+
+    is_stock = market == SinopacMarket.STOCK
+
+    # MKP (range market) is futures/options-only on the Shioaji stock side; a
+    # stock MKP order would raise AttributeError -> HTTP 500 at the gateway.
+    if is_stock and price_type == SinopacPriceType.MKP:
+        return (
+            None,
+            "MARKET_TO_LIMIT (MKP) is not supported for stock orders on Shioaji; use LIMIT or MARKET",
+            None,
+        )
+
+    # Lot-size rules are stock-only: futures/options quantities are contract
+    # counts, and order_lot/order_cond/daytrade_short are stock concepts that the
+    # gateway ignores for the futopt account.
+    if is_stock:
+        lot_reason = _validate_stock_lot_rules(
+            order_lot=order_lot,
+            order_cond=order_cond,
+            daytrade_short=tags.daytrade_short,
+            price_type=price_type,
+            order_type=order_type,
+            quantity=quantity,
+        )
+
+        if lot_reason is not None:
+            return None, lot_reason, None
+
+    # A futures open-close type is meaningless for stocks; downgrade to Auto and
+    # warn rather than reject so an otherwise-valid stock order still goes out.
+    warning: str | None = None
+    if is_stock and octype != SinopacOCType.AUTO:
+        warning = f"octype {tags.octype} ignored for stock order; forced to Auto"
+        octype = SinopacOCType.AUTO
+
+    validated = _ValidatedTags(
+        order_cond=order_cond,
+        order_lot=order_lot,
+        octype=octype,
+        daytrade_short=tags.daytrade_short,
+    )
+    return validated, None, warning
 
 
 class SinopacExecutionClient(LiveExecutionClient):
@@ -641,6 +865,78 @@ class SinopacExecutionClient(LiveExecutionClient):
 
     # -- Order operations -----------------------------------------------------
 
+    def _resolve_validated_tags(
+        self,
+        order: Order,
+        *,
+        market: SinopacMarket,
+        price_type: SinopacPriceType,
+        order_type: SinopacOrderType,
+        quantity: int,
+    ) -> _ValidatedTags | None:
+        instrument_id = order.instrument_id
+
+        try:
+            tags = SinopacOrderTags.from_tags(order.tags)
+        except Exception as e:
+            self.generate_order_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=instrument_id,
+                client_order_id=order.client_order_id,
+                reason=f"Malformed SinopacOrderTags: {e}",
+                ts_event=self._clock.timestamp_ns(),
+            )
+            return None
+
+        validated, reject_reason, tags_warning = _validate_and_map_tags(
+            tags,
+            market=market,
+            price_type=price_type,
+            order_type=order_type,
+            quantity=quantity,
+        )
+
+        if validated is None:
+            self.generate_order_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=instrument_id,
+                client_order_id=order.client_order_id,
+                reason=reject_reason or "Invalid Sinopac order tags",
+                ts_event=self._clock.timestamp_ns(),
+            )
+            return None
+
+        if tags_warning:
+            self._log.warning(f"{tags_warning} for {order.client_order_id}")
+
+        return validated
+
+    def _resolve_send_price(self, order: Order, instrument: Instrument | None) -> float:
+        # Snap the limit price onto the venue tick grid before sending.
+        # SINOPAC-09's residual risk: price precision alone cannot express a
+        # 0.05 tick grid, so an off-grid limit (e.g. 85.37) would be rejected
+        # by the venue. Market orders carry no price: MarketOrder has no
+        # `price` attribute at all and MarketToLimitOrder leaves `price` as
+        # None pre-fill, so `getattr` keeps the access safe for both and
+        # they send price=0.0 (MKT/MKP).
+        order_price = getattr(order, "price", None)
+        if order_price is None:
+            return 0.0
+
+        if instrument is None or instrument.price_increment <= 0:
+            return float(order_price)
+
+        increment = instrument.price_increment.as_decimal()
+        snapped = _snap_price_to_grid(order_price.as_decimal(), increment)
+        snapped_price = instrument.make_price(snapped)
+        if snapped_price != order_price:
+            self._log.warning(
+                f"Snapped off-grid price {order_price} -> {snapped_price} "
+                f"(tick {instrument.price_increment}) for {order.client_order_id}",
+            )
+
+        return float(snapped_price)
+
     async def _submit_order(self, command: SubmitOrder) -> None:
         order = command.order
         instrument_id = order.instrument_id
@@ -683,28 +979,18 @@ class SinopacExecutionClient(LiveExecutionClient):
             instrument = self._cache.instrument(instrument_id)
             market = self._determine_market(instrument)
 
-            # Snap the limit price onto the venue tick grid before sending.
-            # SINOPAC-09's residual risk: price precision alone cannot express a
-            # 0.05 tick grid, so an off-grid limit (e.g. 85.37) would be rejected
-            # by the venue. Market orders carry no price: MarketOrder has no
-            # `price` attribute at all and MarketToLimitOrder leaves `price` as
-            # None pre-fill, so `getattr` keeps the access safe for both and
-            # they send price=0.0 (MKT/MKP).
-            price = 0.0
-            order_price = getattr(order, "price", None)
-            if order_price is not None:
-                if instrument is not None and instrument.price_increment > 0:
-                    increment = instrument.price_increment.as_decimal()
-                    snapped = _snap_price_to_grid(order_price.as_decimal(), increment)
-                    snapped_price = instrument.make_price(snapped)
-                    if snapped_price != order_price:
-                        self._log.warning(
-                            f"Snapped off-grid price {order_price} -> {snapped_price} "
-                            f"(tick {instrument.price_increment}) for {order.client_order_id}",
-                        )
-                    price = float(snapped_price)
-                else:
-                    price = float(order_price)
+            validated = self._resolve_validated_tags(
+                order,
+                market=market,
+                price_type=price_type,
+                order_type=order_type,
+                quantity=quantity,
+            )
+
+            if validated is None:
+                return  # Rejection already emitted by the helper
+
+            price = self._resolve_send_price(order, instrument)
 
             token = _coid_token(order.client_order_id.value)
 
@@ -715,8 +1001,12 @@ class SinopacExecutionClient(LiveExecutionClient):
                 quantity=quantity,
                 price_type=price_type,
                 order_type=order_type,
+                order_cond=validated.order_cond,
+                order_lot=validated.order_lot,
                 market=market,
                 custom_field=token,
+                octype=validated.octype,
+                daytrade_short=validated.daytrade_short,
             )
 
             # Defensive (second line of defense): a synchronously-rejecting or

@@ -22,9 +22,14 @@ from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
 from nautilus_trader.adapters.sinopac.execution import SinopacExecutionClient
 from nautilus_trader.adapters.sinopac.execution import _coid_token
 from nautilus_trader.adapters.sinopac.providers import SinopacInstrumentProvider
+from nautilus_trader.adapters.sinopac.tags import TAG_PREFIX
+from nautilus_trader.adapters.sinopac.tags import SinopacOrderTags
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import MessageBus
 from nautilus_trader.core.nautilus_pyo3 import sinopac as pyo3_sinopac
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOCType
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOrderCond
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOrderLot
 from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOrderType
 from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacPriceType
 from nautilus_trader.core.uuid import UUID4
@@ -52,6 +57,11 @@ from nautilus_trader.test_kit.stubs.identifiers import TestIdStubs
 @pytest.fixture
 def sinopac_equity():
     return TestInstrumentProvider.equity(symbol="2330", venue="SINOPAC")
+
+
+@pytest.fixture
+def sinopac_future():
+    return TestInstrumentProvider.future(symbol="MXFF4", underlying="MXF", venue="SINOPAC")
 
 
 @pytest.fixture
@@ -1481,6 +1491,8 @@ async def _submit_built_order(exec_client, order):
 @pytest.mark.parametrize(
     ("order_type", "time_in_force", "expected_price_type", "expected_order_type"),
     [
+        # Stock-eligible price types. MARKET_TO_LIMIT -> MKP is futures/options-only
+        # on Shioaji and is covered separately against a futures instrument below.
         (OrderType.LIMIT, TimeInForce.DAY, SinopacPriceType.LMT, SinopacOrderType.ROD),
         (OrderType.LIMIT, TimeInForce.GTC, SinopacPriceType.LMT, SinopacOrderType.ROD),
         (OrderType.LIMIT, TimeInForce.IOC, SinopacPriceType.LMT, SinopacOrderType.IOC),
@@ -1489,10 +1501,6 @@ async def _submit_built_order(exec_client, order):
         (OrderType.MARKET, TimeInForce.FOK, SinopacPriceType.MKT, SinopacOrderType.FOK),
         (OrderType.MARKET, TimeInForce.GTC, SinopacPriceType.MKT, SinopacOrderType.IOC),
         (OrderType.MARKET, TimeInForce.DAY, SinopacPriceType.MKT, SinopacOrderType.IOC),
-        (OrderType.MARKET_TO_LIMIT, TimeInForce.IOC, SinopacPriceType.MKP, SinopacOrderType.IOC),
-        (OrderType.MARKET_TO_LIMIT, TimeInForce.FOK, SinopacPriceType.MKP, SinopacOrderType.FOK),
-        (OrderType.MARKET_TO_LIMIT, TimeInForce.GTC, SinopacPriceType.MKP, SinopacOrderType.IOC),
-        (OrderType.MARKET_TO_LIMIT, TimeInForce.DAY, SinopacPriceType.MKP, SinopacOrderType.IOC),
     ],
 )
 async def test_order_type_tif_matrix_maps_to_expected_sinopac_args(
@@ -1519,19 +1527,51 @@ async def test_order_type_tif_matrix_maps_to_expected_sinopac_args(
 
 
 @pytest.mark.asyncio
-async def test_market_to_limit_sends_zero_price(exec_client, sinopac_equity):
+@pytest.mark.parametrize(
+    ("time_in_force", "expected_order_type"),
+    [
+        (TimeInForce.IOC, SinopacOrderType.IOC),
+        (TimeInForce.FOK, SinopacOrderType.FOK),
+        (TimeInForce.GTC, SinopacOrderType.IOC),
+        (TimeInForce.DAY, SinopacOrderType.IOC),
+    ],
+)
+async def test_futures_market_to_limit_maps_to_mkp(
+    exec_client,
+    sinopac_future,
+    time_in_force,
+    expected_order_type,
+):
     """
-    MARKET_TO_LIMIT has no pre-fill price; the adapter sends price=0.0 (MKP).
+    A futures MARKET_TO_LIMIT maps to MKP with the coerced market TIF and price=0.0.
     """
+    exec_client._cache.add_instrument(sinopac_future)
     exec_client._http_client.place_order = AsyncMock(
-        return_value={"trade_id": "T-MTL", "code": "2330", "status": "PendingSubmit"},
+        return_value={"trade_id": "T-MKP", "code": "MXFF4", "status": "PendingSubmit"},
     )
-    order = _build_order(sinopac_equity, OrderType.MARKET_TO_LIMIT, TimeInForce.IOC)
+    order = _build_order(sinopac_future, OrderType.MARKET_TO_LIMIT, time_in_force)
 
     await _submit_built_order(exec_client, order)
 
     kwargs = exec_client._http_client.place_order.call_args.kwargs
+    assert kwargs["price_type"] == SinopacPriceType.MKP
+    assert kwargs["order_type"] == expected_order_type
     assert kwargs["price"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_stock_market_to_limit_is_rejected(exec_client, sinopac_equity):
+    """
+    A stock MARKET_TO_LIMIT (MKP) is rejected locally; Shioaji has no stock MKP.
+    """
+    exec_client._http_client.place_order = AsyncMock()
+    exec_client.generate_order_rejected = MagicMock()
+    order = _build_order(sinopac_equity, OrderType.MARKET_TO_LIMIT, TimeInForce.IOC)
+
+    await _submit_built_order(exec_client, order)
+
+    exec_client.generate_order_rejected.assert_called_once()
+    exec_client._http_client.place_order.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1583,3 +1623,197 @@ async def test_unsupported_tif_is_rejected_locally(
 
     exec_client.generate_order_rejected.assert_called_once()
     exec_client._http_client.place_order.assert_not_called()
+
+
+# -- 3.3: tag parsing, local validation, typed pass-through -----------------------------------------
+#
+# Asserts the pyo3 stub receives the mapped enums (and share-denominated odd-lot qty),
+# each Taiwan validation reject case, and that the default (no-tags) path is unchanged.
+
+
+def _odd_lot_order(instrument, *, quantity, tags, time_in_force=TimeInForce.DAY, price=580.0):
+    return TestExecStubs.limit_order(
+        instrument=instrument,
+        order_side=OrderSide.BUY,
+        quantity=instrument.make_qty(quantity),
+        price=instrument.make_price(price),
+        time_in_force=time_in_force,
+        tags=tags,
+    )
+
+
+@pytest.mark.asyncio
+async def test_intraday_odd_happy_path_passes_enums_and_share_qty(exec_client, sinopac_equity):
+    """
+    A 37-share IntradayOdd LMT/ROD order passes the mapped pyo3 enums and 37-share qty.
+    """
+    exec_client._http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-ODD", "code": "2330", "status": "PendingSubmit"},
+    )
+    tags = [SinopacOrderTags(order_lot="IntradayOdd").value]
+    order = _odd_lot_order(sinopac_equity, quantity=37, tags=tags)
+
+    await _submit_built_order(exec_client, order)
+
+    kwargs = exec_client._http_client.place_order.call_args.kwargs
+    assert kwargs["order_lot"] == SinopacOrderLot.INTRADAY_ODD
+    assert kwargs["order_cond"] == SinopacOrderCond.CASH
+    assert kwargs["octype"] == SinopacOCType.AUTO
+    assert kwargs["daytrade_short"] is False
+    assert kwargs["quantity"] == 37
+
+
+@pytest.mark.asyncio
+async def test_margin_trading_passes_order_cond_enum(exec_client, sinopac_equity):
+    """
+    A MarginTrading common-lot order maps order_cond to the MARGIN_TRADING enum.
+    """
+    exec_client._http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-MARGIN", "code": "2330", "status": "PendingSubmit"},
+    )
+    tags = [SinopacOrderTags(order_cond="MarginTrading").value]
+    order = TestExecStubs.limit_order(
+        instrument=sinopac_equity,
+        order_side=OrderSide.BUY,
+        quantity=sinopac_equity.make_qty(1000),
+        price=sinopac_equity.make_price(580.0),
+        tags=tags,
+    )
+
+    await _submit_built_order(exec_client, order)
+
+    kwargs = exec_client._http_client.place_order.call_args.kwargs
+    assert kwargs["order_cond"] == SinopacOrderCond.MARGIN_TRADING
+
+
+@pytest.mark.asyncio
+async def test_futures_cover_octype_passes_through(exec_client, sinopac_future):
+    """
+    A futures order carrying octype=Cover passes the COVER enum through unchanged.
+    """
+    exec_client._cache.add_instrument(sinopac_future)
+    exec_client._http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-COVER", "code": "MXFF4", "status": "PendingSubmit"},
+    )
+    tags = [SinopacOrderTags(octype="Cover").value]
+    order = TestExecStubs.limit_order(
+        instrument=sinopac_future,
+        order_side=OrderSide.BUY,
+        quantity=sinopac_future.make_qty(1),
+        price=sinopac_future.make_price(20000.0),
+        tags=tags,
+    )
+
+    await _submit_built_order(exec_client, order)
+
+    kwargs = exec_client._http_client.place_order.call_args.kwargs
+    assert kwargs["octype"] == SinopacOCType.COVER
+
+
+@pytest.mark.asyncio
+async def test_stock_octype_is_downgraded_to_auto(exec_client, sinopac_equity):
+    """
+    A stock order carrying a futures octype is downgraded to Auto (not rejected).
+    """
+    exec_client._http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-DOWN", "code": "2330", "status": "PendingSubmit"},
+    )
+    tags = [SinopacOrderTags(octype="Cover").value]
+    order = TestExecStubs.limit_order(
+        instrument=sinopac_equity,
+        order_side=OrderSide.BUY,
+        quantity=sinopac_equity.make_qty(1000),
+        price=sinopac_equity.make_price(580.0),
+        tags=tags,
+    )
+
+    await _submit_built_order(exec_client, order)
+
+    kwargs = exec_client._http_client.place_order.call_args.kwargs
+    assert kwargs["octype"] == SinopacOCType.AUTO
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tags_value", "quantity", "time_in_force"),
+    [
+        # Unsupported / unknown lot and cond values.
+        ([SinopacOrderTags(order_lot="Odd").value], 1000, TimeInForce.DAY),
+        ([SinopacOrderTags(order_lot="Fixing").value], 1000, TimeInForce.DAY),
+        ([TAG_PREFIX + '{"order_lot":"Bogus"}'], 1000, TimeInForce.DAY),
+        ([TAG_PREFIX + '{"order_cond":"Bogus"}'], 1000, TimeInForce.DAY),
+        ([TAG_PREFIX + '{"octype":"Bogus"}'], 1000, TimeInForce.DAY),
+        # IntradayOdd rule violations.
+        ([SinopacOrderTags(order_lot="IntradayOdd").value], 1000, TimeInForce.DAY),  # >999 shares
+        ([SinopacOrderTags(order_lot="IntradayOdd").value], 37, TimeInForce.IOC),  # not ROD
+        (
+            [
+                SinopacOrderTags(
+                    order_lot="IntradayOdd",
+                    order_cond="MarginTrading",
+                ).value,
+            ],
+            37,
+            TimeInForce.DAY,
+        ),  # not Cash
+        # Common-lot quantity not a multiple of 1000.
+        ([SinopacOrderTags().value], 1500, TimeInForce.DAY),
+        # daytrade_short without Cash.
+        (
+            [SinopacOrderTags(daytrade_short=True, order_cond="MarginTrading").value],
+            1000,
+            TimeInForce.DAY,
+        ),
+        # Malformed Sinopac tag.
+        ([TAG_PREFIX + "not-json{"], 1000, TimeInForce.DAY),
+    ],
+)
+async def test_invalid_tags_are_rejected_locally(
+    exec_client,
+    sinopac_equity,
+    tags_value,
+    quantity,
+    time_in_force,
+):
+    """
+    Each invalid tag combination is rejected locally and never reaches the gateway.
+    """
+    exec_client._http_client.place_order = AsyncMock()
+    exec_client.generate_order_rejected = MagicMock()
+    order = TestExecStubs.limit_order(
+        instrument=sinopac_equity,
+        order_side=OrderSide.BUY,
+        quantity=sinopac_equity.make_qty(quantity),
+        price=sinopac_equity.make_price(580.0),
+        time_in_force=time_in_force,
+        tags=tags_value,
+    )
+
+    await _submit_built_order(exec_client, order)
+
+    exec_client.generate_order_rejected.assert_called_once()
+    exec_client._http_client.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_default_no_tags_passes_cash_common_auto(exec_client, sinopac_equity):
+    """
+    Regression: a no-tags order passes Cash/Common/Auto/daytrade_short=False as today.
+    """
+    exec_client._http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-DEFAULT", "code": "2330", "status": "PendingSubmit"},
+    )
+    order = TestExecStubs.limit_order(
+        instrument=sinopac_equity,
+        order_side=OrderSide.BUY,
+        quantity=sinopac_equity.make_qty(2000),
+        price=sinopac_equity.make_price(580.0),
+    )
+
+    await _submit_built_order(exec_client, order)
+
+    kwargs = exec_client._http_client.place_order.call_args.kwargs
+    assert kwargs["order_cond"] == SinopacOrderCond.CASH
+    assert kwargs["order_lot"] == SinopacOrderLot.COMMON
+    assert kwargs["octype"] == SinopacOCType.AUTO
+    assert kwargs["daytrade_short"] is False
