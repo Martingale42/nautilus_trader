@@ -19,9 +19,11 @@ import asyncio
 import hashlib
 import os
 import string
+from collections.abc import Callable
 from decimal import ROUND_HALF_EVEN
 from decimal import Decimal
 from typing import Any
+from typing import Protocol
 
 from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
 from nautilus_trader.adapters.sinopac.constants import SINOPAC
@@ -76,6 +78,24 @@ from nautilus_trader.model.objects import AccountBalance
 from nautilus_trader.model.objects import Money
 
 
+class WsDispatcherProtocol(Protocol):
+    """
+    Structural type for the shared-WS dispatcher.
+
+    Matches the public API of ``factories._WsDispatcher``, which fans out shared
+    WebSocket messages to the data and exec clients and refcounts the singleton
+    socket. Declared as a Protocol so this module avoids importing the private
+    ``_WsDispatcher`` from ``factories`` (which imports this module, a cycle).
+
+    """
+
+    def register(self, handler: Callable[[object], None]) -> None: ...
+    def unregister(self, handler: Callable[[object], None]) -> None: ...
+    def dispatch(self, msg: object) -> None: ...
+    async def ensure_connected(self, instruments: list) -> None: ...
+    async def release(self) -> None: ...
+
+
 _B62 = string.digits + string.ascii_letters
 
 
@@ -94,6 +114,7 @@ def _coid_token(client_order_id: str) -> str:
         the same token, so restart reconciliation can recompute the hash
         from cached orders without a persisted map.
     Returns:    A 6-character ASCII string suitable for ``custom_field``.
+
     """
     h = int.from_bytes(
         hashlib.blake2s(client_order_id.encode(), digest_size=8).digest(),
@@ -117,6 +138,7 @@ def _snap_price_to_grid(price: Decimal, increment: Decimal) -> Decimal:
         the upward bias of round-half-up across many snaps.
     Returns:    A ``Decimal`` on the tick grid, exact and ready for
         ``instrument.make_price``. Units match ``price`` (venue quote currency).
+
     """
     steps = (price / increment).quantize(Decimal(1), rounding=ROUND_HALF_EVEN)
     return steps * increment
@@ -173,9 +195,13 @@ class SinopacExecutionClient(LiveExecutionClient):
         The configuration for the client.
     name : str, optional
         The custom client ID.
-    ws_dispatcher : _WsDispatcher, optional
-        The shared-WS dispatcher that fans out messages to data and exec
-        clients. If None, the client dispatches to ``self._handle_msg`` only.
+    ws_dispatcher : WsDispatcherProtocol, optional
+        The shared-WS dispatcher that fans out messages to the data and exec
+        clients and refcounts the singleton socket. Always supplied by
+        ``SinopacLiveExecClientFactory`` in production; the client registers its
+        handler on connect and releases its refcount on disconnect. The optional
+        default exists only for direct construction in tests that never connect;
+        ``_connect`` raises if it was not supplied.
 
     """
 
@@ -190,7 +216,7 @@ class SinopacExecutionClient(LiveExecutionClient):
         instrument_provider: SinopacInstrumentProvider,
         config: SinopacExecClientConfig,
         name: str | None = None,
-        ws_dispatcher: object | None = None,
+        ws_dispatcher: WsDispatcherProtocol | None = None,
     ) -> None:
         account_id_str = config.account_id or os.environ.get(
             "SINOPAC_ACCOUNT_ID",
@@ -222,6 +248,18 @@ class SinopacExecutionClient(LiveExecutionClient):
         # Maps trade_id (VenueOrderId) → client_order_id for WS event correlation
         self._trade_id_to_client_order_id: dict[str, str] = {}
 
+    @property
+    def sinopac_instrument_provider(self) -> SinopacInstrumentProvider:
+        return self._instrument_provider  # type: ignore
+
+    def _require_dispatcher(self) -> WsDispatcherProtocol:
+        if self._ws_dispatcher is None:
+            raise RuntimeError(
+                "ws_dispatcher was not supplied; SinopacLiveExecClientFactory "
+                "always provides one for live use",
+            )
+        return self._ws_dispatcher
+
     # -- Connection lifecycle -------------------------------------------------
 
     async def _connect(self) -> None:
@@ -229,10 +267,11 @@ class SinopacExecutionClient(LiveExecutionClient):
         # instruments -> shared WS -> account state. The exec client establishes
         # the shared WS itself so order/fill events arrive even with no data
         # client; connect() is idempotent (refcounted in the dispatcher).
+        dispatcher = self._require_dispatcher()
         await self._instrument_provider.initialize()
-        instruments = self._instrument_provider.instruments_pyo3()
-        self._ws_dispatcher.register(self._handle_msg)
-        await self._ws_dispatcher.ensure_connected(instruments)
+        instruments = self.sinopac_instrument_provider.instruments_pyo3()
+        dispatcher.register(self._handle_msg)
+        await dispatcher.ensure_connected(instruments)
         await self._ws_client.wait_until_active(timeout_secs=10.0)
         await self._update_account_state()
         self._log.info(
@@ -243,8 +282,9 @@ class SinopacExecutionClient(LiveExecutionClient):
     async def _disconnect(self) -> None:
         # Unregister our handler and release our WS refcount before cancelling
         # background futures; the shared socket closes only at refcount zero.
-        self._ws_dispatcher.unregister(self._handle_msg)
-        await self._ws_dispatcher.release()
+        dispatcher = self._require_dispatcher()
+        dispatcher.unregister(self._handle_msg)
+        await dispatcher.release()
 
         await cancel_tasks_with_timeout(
             self._client_futures,
@@ -530,6 +570,7 @@ class SinopacExecutionClient(LiveExecutionClient):
             orders are negligible (62^6 ~ 5.7e10 vs O(10) active orders).
         Returns:    The ``client_order_id`` string, or None if unresolvable
             (caller should fall back to synthetic id or log as external).
+
         """
         # Fast path: in-memory mapping populated by _submit_order on success
         coid = self._trade_id_to_client_order_id.get(lookup_key)

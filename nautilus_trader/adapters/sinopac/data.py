@@ -14,6 +14,8 @@
 # -------------------------------------------------------------------------------------------------
 
 import asyncio
+from collections.abc import Callable
+from typing import Protocol
 
 from nautilus_trader.adapters.sinopac.config import SinopacDataClientConfig
 from nautilus_trader.adapters.sinopac.constants import SINOPAC
@@ -52,6 +54,24 @@ from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import InstrumentId
 
 
+class WsDispatcherProtocol(Protocol):
+    """
+    Structural type for the shared-WS dispatcher.
+
+    Matches the public API of ``factories._WsDispatcher``, which fans out shared
+    WebSocket messages to the data and exec clients and refcounts the singleton
+    socket. Declared as a Protocol so this module avoids importing the private
+    ``_WsDispatcher`` from ``factories`` (which imports this module, a cycle).
+
+    """
+
+    def register(self, handler: Callable[[object], None]) -> None: ...
+    def unregister(self, handler: Callable[[object], None]) -> None: ...
+    def dispatch(self, msg: object) -> None: ...
+    async def ensure_connected(self, instruments: list) -> None: ...
+    async def release(self) -> None: ...
+
+
 class SinopacDataClient(LiveMarketDataClient):
     """
     Provides a data client for the Sinopac (SinoPac) adapter.
@@ -76,9 +96,13 @@ class SinopacDataClient(LiveMarketDataClient):
         The configuration for the client.
     name : str, optional
         The custom client ID.
-    ws_dispatcher : _WsDispatcher, optional
-        The shared-WS dispatcher that fans out messages to data and exec
-        clients. If None, the client dispatches to ``self._handle_msg`` only.
+    ws_dispatcher : WsDispatcherProtocol, optional
+        The shared-WS dispatcher that fans out messages to the data and exec
+        clients and refcounts the singleton socket. Always supplied by
+        ``SinopacLiveDataClientFactory`` in production; the client registers its
+        handler on connect and releases its refcount on disconnect. The optional
+        default exists only for direct construction in tests that never connect;
+        ``_connect`` raises if it was not supplied.
 
     """
 
@@ -93,7 +117,7 @@ class SinopacDataClient(LiveMarketDataClient):
         instrument_provider: SinopacInstrumentProvider,
         config: SinopacDataClientConfig,
         name: str | None = None,
-        ws_dispatcher: object | None = None,
+        ws_dispatcher: WsDispatcherProtocol | None = None,
     ) -> None:
         super().__init__(
             loop=loop,
@@ -123,6 +147,14 @@ class SinopacDataClient(LiveMarketDataClient):
     def sinopac_instrument_provider(self) -> SinopacInstrumentProvider:
         return self._instrument_provider  # type: ignore
 
+    def _require_dispatcher(self) -> WsDispatcherProtocol:
+        if self._ws_dispatcher is None:
+            raise RuntimeError(
+                "ws_dispatcher was not supplied; SinopacLiveDataClientFactory "
+                "always provides one for live use",
+            )
+        return self._ws_dispatcher
+
     # -- Connection lifecycle -------------------------------------------------
 
     async def _connect(self) -> None:
@@ -134,9 +166,10 @@ class SinopacDataClient(LiveMarketDataClient):
         # The dispatcher owns the singleton socket; connect() is idempotent so
         # either the data or exec client may establish it (events broadcast to
         # all connections).
+        dispatcher = self._require_dispatcher()
         instruments_pyo3 = self.sinopac_instrument_provider.instruments_pyo3()
-        self._ws_dispatcher.register(self._handle_msg)
-        await self._ws_dispatcher.ensure_connected(instruments_pyo3)
+        dispatcher.register(self._handle_msg)
+        await dispatcher.ensure_connected(instruments_pyo3)
         await self._ws_client.wait_until_active(timeout_secs=10.0)
 
         self._log.info(
@@ -150,8 +183,9 @@ class SinopacDataClient(LiveMarketDataClient):
         # Unregister our handler and release our WS refcount. The shared socket
         # is torn down only when the last client (data or exec) releases, so the
         # data client disconnecting never severs the exec client's event stream.
-        self._ws_dispatcher.unregister(self._handle_msg)
-        await self._ws_dispatcher.release()
+        dispatcher = self._require_dispatcher()
+        dispatcher.unregister(self._handle_msg)
+        await dispatcher.release()
 
         await cancel_tasks_with_timeout(
             self._client_futures,
