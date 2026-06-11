@@ -13,7 +13,6 @@ Prerequisites:
 CAUTION: Set dry_run=True to prevent actual order placement.
 """
 
-import os
 from decimal import Decimal
 
 from nautilus_trader.adapters.sinopac.config import SinopacDataClientConfig
@@ -45,9 +44,12 @@ offset_ticks = 10  # Offset from market price for limit orders
 sinopac_account_id = None  # Set to your account ID, or use SINOPAC_ACCOUNT_ID env var
 gateway_host = "localhost"
 gateway_port = 8123  # gateway moved off the popular 8000 (collided with vLLM)
-# Defaults to safe dry-run; the market-open cron sets SINOPAC_EXEC_DRY_RUN=false
-# ONLY after confirming the gateway reports simulation=true.
-dry_run = os.environ.get("SINOPAC_EXEC_DRY_RUN", "true").lower() not in ("false", "0", "no")
+# Places REAL orders so the full path reaches shioaji-server (dry_run=True would
+# short-circuit inside NT before the order is sent, never exercising the gateway
+# end-to-end). The configured gateway (:8123) is the SIMULATION gateway — never
+# point this at a live gateway. The market-open cron wrapper additionally refuses
+# to run this tester unless the gateway reports simulation=true.
+dry_run = False
 
 config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
