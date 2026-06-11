@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.12, <3.15"
 
 [options]
-exclude-newer = "2026-04-09T22:13:57.84284684Z"
+exclude-newer = "2026-06-08T07:59:48.414459274Z"
 exclude-newer-span = "P3D"
 
 [[package]]
@@ -1540,7 +1540,7 @@ wheels = [
 
 [[package]]
 name = "nautilus-trader"
-version = "1.226.0"
+version = "1.226.3"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
