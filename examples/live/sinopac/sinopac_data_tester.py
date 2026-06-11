@@ -34,7 +34,7 @@ from nautilus_trader.test_kit.strategies.tester_data import DataTesterConfig
 
 # Configuration
 gateway_host = "localhost"
-gateway_port = 8000
+gateway_port = 8123  # gateway moved off the popular 8000 (collided with vLLM)
 
 config_node = TradingNodeConfig(
     trader_id=TraderId("SINOPAC-DATA-TESTER-001"),

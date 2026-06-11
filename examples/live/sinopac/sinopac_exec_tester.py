@@ -13,6 +13,7 @@ Prerequisites:
 CAUTION: Set dry_run=True to prevent actual order placement.
 """
 
+import os
 from decimal import Decimal
 
 from nautilus_trader.adapters.sinopac.config import SinopacDataClientConfig
@@ -35,12 +36,18 @@ from nautilus_trader.test_kit.strategies.tester_exec import ExecTesterConfig
 
 # Test configuration
 instrument_id = InstrumentId.from_str("2330.SINOPAC")  # TSMC
-trade_size = Decimal(1)  # 1 lot (= 1000 shares for common stocks)
+# Quantities are SHARES end-to-end (gateway wire unit): 1000 shares = 1 common lot,
+# which the gateway converts to 1 SDK lot at the boundary. Was Decimal(1) under the
+# old lots-based wire unit; that now means 1 share (odd-lot) and a common-lot order
+# of 1 share is rejected as a non-1000-multiple.
+trade_size = Decimal(1000)  # 1000 shares = 1 common lot
 offset_ticks = 10  # Offset from market price for limit orders
 sinopac_account_id = None  # Set to your account ID, or use SINOPAC_ACCOUNT_ID env var
 gateway_host = "localhost"
-gateway_port = 8000
-dry_run = True  # Set to False to enable actual order placement (CAUTION!)
+gateway_port = 8123  # gateway moved off the popular 8000 (collided with vLLM)
+# Defaults to safe dry-run; the market-open cron sets SINOPAC_EXEC_DRY_RUN=false
+# ONLY after confirming the gateway reports simulation=true.
+dry_run = os.environ.get("SINOPAC_EXEC_DRY_RUN", "true").lower() not in ("false", "0", "no")
 
 config_node = TradingNodeConfig(
     trader_id=TraderId("TESTER-001"),
