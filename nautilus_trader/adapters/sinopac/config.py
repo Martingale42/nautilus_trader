@@ -27,7 +27,7 @@ class SinopacDataClientConfig(LiveDataClientConfig, frozen=True):
         The venue for the client.
     gateway_host : str, default "localhost"
         The Sinopac gateway host address.
-    gateway_port : int, default 8000
+    gateway_port : int, default 8123
         The Sinopac gateway HTTP/WS port.
     gateway_ws_path : str, default "/ws"
         The WebSocket endpoint path on the gateway.
@@ -36,7 +36,7 @@ class SinopacDataClientConfig(LiveDataClientConfig, frozen=True):
 
     venue: str = "SINOPAC"
     gateway_host: str = "localhost"
-    gateway_port: int = 8000
+    gateway_port: int = 8123
     gateway_ws_path: str = "/ws"
 
     @property
@@ -60,7 +60,7 @@ class SinopacExecClientConfig(LiveExecClientConfig, frozen=True):
         The Sinopac account identifier. If None, sourced from SINOPAC_ACCOUNT_ID env var.
     gateway_host : str, default "localhost"
         The Sinopac gateway host address.
-    gateway_port : int, default 8000
+    gateway_port : int, default 8123
         The Sinopac gateway HTTP/WS port.
     gateway_ws_path : str, default "/ws"
         The WebSocket endpoint path on the gateway.
@@ -70,7 +70,7 @@ class SinopacExecClientConfig(LiveExecClientConfig, frozen=True):
     venue: str = "SINOPAC"
     account_id: str | None = None
     gateway_host: str = "localhost"
-    gateway_port: int = 8000
+    gateway_port: int = 8123
     gateway_ws_path: str = "/ws"
 
     @property
