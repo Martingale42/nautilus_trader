@@ -28,8 +28,8 @@ use pyo3::{
 use crate::{
     common::{
         enums::{
-            SinopacAction, SinopacMarket, SinopacOrderCond, SinopacOrderLot, SinopacOrderType,
-            SinopacPriceType,
+            SinopacAction, SinopacMarket, SinopacOCType, SinopacOrderCond, SinopacOrderLot,
+            SinopacOrderType, SinopacPriceType,
         },
         parse::parse_instrument_id,
     },
@@ -278,7 +278,7 @@ impl SinopacHttpClient {
 
     /// Places an order via the gateway.
     #[pyo3(name = "place_order")]
-    #[pyo3(signature = (code, action, price, quantity, price_type=SinopacPriceType::LMT, order_type=SinopacOrderType::ROD, order_cond=SinopacOrderCond::Cash, order_lot=SinopacOrderLot::Common, market=SinopacMarket::Stock, custom_field=None))]
+    #[pyo3(signature = (code, action, price, quantity, price_type=SinopacPriceType::LMT, order_type=SinopacOrderType::ROD, order_cond=SinopacOrderCond::Cash, order_lot=SinopacOrderLot::Common, market=SinopacMarket::Stock, custom_field=None, octype=SinopacOCType::Auto, daytrade_short=false))]
     #[allow(clippy::too_many_arguments)]
     fn py_place_order<'py>(
         &self,
@@ -293,6 +293,8 @@ impl SinopacHttpClient {
         order_lot: SinopacOrderLot,
         market: SinopacMarket,
         custom_field: Option<String>,
+        octype: SinopacOCType,
+        daytrade_short: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = self.clone();
         let request = PlaceOrderRequest {
@@ -304,6 +306,8 @@ impl SinopacHttpClient {
             order_type,
             order_cond,
             order_lot,
+            octype,
+            daytrade_short,
             market,
             custom_field,
         };

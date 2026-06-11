@@ -151,6 +151,14 @@ pub enum SinopacOCType {
     DayTrade,
 }
 
+impl Default for SinopacOCType {
+    /// Returns the default open-close type, which delegates the open-close
+    /// decision to the gateway based on the net position.
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
 /// Represents a quote subscription type.
 #[cfg_attr(
     feature = "python",

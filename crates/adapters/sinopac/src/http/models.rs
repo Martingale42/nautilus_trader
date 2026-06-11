@@ -18,8 +18,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::common::enums::{
-    SinopacAction, SinopacMarket, SinopacOrderCond, SinopacOrderLot, SinopacOrderType,
-    SinopacPriceType,
+    SinopacAction, SinopacMarket, SinopacOCType, SinopacOrderCond, SinopacOrderLot,
+    SinopacOrderType, SinopacPriceType,
 };
 
 /// Represents a login request payload.
@@ -292,6 +292,16 @@ pub struct PlaceOrderRequest {
     pub order_cond: SinopacOrderCond,
     /// The lot size type (Common, Odd, IntradayOdd, Fixing).
     pub order_lot: SinopacOrderLot,
+    /// The futures/options open-close type (Auto, New, Cover, DayTrade);
+    /// ignored for stocks. `#[serde(default)]` keeps older fixtures that omit
+    /// the field deserializable (defaults to `Auto`).
+    #[serde(default)]
+    pub octype: SinopacOCType,
+    /// The stock day-trade short flag (現股當沖); requires `order_cond == Cash`.
+    /// `#[serde(default)]` keeps older fixtures that omit the field
+    /// deserializable (defaults to `false`).
+    #[serde(default)]
+    pub daytrade_short: bool,
     /// The market type (stock, futures, options).
     pub market: SinopacMarket,
     /// Free-form tag for order adoption (max 6 ASCII, adapter stores a

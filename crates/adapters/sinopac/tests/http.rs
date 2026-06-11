@@ -19,7 +19,13 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use axum::{Router, routing::get};
 use nautilus_common::testing::wait_until_async;
-use nautilus_sinopac::http::{client::SinopacHttpClient, query::SnapshotsQuery};
+use nautilus_sinopac::{
+    common::enums::{
+        SinopacAction, SinopacMarket, SinopacOCType, SinopacOrderCond, SinopacOrderLot,
+        SinopacOrderType, SinopacPriceType,
+    },
+    http::{client::SinopacHttpClient, models::PlaceOrderRequest, query::SnapshotsQuery},
+};
 use rstest::rstest;
 
 fn load_test_json(filename: &str) -> String {
@@ -175,4 +181,53 @@ async fn test_list_trades_filled_fields() {
     assert_eq!(trades[1].trade_id, "trade-002");
     assert_eq!(trades[1].filled_qty, 0);
     assert_eq!(trades[1].avg_fill_price, 0.0);
+}
+
+#[rstest]
+fn test_place_order_request_serializes_octype_and_daytrade_short() {
+    // A futures order opening a new position serializes the bare member name
+    // "New" (NOT "NewPosition") so it is byte-identical to the gateway OCType
+    // StrEnum resolved via getattr(sj.constant.FuturesOCType, value).
+    let request = PlaceOrderRequest {
+        code: "TXFC6".to_string(),
+        action: SinopacAction::Buy,
+        price: 20000.0,
+        quantity: 1,
+        price_type: SinopacPriceType::LMT,
+        order_type: SinopacOrderType::ROD,
+        order_cond: SinopacOrderCond::Cash,
+        order_lot: SinopacOrderLot::Common,
+        octype: SinopacOCType::New,
+        daytrade_short: true,
+        market: SinopacMarket::Futures,
+        custom_field: None,
+    };
+
+    let json = serde_json::to_value(&request).expect("serialize PlaceOrderRequest");
+    assert_eq!(json["octype"], "New");
+    assert_eq!(json["daytrade_short"], true);
+}
+
+#[rstest]
+fn test_place_order_request_serializes_default_octype_and_daytrade_short() {
+    // The defaults serialize as "Auto" / false so a plain stock order keeps the
+    // gateway's auto open-close behaviour and no day-trade short flag.
+    let request = PlaceOrderRequest {
+        code: "2330".to_string(),
+        action: SinopacAction::Buy,
+        price: 580.0,
+        quantity: 1000,
+        price_type: SinopacPriceType::LMT,
+        order_type: SinopacOrderType::ROD,
+        order_cond: SinopacOrderCond::Cash,
+        order_lot: SinopacOrderLot::Common,
+        octype: SinopacOCType::default(),
+        daytrade_short: false,
+        market: SinopacMarket::Stock,
+        custom_field: None,
+    };
+
+    let json = serde_json::to_value(&request).expect("serialize PlaceOrderRequest");
+    assert_eq!(json["octype"], "Auto");
+    assert_eq!(json["daytrade_short"], false);
 }
