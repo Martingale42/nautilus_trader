@@ -297,7 +297,7 @@ pub struct PlaceOrderRequest {
     /// the field deserializable (defaults to `Auto`).
     #[serde(default)]
     pub octype: SinopacOCType,
-    /// The stock day-trade short flag (現股當沖); requires `order_cond == Cash`.
+    /// The stock intraday day-trade short flag (cash-account same-day short); requires `order_cond == Cash`.
     /// `#[serde(default)]` keeps older fixtures that omit the field
     /// deserializable (defaults to `false`).
     #[serde(default)]
