@@ -127,6 +127,30 @@ pub enum SinopacOrderLot {
     Fixing,
 }
 
+/// Represents a futures/options open-close type (`octype`).
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        eq,
+        eq_int,
+        frozen,
+        module = "nautilus_trader.core.nautilus_pyo3.sinopac",
+        rename_all = "SCREAMING_SNAKE_CASE",
+        from_py_object,
+    )
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SinopacOCType {
+    /// Auto open-close (gateway decides based on net position).
+    Auto,
+    /// Open a new position.
+    New,
+    /// Cover (close) an existing position.
+    Cover,
+    /// Day-trade open-close.
+    DayTrade,
+}
+
 /// Represents a quote subscription type.
 #[cfg_attr(
     feature = "python",
@@ -206,4 +230,32 @@ pub enum SinopacOrderEvent {
     /// Futures deal (fill) event.
     #[serde(rename = "OrderState.FuturesDeal")]
     FuturesDeal,
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    /// The `octype` wire value must be the bare enum member name, byte-identical
+    /// to the gateway `OCType` StrEnum (Auto/New/Cover/DayTrade) which is
+    /// resolved via `getattr(sj.constant.FuturesOCType, value)`. A rename here
+    /// would be a critical cross-repo mismatch on a real-money order field.
+    #[rstest]
+    #[case(SinopacOCType::Auto, "\"Auto\"")]
+    #[case(SinopacOCType::New, "\"New\"")]
+    #[case(SinopacOCType::Cover, "\"Cover\"")]
+    #[case(SinopacOCType::DayTrade, "\"DayTrade\"")]
+    fn test_octype_serializes_to_member_name(
+        #[case] octype: SinopacOCType,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(serde_json::to_string(&octype).unwrap(), expected);
+        // Round-trips back from the gateway wire value.
+        assert_eq!(
+            serde_json::from_str::<SinopacOCType>(expected).unwrap(),
+            octype
+        );
+    }
 }

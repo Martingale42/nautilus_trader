@@ -34,6 +34,7 @@ pub fn sinopac(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SinopacOrderType>()?;
     m.add_class::<SinopacOrderCond>()?;
     m.add_class::<SinopacOrderLot>()?;
+    m.add_class::<SinopacOCType>()?;
     m.add_class::<SinopacQuoteType>()?;
     m.add_class::<SinopacMarket>()?;
     m.add_class::<SinopacExchange>()?;
