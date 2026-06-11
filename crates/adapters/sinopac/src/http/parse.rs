@@ -15,7 +15,7 @@
 
 //! Parsers that convert Sinopac REST responses to Nautilus domain types.
 
-use nautilus_core::UnixNanos;
+use nautilus_core::{Params, UnixNanos};
 use nautilus_model::{
     data::{Bar, BarType, QuoteTick, TradeTick},
     enums::{AggressorSide, AssetClass, OptionKind},
@@ -168,12 +168,26 @@ pub fn parse_kbars_response(
     Ok(result)
 }
 
+/// Builds the instrument `info` map carrying the contract reference price.
+///
+/// Strategies read `instrument.info["reference"]` to place reference-price
+/// (flat / unchanged-price) orders; the daily limit-up/limit-down already
+/// surface as `max_price`/`min_price`. The map preserves insertion order via `Params`
+/// (`IndexMap<String, serde_json::Value>`), matching how sibling adapters
+/// populate `info`.
+fn build_reference_info(reference: f64) -> Params {
+    let mut params = Params::new();
+    params.insert("reference".to_string(), serde_json::Value::from(reference));
+    params
+}
+
 /// Parses a gateway `StockContract` into a Nautilus `Equity` instrument.
 ///
 /// - `InstrumentId` = `{code}.SINOPAC`
 /// - Tick size and precision derived from reference price via TWSE schedule
 /// - Currency from `contract.currency` (fallback TWD)
 /// - Lot size from `contract.unit` (fallback `STOCK_LOT_SIZE` = 1000 shares)
+/// - `info["reference"]` carries the contract reference price for reference-price orders
 pub fn parse_stock_to_equity(
     contract: &StockContract,
     ts_event: UnixNanos,
@@ -218,7 +232,7 @@ pub fn parse_stock_to_equity(
         None, // margin_maint
         None, // maker_fee
         None, // taker_fee
-        None, // info
+        Some(build_reference_info(contract.reference)),
         ts_event,
         ts_init,
     );
@@ -283,6 +297,7 @@ fn futures_tick_for_contract(contract: &FuturesContract) -> (f64, u8) {
 /// - Currency from `contract.currency` (fallback TWD)
 /// - Tick size selected by contract evidence via [`futures_tick_for_contract`];
 ///   expiration from `delivery_date`
+/// - `info["reference"]` carries the contract reference price for reference-price orders
 pub fn parse_futures_to_contract(
     contract: &FuturesContract,
     ts_event: UnixNanos,
@@ -353,7 +368,7 @@ pub fn parse_futures_to_contract(
         None, // margin_maint
         None, // maker_fee
         None, // taker_fee
-        None, // info
+        Some(build_reference_info(contract.reference)),
         ts_event,
         ts_init,
     );
@@ -371,6 +386,7 @@ pub fn parse_futures_to_contract(
 /// - Currency from `contract.currency` (fallback TWD)
 /// - Tick size from `options_tick_size()` based on reference premium
 /// - Option kind parsed from `option_right` ("C" = Call / "P" = Put)
+/// - `info["reference"]` carries the contract reference price for reference-price orders
 pub fn parse_options_to_contract(
     contract: &OptionsContract,
     ts_event: UnixNanos,
@@ -454,7 +470,7 @@ pub fn parse_options_to_contract(
         None, // margin_maint
         None, // maker_fee
         None, // taker_fee
-        None, // info
+        Some(build_reference_info(contract.reference)),
         ts_event,
         ts_init,
     );
@@ -618,6 +634,61 @@ mod tests {
                 assert_eq!(o.underlying().unwrap().as_str(), "TXO");
                 assert_eq!(o.multiplier().as_f64(), 50.0);
                 assert_eq!(o.quote_currency().code.as_str(), "TWD");
+            }
+            _ => panic!("Expected OptionContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_parse_stock_info_contains_reference() {
+        // Strategies read instrument.info["reference"] for reference-price
+        // orders; the 2330 fixture reference is 580.0.
+        let contracts: Vec<StockContract> = load_test_json_as("contracts_stocks.json");
+        let equity =
+            parse_stock_to_equity(&contracts[0], UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+
+        match equity {
+            InstrumentAny::Equity(e) => {
+                let info = e.info.as_ref().expect("info should be populated");
+                assert_eq!(info.get("reference").and_then(|v| v.as_f64()), Some(580.0));
+            }
+            _ => panic!("Expected Equity"),
+        }
+    }
+
+    #[rstest]
+    fn test_parse_futures_info_contains_reference() {
+        // The TXFC6 fixture reference is 20000.0.
+        let contracts: Vec<FuturesContract> = load_test_json_as("contracts_futures.json");
+        let instrument =
+            parse_futures_to_contract(&contracts[0], UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+
+        match instrument {
+            InstrumentAny::FuturesContract(f) => {
+                let info = f.info.as_ref().expect("info should be populated");
+                assert_eq!(
+                    info.get("reference").and_then(|v| v.as_f64()),
+                    Some(20000.0)
+                );
+            }
+            _ => panic!("Expected FuturesContract"),
+        }
+    }
+
+    #[rstest]
+    fn test_parse_options_info_contains_reference() {
+        // The TXO20000C6 fixture reference (premium) is 500.0.
+        let contracts: Vec<OptionsContract> = load_test_json_as("contracts_options.json");
+        let instrument =
+            parse_options_to_contract(&contracts[0], UnixNanos::default(), UnixNanos::default())
+                .unwrap();
+
+        match instrument {
+            InstrumentAny::OptionContract(o) => {
+                let info = o.info.as_ref().expect("info should be populated");
+                assert_eq!(info.get("reference").and_then(|v| v.as_f64()), Some(500.0));
             }
             _ => panic!("Expected OptionContract"),
         }
