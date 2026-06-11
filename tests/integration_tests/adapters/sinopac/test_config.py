@@ -20,7 +20,7 @@ from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
 def test_data_client_config_defaults(sinopac_data_config: SinopacDataClientConfig):
     assert sinopac_data_config.venue == "SINOPAC"
     assert sinopac_data_config.gateway_host == "localhost"
-    assert sinopac_data_config.gateway_port == 8000
+    assert sinopac_data_config.gateway_port == 8123
     assert sinopac_data_config.gateway_ws_path == "/ws"
 
 
@@ -28,24 +28,24 @@ def test_exec_client_config_defaults(sinopac_exec_config: SinopacExecClientConfi
     assert sinopac_exec_config.venue == "SINOPAC"
     assert sinopac_exec_config.account_id is None
     assert sinopac_exec_config.gateway_host == "localhost"
-    assert sinopac_exec_config.gateway_port == 8000
+    assert sinopac_exec_config.gateway_port == 8123
     assert sinopac_exec_config.gateway_ws_path == "/ws"
 
 
 def test_config_gateway_base_url(sinopac_data_config: SinopacDataClientConfig):
-    assert sinopac_data_config.gateway_base_url == "http://localhost:8000"
+    assert sinopac_data_config.gateway_base_url == "http://localhost:8123"
 
 
 def test_config_gateway_ws_url(sinopac_data_config: SinopacDataClientConfig):
-    assert sinopac_data_config.gateway_ws_url == "ws://localhost:8000/ws"
+    assert sinopac_data_config.gateway_ws_url == "ws://localhost:8123/ws"
 
 
 def test_exec_config_gateway_base_url(sinopac_exec_config: SinopacExecClientConfig):
-    assert sinopac_exec_config.gateway_base_url == "http://localhost:8000"
+    assert sinopac_exec_config.gateway_base_url == "http://localhost:8123"
 
 
 def test_exec_config_gateway_ws_url(sinopac_exec_config: SinopacExecClientConfig):
-    assert sinopac_exec_config.gateway_ws_url == "ws://localhost:8000/ws"
+    assert sinopac_exec_config.gateway_ws_url == "ws://localhost:8123/ws"
 
 
 def test_config_custom_host():
