@@ -25,10 +25,21 @@ from nautilus_trader.adapters.sinopac.providers import SinopacInstrumentProvider
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import MessageBus
 from nautilus_trader.core.nautilus_pyo3 import sinopac as pyo3_sinopac
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOrderType
+from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacPriceType
+from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import SubmitOrder
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import OrderStatus
+from nautilus_trader.model.enums import OrderType
+from nautilus_trader.model.enums import TimeInForce
+from nautilus_trader.model.identifiers import ClientOrderId
+from nautilus_trader.model.identifiers import StrategyId
 from nautilus_trader.model.identifiers import TradeId
+from nautilus_trader.model.identifiers import TraderId
+from nautilus_trader.model.orders import LimitOrder
+from nautilus_trader.model.orders import MarketOrder
+from nautilus_trader.model.orders import MarketToLimitOrder
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 from nautilus_trader.test_kit.stubs.component import TestComponentStubs
 from nautilus_trader.test_kit.stubs.execution import TestExecStubs
@@ -48,8 +59,8 @@ def exec_client(event_loop, sinopac_equity):
     """
     Build a SinopacExecutionClient with mocked pyo3 transports and a real cache.
 
-    The pyo3 HTTP/WS clients are mocked because they require a live gateway. The
-    NT MessageBus / Cache / clock are real so order-state checks are genuine.
+    The pyo3 HTTP/WS clients are mocked because they require a live gateway. The NT
+    MessageBus / Cache / clock are real so order-state checks are genuine.
 
     """
     clock = LiveClock()
@@ -112,8 +123,8 @@ def test_p1_partial_fills_same_seqno_distinct_exchange_seq_yield_distinct_trade_
     sinopac_equity,
 ):
     """
-    Two partial fills of one order share `trade_id` AND `seqno` (per-ORDER) but
-    carry distinct per-fill `exchange_seq` (and distinct deal-level `ordno`).
+    Two partial fills of one order share `trade_id` AND `seqno` (per-ORDER) but carry
+    distinct per-fill `exchange_seq` (and distinct deal-level `ordno`).
 
     The resulting NT TradeIds MUST be distinct, otherwise NT fill dedup drops the
     second fill and the ledger is corrupted (P1). This is the real Shioaji shape:
@@ -181,9 +192,8 @@ def test_p1_partial_fills_same_seqno_distinct_exchange_seq_yield_distinct_trade_
 
 def test_p1_falls_back_to_ordno_when_exchange_seq_absent(exec_client, sinopac_equity):
     """
-    When `exchange_seq` is absent (e.g. simulation / pre-confirmation), the key
-    falls back to the per-fill-unique deal-level `ordno` and fills stay distinct.
-
+    When `exchange_seq` is absent (e.g. simulation / pre-confirmation), the key falls
+    back to the per-fill-unique deal-level `ordno` and fills stay distinct.
     """
     # Arrange
     order, venue_order_id = _add_accepted_order(exec_client, sinopac_equity)
@@ -279,11 +289,15 @@ def test_async_new_failure_on_accepted_order_rejects(exec_client, sinopac_equity
 
     exec_client.generate_order_rejected = MagicMock()
 
+    # op_msg is the venue's raw rejection message; the adapter must pass it through
+    # verbatim into the reject reason (kept ASCII here for the non-Latin lint hook;
+    # the romanized text stands in for the venue's "price tick error" message).
+    venue_op_msg = "jia ge dang shu cuo wu (price tick error)"
     async_reject = {
         "event_type": "stock_order",
         "op_type": "New",
         "op_code": "88",  # off-tick venue rejection (price tick error)
-        "op_msg": "價格檔數錯誤",
+        "op_msg": venue_op_msg,
         "order_id": venue_order_id.value,
         "code": "2330",
     }
@@ -294,7 +308,7 @@ def test_async_new_failure_on_accepted_order_rejects(exec_client, sinopac_equity
     # Assert -- the late async rejection drives ACCEPTED -> REJECTED.
     exec_client.generate_order_rejected.assert_called_once()
     call_kwargs = exec_client.generate_order_rejected.call_args.kwargs
-    assert call_kwargs["reason"] == "價格檔數錯誤"
+    assert call_kwargs["reason"] == venue_op_msg
     # Mapping dropped: the order is no longer working at the venue.
     assert venue_order_id.value not in exec_client._trade_id_to_client_order_id
 
@@ -381,9 +395,10 @@ def test_p2_new_failure_before_accept_still_rejects(exec_client, sinopac_equity)
 @pytest.mark.asyncio
 async def test_p3_timeout_does_not_reject_order(exec_client, sinopac_equity):
     """
-    On HTTP transport timeout the order may be live on the exchange. The client
-    MUST NOT reject it (which would create hidden exposure); it stays SUBMITTED
-    for WS events / reconciliation to resolve (P3).
+    On HTTP transport timeout the order may be live on the exchange.
+
+    The client MUST NOT reject it (which would create hidden exposure); it stays
+    SUBMITTED for WS events / reconciliation to resolve (P3).
 
     """
     # Arrange
@@ -461,9 +476,9 @@ async def test_p3_reconciliation_with_token_adopts_timed_out_order(
     sinopac_equity,
 ):
     """
-    After a place_order timeout, reconciliation via list_trades recovers the
-    original client_order_id through the custom_field token round-trip, enabling
-    NT to adopt the SUBMITTED order instead of creating an external duplicate.
+    After a place_order timeout, reconciliation via list_trades recovers the original
+    client_order_id through the custom_field token round-trip, enabling NT to adopt the
+    SUBMITTED order instead of creating an external duplicate.
 
     This is the BL-1 fix: the 6-char token stored in custom_field at submit time
     is echoed back by list_trades. The adapter recomputes the token for each
@@ -546,6 +561,7 @@ async def test_p3_reconciliation_without_token_falls_back_to_synthetic(
     """
     When custom_field is absent (e.g. orders placed before token feature),
     reconciliation falls back to the synthetic SINOPAC-{trade_id} id.
+
     This is the pre-BL-1 behavior, preserved for backward compatibility.
 
     """
@@ -592,20 +608,26 @@ async def test_p3_reconciliation_without_token_falls_back_to_synthetic(
 
 
 def test_coid_token_deterministic():
-    """The token must be deterministic (restart-safe)."""
+    """
+    The token must be deterministic (restart-safe).
+    """
     coid = "O-20260608-001-000-001"
     assert _coid_token(coid) == _coid_token(coid)
 
 
 def test_coid_token_length_and_ascii():
-    """Token must be exactly 6 ASCII chars (fits ConStrAsciiMax6)."""
+    """
+    Token must be exactly 6 ASCII chars (fits ConStrAsciiMax6).
+    """
     token = _coid_token("any-client-order-id-value")
     assert len(token) == 6
     assert all(c.isalnum() for c in token)
 
 
 def test_coid_token_different_inputs_differ():
-    """Different client_order_ids should produce different tokens (low collision)."""
+    """
+    Different client_order_ids should produce different tokens (low collision).
+    """
     t1 = _coid_token("O-20260608-001-000-001")
     t2 = _coid_token("O-20260608-001-000-002")
     assert t1 != t2
@@ -656,8 +678,8 @@ def test_bl1_order_status_event_with_token_resolves_timed_out_order(
     sinopac_equity,
 ):
     """
-    An order-status WS event carrying custom_field token resolves a timed-out
-    order (no trade_id mapping) back to the original client_order_id.
+    An order-status WS event carrying custom_field token resolves a timed-out order (no
+    trade_id mapping) back to the original client_order_id.
     """
     # Create a submitted order (simulating timeout: no venue mapping).
     order = TestExecStubs.make_submitted_order(
@@ -713,8 +735,8 @@ def test_bl1_deal_event_resolves_via_backfilled_mapping(
     sinopac_equity,
 ):
     """
-    After an order-status event backfills the mapping via token, a subsequent
-    deal event resolves via the fast-path (direct mapping) and generates a fill.
+    After an order-status event backfills the mapping via token, a subsequent deal event
+    resolves via the fast-path (direct mapping) and generates a fill.
     """
     # Create a submitted order, no venue mapping (timeout scenario).
     order = TestExecStubs.make_submitted_order(
@@ -770,8 +792,11 @@ def test_bl1_deal_event_resolves_via_backfilled_mapping(
 @pytest.mark.asyncio
 async def test_bl1_restart_adopt_via_recomputed_hash(exec_client, sinopac_equity):
     """
-    After restart, in-memory mapping is empty. Reconciliation recomputes the
-    token hash from cached orders and still resolves the timed-out order.
+    After restart, in-memory mapping is empty.
+
+    Reconciliation recomputes the token hash from cached orders and still resolves the
+    timed-out order.
+
     """
     from nautilus_trader.execution.messages import GenerateOrderStatusReports
     from nautilus_trader.model.identifiers import ClientOrderId
@@ -825,8 +850,8 @@ async def test_bl1_restart_adopt_via_recomputed_hash(exec_client, sinopac_equity
 
 def test_bl1_external_order_no_token_no_mapping_returns_none(exec_client):
     """
-    _resolve_client_order_id returns None for truly external orders
-    (no mapping, no token).
+    _resolve_client_order_id returns None for truly external orders (no mapping, no
+    token).
     """
     result = exec_client._resolve_client_order_id("UNKNOWN-TRADE", None)
     assert result is None
@@ -936,8 +961,8 @@ async def test_data_disconnect_leaves_ws_up_for_exec(
     stateful_ws_client,
 ):
     """
-    With both clients registered, the data client releasing must not tear down
-    the shared WS while the exec client is still registered.
+    With both clients registered, the data client releasing must not tear down the
+    shared WS while the exec client is still registered.
     """
     from nautilus_trader.adapters.sinopac.factories import _WsDispatcher
 
@@ -980,6 +1005,7 @@ async def test_submit_order_rejects_on_synchronous_failed_status(exec_client, si
     This second line of defense covers a synchronously-rejecting or stale gateway
     that echoes a terminal `Status.Failed` rather than raising or returning 422.
     The trade_id mapping must NOT be populated for such a non-working order.
+
     """
     order = TestExecStubs.limit_order(
         instrument=sinopac_equity,
@@ -1022,6 +1048,7 @@ async def test_submit_order_accepts_on_pending_submit_status(exec_client, sinopa
 
     The async rejection (if any) surfaces later via the order-event path, not the
     defensive submit check.
+
     """
     order = TestExecStubs.limit_order(
         instrument=sinopac_equity,
@@ -1085,8 +1112,8 @@ def test_reconnected_event_schedules_reconciliation(exec_client):
 @pytest.mark.asyncio
 async def test_reconcile_after_reconnect_sends_mass_status(exec_client):
     """
-    Reconnect reconciliation must regenerate a mass status and send it to the
-    engine's mass-status reconciliation entrypoint.
+    Reconnect reconciliation must regenerate a mass status and send it to the engine's
+    mass-status reconciliation entrypoint.
     """
     from nautilus_trader.execution.reports import ExecutionMassStatus
 
@@ -1203,9 +1230,10 @@ async def test_order_status_report_falls_back_to_zero_when_filled_qty_missing(
     """
     A missing filled_qty must fall back to 0 (the warned-incomplete path).
 
-    The warning itself is emitted through NT's Rust logger, which does not
-    propagate to pytest's caplog; the observable contract under test is the
-    explicit 0 fallback that distinguishes "missing" from a real reported value.
+    The warning itself is emitted through NT's Rust logger, which does not propagate to
+    pytest's caplog; the observable contract under test is the explicit 0 fallback that
+    distinguishes "missing" from a real reported value.
+
     """
     from nautilus_trader.execution.messages import GenerateOrderStatusReports
 
@@ -1398,3 +1426,160 @@ async def test_submit_order_leaves_on_grid_price_unchanged(event_loop):
     # Assert
     sent_price = http_client.place_order.call_args.kwargs["price"]
     assert sent_price == pytest.approx(85.35)
+
+
+# -- 3.2: order-type / TIF mapping matrix (MKP + coercion) ------------------------------------------
+#
+# Asserts BEHAVIOR (the price_type / order_type args sent to place_order, or a local
+# reject), never log text. Taiwan rules: LMT accepts ROD/IOC/FOK (GTC->ROD); MKT/MKP
+# require IOC/FOK (GTC/DAY->IOC); GTD/AT_THE_OPEN/AT_THE_CLOSE are rejected locally.
+
+
+# A fixed future expiry (year ~2033) for GTD orders, which NT requires to be > epoch.
+_GTD_EXPIRE_NS = 2_000_000_000_000_000_000
+
+
+def _build_order(instrument, order_type, time_in_force):
+    """
+    Build a fresh order of the given type and time-in-force for the matrix tests.
+    """
+    common = {
+        "trader_id": TraderId("TESTER-000"),
+        "strategy_id": StrategyId("S-001"),
+        "instrument_id": instrument.id,
+        "client_order_id": ClientOrderId("O-MATRIX-1"),
+        "order_side": OrderSide.BUY,
+        "quantity": instrument.make_qty(1000),
+        "time_in_force": time_in_force,
+        "init_id": UUID4(),
+        "ts_init": 0,
+    }
+    gtd = {"expire_time_ns": _GTD_EXPIRE_NS} if time_in_force == TimeInForce.GTD else {}
+    if order_type == OrderType.LIMIT:
+        return LimitOrder(**common, price=instrument.make_price(580.0), **gtd)
+    if order_type == OrderType.MARKET:
+        # MarketOrder does not accept GTD at all (validated upstream by NT).
+        return MarketOrder(**common)
+    if order_type == OrderType.MARKET_TO_LIMIT:
+        return MarketToLimitOrder(**common, **gtd)
+    raise ValueError(order_type)
+
+
+async def _submit_built_order(exec_client, order):
+    exec_client._cache.add_order(order)
+    command = SubmitOrder(
+        trader_id=order.trader_id,
+        strategy_id=order.strategy_id,
+        order=order,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+    await exec_client._submit_order(command)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("order_type", "time_in_force", "expected_price_type", "expected_order_type"),
+    [
+        (OrderType.LIMIT, TimeInForce.DAY, SinopacPriceType.LMT, SinopacOrderType.ROD),
+        (OrderType.LIMIT, TimeInForce.GTC, SinopacPriceType.LMT, SinopacOrderType.ROD),
+        (OrderType.LIMIT, TimeInForce.IOC, SinopacPriceType.LMT, SinopacOrderType.IOC),
+        (OrderType.LIMIT, TimeInForce.FOK, SinopacPriceType.LMT, SinopacOrderType.FOK),
+        (OrderType.MARKET, TimeInForce.IOC, SinopacPriceType.MKT, SinopacOrderType.IOC),
+        (OrderType.MARKET, TimeInForce.FOK, SinopacPriceType.MKT, SinopacOrderType.FOK),
+        (OrderType.MARKET, TimeInForce.GTC, SinopacPriceType.MKT, SinopacOrderType.IOC),
+        (OrderType.MARKET, TimeInForce.DAY, SinopacPriceType.MKT, SinopacOrderType.IOC),
+        (OrderType.MARKET_TO_LIMIT, TimeInForce.IOC, SinopacPriceType.MKP, SinopacOrderType.IOC),
+        (OrderType.MARKET_TO_LIMIT, TimeInForce.FOK, SinopacPriceType.MKP, SinopacOrderType.FOK),
+        (OrderType.MARKET_TO_LIMIT, TimeInForce.GTC, SinopacPriceType.MKP, SinopacOrderType.IOC),
+        (OrderType.MARKET_TO_LIMIT, TimeInForce.DAY, SinopacPriceType.MKP, SinopacOrderType.IOC),
+    ],
+)
+async def test_order_type_tif_matrix_maps_to_expected_sinopac_args(
+    exec_client,
+    sinopac_equity,
+    order_type,
+    time_in_force,
+    expected_price_type,
+    expected_order_type,
+):
+    """
+    Each accepted (order_type, TIF) pair maps to the expected Sinopac price/order type.
+    """
+    exec_client._http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-MATRIX", "code": "2330", "status": "PendingSubmit"},
+    )
+    order = _build_order(sinopac_equity, order_type, time_in_force)
+
+    await _submit_built_order(exec_client, order)
+
+    kwargs = exec_client._http_client.place_order.call_args.kwargs
+    assert kwargs["price_type"] == expected_price_type
+    assert kwargs["order_type"] == expected_order_type
+
+
+@pytest.mark.asyncio
+async def test_market_to_limit_sends_zero_price(exec_client, sinopac_equity):
+    """
+    MARKET_TO_LIMIT has no pre-fill price; the adapter sends price=0.0 (MKP).
+    """
+    exec_client._http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-MTL", "code": "2330", "status": "PendingSubmit"},
+    )
+    order = _build_order(sinopac_equity, OrderType.MARKET_TO_LIMIT, TimeInForce.IOC)
+
+    await _submit_built_order(exec_client, order)
+
+    kwargs = exec_client._http_client.place_order.call_args.kwargs
+    assert kwargs["price"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_market_order_sends_zero_price(exec_client, sinopac_equity):
+    """
+    A MARKET order has no price attribute at all; the adapter must still send price=0.0.
+    """
+    exec_client._http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-MKT", "code": "2330", "status": "PendingSubmit"},
+    )
+    order = _build_order(sinopac_equity, OrderType.MARKET, TimeInForce.IOC)
+
+    await _submit_built_order(exec_client, order)
+
+    kwargs = exec_client._http_client.place_order.call_args.kwargs
+    assert kwargs["price"] == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("order_type", "time_in_force"),
+    [
+        # NOTE: MARKET + GTD is not constructible (NT MarketOrder forbids GTD), so it
+        # is excluded here; the marketable GTD path is covered via MARKET_TO_LIMIT.
+        (OrderType.LIMIT, TimeInForce.GTD),
+        (OrderType.LIMIT, TimeInForce.AT_THE_OPEN),
+        (OrderType.LIMIT, TimeInForce.AT_THE_CLOSE),
+        (OrderType.MARKET, TimeInForce.AT_THE_OPEN),
+        (OrderType.MARKET, TimeInForce.AT_THE_CLOSE),
+        # MARKET_TO_LIMIT accepts only GTD among the unsupported set (NT forbids
+        # AT_THE_OPEN / AT_THE_CLOSE on MarketToLimitOrder upstream).
+        (OrderType.MARKET_TO_LIMIT, TimeInForce.GTD),
+    ],
+)
+async def test_unsupported_tif_is_rejected_locally(
+    exec_client,
+    sinopac_equity,
+    order_type,
+    time_in_force,
+):
+    """
+    GTD / AT_THE_OPEN / AT_THE_CLOSE are rejected locally and never reach the gateway.
+    """
+    exec_client._http_client.place_order = AsyncMock()
+    exec_client.generate_order_rejected = MagicMock()
+    order = _build_order(sinopac_equity, order_type, time_in_force)
+
+    await _submit_built_order(exec_client, order)
+
+    exec_client.generate_order_rejected.assert_called_once()
+    exec_client._http_client.place_order.assert_not_called()

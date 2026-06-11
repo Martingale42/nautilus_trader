@@ -162,6 +162,7 @@ _NT_TO_SINOPAC_ACTION = {
 _NT_TO_SINOPAC_PRICE_TYPE = {
     OrderType.LIMIT: SinopacPriceType.LMT,
     OrderType.MARKET: SinopacPriceType.MKT,
+    OrderType.MARKET_TO_LIMIT: SinopacPriceType.MKP,
 }
 
 _NT_TO_SINOPAC_ORDER_TYPE = {
@@ -169,6 +170,55 @@ _NT_TO_SINOPAC_ORDER_TYPE = {
     TimeInForce.IOC: SinopacOrderType.IOC,
     TimeInForce.FOK: SinopacOrderType.FOK,
 }
+
+# Order types that send no price (price=0.0) and route as marketable orders.
+_MARKETABLE_ORDER_TYPES = frozenset({OrderType.MARKET, OrderType.MARKET_TO_LIMIT})
+
+
+def _resolve_order_type(
+    order_type: OrderType,
+    time_in_force: TimeInForce,
+) -> tuple[SinopacOrderType | None, str | None]:
+    """
+    Resolve a Nautilus (order type, time-in-force) pair to a Sinopac order type.
+
+    Taiwan venues accept only ROD/IOC/FOK and reject GTC entirely; market and
+    range-market orders must be IOC or FOK. Unsupported time-in-force values are
+    coerced (with a warning) or rejected so the order never reaches the gateway
+    in an illegal combination.
+
+    Parameters
+    ----------
+    order_type : OrderType
+        The Nautilus order type (``LIMIT``, ``MARKET``, or ``MARKET_TO_LIMIT``).
+    time_in_force : TimeInForce
+        The Nautilus time-in-force.
+
+    Returns
+    -------
+    tuple[SinopacOrderType | None, str | None]
+        The mapped Sinopac order type (``None`` signals the caller to reject the
+        order) and an optional human-readable warning describing any coercion.
+
+    """
+    if time_in_force in (TimeInForce.IOC, TimeInForce.FOK):
+        return _NT_TO_SINOPAC_ORDER_TYPE[time_in_force], None
+
+    if order_type in _MARKETABLE_ORDER_TYPES:
+        if time_in_force in (TimeInForce.DAY, TimeInForce.GTC):
+            return (
+                SinopacOrderType.IOC,
+                f"market orders require IOC/FOK on TWSE; coerced {time_in_force} to IOC",
+            )
+        return None, f"unsupported time-in-force {time_in_force} for market order"
+
+    # LIMIT order
+    if time_in_force == TimeInForce.DAY:
+        return SinopacOrderType.ROD, None
+    if time_in_force == TimeInForce.GTC:
+        return SinopacOrderType.ROD, "GTC not supported by TWSE; coerced to ROD"
+
+    return None, f"unsupported time-in-force {time_in_force}"
 
 
 class SinopacExecutionClient(LiveExecutionClient):
@@ -610,10 +660,24 @@ class SinopacExecutionClient(LiveExecutionClient):
             code = instrument_id.symbol.value
             action = _NT_TO_SINOPAC_ACTION[order.side]
             price_type = _NT_TO_SINOPAC_PRICE_TYPE[order.order_type]
-            order_type = _NT_TO_SINOPAC_ORDER_TYPE.get(
+
+            order_type, tif_warning = _resolve_order_type(
+                order.order_type,
                 order.time_in_force,
-                SinopacOrderType.ROD,
             )
+
+            if order_type is None:
+                self.generate_order_rejected(
+                    strategy_id=order.strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=order.client_order_id,
+                    reason=tif_warning or f"unsupported time-in-force {order.time_in_force}",
+                    ts_event=self._clock.timestamp_ns(),
+                )
+                return
+            if tif_warning:
+                self._log.warning(f"{tif_warning} for {order.client_order_id}")
+
             quantity = int(order.quantity)
 
             instrument = self._cache.instrument(instrument_id)
@@ -622,21 +686,25 @@ class SinopacExecutionClient(LiveExecutionClient):
             # Snap the limit price onto the venue tick grid before sending.
             # SINOPAC-09's residual risk: price precision alone cannot express a
             # 0.05 tick grid, so an off-grid limit (e.g. 85.37) would be rejected
-            # by the venue. Market orders carry no price.
+            # by the venue. Market orders carry no price: MarketOrder has no
+            # `price` attribute at all and MarketToLimitOrder leaves `price` as
+            # None pre-fill, so `getattr` keeps the access safe for both and
+            # they send price=0.0 (MKT/MKP).
             price = 0.0
-            if order.price is not None:
+            order_price = getattr(order, "price", None)
+            if order_price is not None:
                 if instrument is not None and instrument.price_increment > 0:
                     increment = instrument.price_increment.as_decimal()
-                    snapped = _snap_price_to_grid(order.price.as_decimal(), increment)
+                    snapped = _snap_price_to_grid(order_price.as_decimal(), increment)
                     snapped_price = instrument.make_price(snapped)
-                    if snapped_price != order.price:
+                    if snapped_price != order_price:
                         self._log.warning(
-                            f"Snapped off-grid price {order.price} -> {snapped_price} "
+                            f"Snapped off-grid price {order_price} -> {snapped_price} "
                             f"(tick {instrument.price_increment}) for {order.client_order_id}",
                         )
                     price = float(snapped_price)
                 else:
-                    price = float(order.price)
+                    price = float(order_price)
 
             token = _coid_token(order.client_order_id.value)
 
