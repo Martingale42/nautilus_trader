@@ -941,6 +941,7 @@ class SinopacExecutionClient(LiveExecutionClient):
                 ts_init=command.ts_init,
             ),
         )
+
         for report in reports:
             if command.client_order_id and report.client_order_id == command.client_order_id:
                 return report
