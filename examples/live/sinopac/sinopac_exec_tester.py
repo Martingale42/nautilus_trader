@@ -30,6 +30,11 @@ The ``SINOPAC_EXEC_SCENARIO`` environment variable selects which strategy runs:
   ``octype=Cover``. With no open position a Cover order is rejected by the venue;
   reaching that terminal rejection is the expected observable.
 
+The MXF front month is resolved DYNAMICALLY at start (nearest non-expired listed
+contract) rather than hard-coded: the gateway lists futures by their resolved
+month code (e.g. ``MXFF6``), never the ``C0``/``C1`` lookup aliases, so a literal
+``MXFC0.SINOPAC`` id would never resolve in the instrument cache.
+
 Margin/short-selling (``order_cond=MarginTrading``/``ShortSelling``) is NOT
 scripted here: the simulation gateway has no credit account, so those paths
 cannot reach a meaningful terminal state in sim. They are a manual pre-live
@@ -64,6 +69,8 @@ from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.events import OrderEvent
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
+from nautilus_trader.model.identifiers import Venue
+from nautilus_trader.model.instruments import FuturesContract
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.orders import Order
 from nautilus_trader.test_kit.strategies.tester_exec import ExecTester
@@ -78,8 +85,15 @@ from nautilus_trader.trading.strategy import Strategy
 # old lots-based wire unit; that now means 1 share (odd-lot) and a common-lot order
 # of 1 share is rejected as a non-1000-multiple.
 STOCK_INSTRUMENT_ID = InstrumentId.from_str("2330.SINOPAC")  # TSMC
-# MXF (Mini-TAIEX) front-month futures, "C0" = current month per Shioaji naming.
-FUTURES_INSTRUMENT_ID = InstrumentId.from_str("MXFC0.SINOPAC")
+SINOPAC_VENUE = Venue("SINOPAC")
+# MXF (Mini-TAIEX) product root. The gateway lists futures by iterating
+# api.Contracts.Futures and emits each contract's RESOLVED month code
+# (letter+year-digit, e.g. "MXFF6"), never the "C0"/"C1" lookup aliases. The Rust
+# adapter sets the instrument-id symbol to contract.code verbatim, so the cache
+# holds ids like "MXFF6.SINOPAC". A hard-coded "MXFC0.SINOPAC" would never resolve;
+# the front month is resolved dynamically at runtime instead (see
+# _resolve_front_month).
+MXF_FUTURES_ROOT = "MXF"
 
 TRADE_SIZE = Decimal(1000)  # 1000 shares = 1 common lot
 OFFSET_TICKS = 10  # Offset from market price for limit orders
@@ -146,6 +160,45 @@ def _resolve_scenario() -> str:
     return scenario
 
 
+def _resolve_front_month(
+    instruments: list[Instrument],
+    root: str,
+    now_ns: int,
+) -> FuturesContract | None:
+    """
+    Select the front-month futures contract for a product root.
+
+    Definition: The front month is the nearest non-expired listed contract for the
+    given product root, i.e. the live contract with the soonest delivery.
+    Formula:    front = argmin_{c in C} c.expiration_ns
+                where C = { c : c is FuturesContract,
+                            c.symbol starts with `root`,
+                            c.expiration_ns > `now_ns` }.
+    Domain:     `instruments` is the set loaded into the cache for one venue;
+                expirations are UNIX nanoseconds (same clock as `now_ns`). Contracts
+                whose symbol does not start with `root`, or whose expiration is at or
+                before `now_ns`, are excluded. Returns ``None`` when `C` is empty
+                (none listed, or all expired).
+    Returns:    The nearest non-expired ``FuturesContract`` for `root`, or ``None``.
+
+    The gateway lists futures by their resolved month code (e.g. ``MXFF6``), so the
+    `root` filter is a symbol prefix match on the product root (e.g. ``MXF``), not a
+    lookup-alias (e.g. ``MXFC0``) match.
+
+    """
+    candidates = [
+        instrument
+        for instrument in instruments
+        if isinstance(instrument, FuturesContract)
+        and instrument.id.symbol.value.startswith(root)
+        and instrument.expiration_ns > now_ns
+    ]
+
+    if not candidates:
+        return None
+    return min(candidates, key=lambda instrument: instrument.expiration_ns)
+
+
 # --- Order-semantics scenario strategy ----------------------------------------
 
 
@@ -155,17 +208,24 @@ class OrderSemanticsScenarioConfig(StrategyConfig, frozen=True):
 
     Parameters
     ----------
-    instrument_id : InstrumentId
-        The instrument to subscribe to and trade.
     scenario : str
         The scenario name, one of ``intraday_odd``, ``mkp``, ``futures_octype``.
+    instrument_id : InstrumentId, optional
+        The fixed instrument to subscribe to and trade. Mutually exclusive with
+        ``front_month_root``; exactly one must be set.
+    front_month_root : str, optional
+        The futures product root (e.g. ``MXF``) whose front month is resolved
+        dynamically from the loaded instruments at start. Used by the futures
+        scenarios because the gateway lists resolved month codes, not the
+        ``C0``/``C1`` lookup aliases. Mutually exclusive with ``instrument_id``.
     dry_run : bool, default False
         If true, the order is built and logged but not submitted.
 
     """
 
-    instrument_id: InstrumentId
     scenario: str
+    instrument_id: InstrumentId | None = None
+    front_month_root: str | None = None
     dry_run: bool = False
 
 
@@ -184,25 +244,59 @@ class OrderSemanticsScenarioStrategy(Strategy):
     def __init__(self, config: OrderSemanticsScenarioConfig) -> None:
         super().__init__(config)
         self.instrument: Instrument | None = None
+        self.instrument_id: InstrumentId | None = None
         self.order: Order | None = None
         self._submitted = False
 
     def on_start(self) -> None:
         """
-        Subscribe to quotes for the configured instrument.
+        Resolve the scenario instrument and subscribe to its quotes.
         """
-        self.instrument = self.cache.instrument(self.config.instrument_id)
+        self.instrument = self._resolve_instrument()
         if self.instrument is None:
-            self.log.error(f"Could not find instrument for {self.config.instrument_id}")
             self.stop()
             return
 
+        self.instrument_id = self.instrument.id
         self.log.info(
-            f"Scenario '{self.config.scenario}' armed on {self.config.instrument_id} "
+            f"Scenario '{self.config.scenario}' armed on {self.instrument_id} "
             f"(dry_run={self.config.dry_run})",
             LogColor.BLUE,
         )
-        self.subscribe_quote_ticks(self.config.instrument_id)
+        self.subscribe_quote_ticks(self.instrument_id)
+
+    def _resolve_instrument(self) -> Instrument | None:
+        """
+        Resolve the instrument to trade for the active scenario.
+
+        For a fixed-id scenario this is a direct cache lookup. For a futures
+        scenario it dynamically selects the front-month contract for the configured
+        product root from the instruments loaded into the cache, because the gateway
+        lists resolved month codes (e.g. ``MXFF6``) rather than the ``C0`` alias.
+
+        Returns
+        -------
+        Instrument or ``None``
+            The resolved instrument, or ``None`` (with a logged error) when it
+            cannot be resolved -- the caller stops the strategy in that case.
+
+        """
+        if self.config.front_month_root is not None:
+            root = self.config.front_month_root
+            instruments = self.cache.instruments(venue=SINOPAC_VENUE)
+            front = _resolve_front_month(instruments, root, self.clock.timestamp_ns())
+            if front is None:
+                self.log.error(
+                    f"No non-expired {root} futures found on {SINOPAC_VENUE} "
+                    f"(checked {len(instruments)} loaded instruments)",
+                )
+                return None
+            return front
+
+        instrument = self.cache.instrument(self.config.instrument_id)
+        if instrument is None:
+            self.log.error(f"Could not find instrument for {self.config.instrument_id}")
+        return instrument
 
     def on_quote_tick(self, quote: QuoteTick) -> None:
         """
@@ -244,15 +338,16 @@ class OrderSemanticsScenarioStrategy(Strategy):
 
         """
         instrument = self.instrument
-        if instrument is None:
+        if instrument is None or self.instrument_id is None:
             self.log.error("No instrument loaded")
             return None
+        instrument_id = self.instrument_id
 
         if self.config.scenario == SCENARIO_INTRADAY_ODD:
             # 37-share intraday odd lot, LIMIT @ bid, ROD. The adapter validates
             # LMT+ROD+1..999 shares+Cash locally before the gateway.
             return self.order_factory.limit(
-                instrument_id=self.config.instrument_id,
+                instrument_id=instrument_id,
                 order_side=OrderSide.BUY,
                 quantity=instrument.make_qty(Decimal(37)),
                 price=quote.bid_price,
@@ -265,7 +360,7 @@ class OrderSemanticsScenarioStrategy(Strategy):
             # only, so this targets the MXF front-month future. The adapter coerces
             # the default GTC TIF to IOC for marketable order types.
             return self.order_factory.market_to_limit(
-                instrument_id=self.config.instrument_id,
+                instrument_id=instrument_id,
                 order_side=OrderSide.BUY,
                 quantity=instrument.make_qty(Decimal(1)),  # 1 futures contract
             )
@@ -275,7 +370,7 @@ class OrderSemanticsScenarioStrategy(Strategy):
             # position a Cover order is rejected by the venue; that terminal
             # rejection is the expected observable.
             return self.order_factory.limit(
-                instrument_id=self.config.instrument_id,
+                instrument_id=instrument_id,
                 order_side=OrderSide.SELL,
                 quantity=instrument.make_qty(Decimal(1)),
                 price=quote.bid_price,
@@ -296,31 +391,50 @@ class OrderSemanticsScenarioStrategy(Strategy):
         """
         Cancel any resting scenario order and unsubscribe.
         """
+        if self.instrument_id is None:
+            return  # Instrument never resolved; nothing was subscribed or submitted
         if not self.config.dry_run:
-            self.cancel_all_orders(self.config.instrument_id)
-        self.unsubscribe_quote_ticks(self.config.instrument_id)
+            self.cancel_all_orders(self.instrument_id)
+        self.unsubscribe_quote_ticks(self.instrument_id)
 
 
 # --- Node assembly -------------------------------------------------------------
 
 
-def _scenario_instrument_id(scenario: str) -> InstrumentId:
+def _build_scenario_config(scenario: str, dry_run: bool) -> OrderSemanticsScenarioConfig:
     """
-    Map a scenario to the instrument it trades.
+    Build the scenario-strategy config for a non-``common`` scenario.
+
+    The futures scenarios (``mkp``, ``futures_octype``) trade the MXF front month,
+    which is resolved dynamically at start because the gateway lists resolved month
+    codes, not the ``C0`` lookup alias; their config carries ``front_month_root``
+    instead of a fixed id (so no fixed ``external_order_claims`` either). The
+    ``intraday_odd`` scenario trades a fixed stock id.
 
     Parameters
     ----------
     scenario : str
-        The scenario name.
+        One of ``intraday_odd``, ``mkp``, ``futures_octype``.
+    dry_run : bool
+        Whether orders are built and logged but not submitted.
 
     Returns
     -------
-    InstrumentId
+    OrderSemanticsScenarioConfig
 
     """
     if scenario in (SCENARIO_MKP, SCENARIO_FUTURES_OCTYPE):
-        return FUTURES_INSTRUMENT_ID
-    return STOCK_INSTRUMENT_ID
+        return OrderSemanticsScenarioConfig(
+            scenario=scenario,
+            front_month_root=MXF_FUTURES_ROOT,
+            dry_run=dry_run,
+        )
+    return OrderSemanticsScenarioConfig(
+        scenario=scenario,
+        instrument_id=STOCK_INSTRUMENT_ID,
+        external_order_claims=[STOCK_INSTRUMENT_ID],
+        dry_run=dry_run,
+    )
 
 
 def build_node(scenario: str) -> TradingNode:
@@ -396,13 +510,7 @@ def build_node(scenario: str) -> TradingNode:
         )
         strategy: Strategy = ExecTester(config=config_tester)
     else:
-        instrument_id = _scenario_instrument_id(scenario)
-        config_scenario = OrderSemanticsScenarioConfig(
-            instrument_id=instrument_id,
-            external_order_claims=[instrument_id],
-            scenario=scenario,
-            dry_run=dry_run,
-        )
+        config_scenario = _build_scenario_config(scenario, dry_run)
         strategy = OrderSemanticsScenarioStrategy(config=config_scenario)
 
     node.trader.add_strategy(strategy)
