@@ -51,7 +51,7 @@ Capability matrix
 ~~~~~~~~~~~~~~~~~~
 - ``order_lot``: ``Common`` (round lot, 1000 shares) | ``IntradayOdd`` (1-999
   shares). Post-market ``Odd`` and ``Fixing`` lots are out of scope (rejected
-  locally; see BACKLOGS B3).
+  locally; tracked as backlog item B3).
 - ``order_cond``: ``Cash`` | ``MarginTrading`` | ``ShortSelling`` (stocks only).
 - ``daytrade_short``: stock day-trade short flag; requires ``order_cond="Cash"``.
 - ``octype``: ``Auto`` | ``New`` | ``Cover`` | ``DayTrade`` (futures/options).
@@ -105,8 +105,8 @@ Out of scope
 ~~~~~~~~~~~~
 Post-market odd lot (``Odd``), fixed-price session (``Fixing``), and TAIFEX
 option combo orders (plus reserve and stop orders) are not supported and are
-tracked in BACKLOGS B3. Single-leg option orders (including ``octype``) are fully
-supported.
+tracked as backlog item B3. Single-leg option orders (including ``octype``) are
+fully supported.
 
 """
 
