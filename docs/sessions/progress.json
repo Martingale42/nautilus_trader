@@ -1,17 +1,45 @@
 {
-  "current_batch": 1,
-  "current_step": "execute",
+  "current_batch": 2,
+  "current_step": "done",
   "model_assignments": {
     "executor": {"model": "sonnet", "effort": "high", "agent": "orchestrator-executor"},
     "reviewer": {"model": "opus", "effort": "xhigh", "agent": "orchestrator-reviewer"},
     "qa":       {"model": "sonnet", "effort": "high", "agent": "orchestrator-qa"}
   },
-  "step_detail": "Ready to begin Batch 1 execution.",
-  "batches_completed": [],
+  "step_detail": "Pipeline complete. Both batches APPROVED, QA PASS, final audit PASS (no Critical; 1 in-scope doc gap fixed inline, rest backlogged).",
+  "batches_completed": [
+    {
+      "batch": 1,
+      "phase": "Code + tests",
+      "tasks": "1-2",
+      "executor_commits": ["9257bdae83", "98db183579", "b349a7564a"],
+      "review_report": "docs/reviews/2026-06-26-batch-1-review.md",
+      "review_commits": ["85bc3c1865", "8906a37ce8"],
+      "review_verdict": "APPROVED",
+      "fix_attempts": 1,
+      "approved": true
+    },
+    {
+      "batch": 2,
+      "phase": "Example + docs",
+      "tasks": "3-4",
+      "executor_commits": ["452db0bb44", "aba8dd801c", "c5bb9a7022"],
+      "review_report": "docs/reviews/2026-06-26-batch-2-review.md",
+      "review_commits": ["ec3620d56f", "dc05a21ac7"],
+      "review_verdict": "APPROVED",
+      "fix_attempts": 1,
+      "approved": true
+    }
+  ],
   "batches_in_progress": null,
-  "qa_status": null,
-  "audit_status": null,
+  "qa_status": "PASS",
+  "qa_attempts": 0,
+  "qa_report": "docs/qa/2026-06-26-full-qa.md",
+  "qa_commits": ["83e690f9ca"],
+  "audit_status": "PASS",
   "audit_attempts": 0,
-  "last_updated": "2026-06-26T00:00:00Z",
-  "notes": "Orchestrator initialized from plan. Audit base branch is sinopac-adapter-clean (this feature branched from there, not develop)."
+  "audit_report": "docs/reviews/2026-06-26-final-audit.md",
+  "audit_commits": ["9fba1dd7bb"],
+  "last_updated": "2026-06-26T03:20:00Z",
+  "notes": "PIPELINE COMPLETE. final_audit (/code-review high vs sinopac-adapter-clean): no Critical findings -> 0 fix cycles. In-scope doc gap (IntradayOdd Cash-only) fixed inline in 9fba1dd7bb; non-blocking example/test items backlogged in docs/reviews/2026-06-26-final-audit.md. Known pre-existing out-of-scope: BUG-2 TIF-coercion warnings render time_in_force as int (execution.py:234,236,244, predates branch at 943fd2f28f). Suite: 114 passed."
 }
