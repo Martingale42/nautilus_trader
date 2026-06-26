@@ -225,7 +225,9 @@ The gateway itself supports `order_lot` ∈ `Common` / `Odd` / `IntradayOdd` /
 :::note
 `IntradayOdd` (盤中零股, 09:00–13:30) is supported: attach
 `SinopacOrderTags(order_lot="IntradayOdd")` to the order's `tags`. Quantities are
-in shares (1–999), and the order must be `LIMIT` + `DAY`. Post-market `Odd`
+in shares (1–999), the order must be `LIMIT` + `DAY`, and the account condition
+must be `Cash` — an intraday odd lot tagged `MarginTrading` or `ShortSelling` is
+rejected locally. Post-market `Odd`
 (盤後零股) and `Fixing` (定盤) lots remain out of scope (backlog item B3).
 :::
 
