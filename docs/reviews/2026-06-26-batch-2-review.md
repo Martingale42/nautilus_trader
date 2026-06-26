@@ -9,13 +9,16 @@
 - `aba8dd801c` — Audit Sinopac integration doc against adapter code
   (`docs/integrations/sinopac.md`)
 
-## Verdict: APPROVED WITH NOTES
+## Verdict: APPROVED
 
-Not CHANGES REQUESTED. The Task 4 integration-doc audit is accurate against the code on
-every claim checked. The single substantive finding is mutually-contradictory and partly
-inaccurate explanatory prose about bracket emulation in the Task 3 example file — a
-comment/docstring defect, not a runtime bug. Tests are green (114 passed). Recommend the
-prose be corrected in a follow-up; it does not block merge.
+Updated 2026-06-26 after fix commit `c5bb9a7022` (see **Fix Verification** at the end).
+Both findings are resolved; tests remain green (114 passed). Original verdict was APPROVED
+WITH NOTES.
+
+The Task 4 integration-doc audit is accurate against the code on every claim checked. The
+single substantive finding was mutually-contradictory and partly inaccurate explanatory
+prose about bracket emulation in the Task 3 example file — a comment/docstring defect, not
+a runtime bug — and has now been corrected in both locations.
 
 ---
 
@@ -164,4 +167,59 @@ Every edited claim cross-checked against code; all accurate:
 - Minor: 1 (order-types row phrasing, polish only)
 
 Task 4 (the high-risk doc audit) is clean. Task 3 functions correctly and matches the plan;
-its only defect is explanatory text. APPROVED WITH NOTES.
+its only defect was explanatory text, now corrected. APPROVED.
+
+---
+
+## Fix Verification
+
+**Fix commit:** `c5bb9a7022` — "fix(sinopac): correct bracket emulation prose in exec tester
+and MKP doc note" (diffed against parent `aba8dd801c`).
+
+### Finding 1 (Important) — bracket-emulation prose — RESOLVED
+
+The two locations are now **consistent with each other** and **accurate**:
+
+- Module docstring [`examples/live/sinopac/sinopac_exec_tester.py:53-59`]:
+  > "...all three legs carrying `emulation_trigger=TriggerType.LAST_PRICE`. All legs are
+  > emulated by the `OrderEmulator`: the entry is held at submit; the OTO-child SL and TP
+  > activate only after the entry fills. Sinopac has no native conditional orders, so no leg
+  > rests natively at the venue."
+- Inline comment in `on_quote_tick` [`examples/live/sinopac/sinopac_exec_tester.py:329-334`]:
+  > "All three legs (entry LIMIT, SL STOP_MARKET, TP LIMIT) carry
+  > `emulation_trigger=LAST_PRICE`, so all are held by the OrderEmulator; SL/TP activate only
+  > after the entry fills. Sinopac has no native conditional orders; no leg rests at the venue
+  > natively."
+
+Checks against the suggested correction:
+- All three legs carry `emulation_trigger=LAST_PRICE` — stated in both. PASS.
+- The emulator holds the entry and activates SL/TP after the entry fills — stated in both. PASS.
+- NO leg "rests natively at the venue" — both now explicitly state the opposite ("no leg rests
+  natively at the venue"). The old "entry limit is placed directly" (docstring) and "TP leg is
+  a plain LIMIT resting at the venue" (inline comment) claims are both **removed**. PASS.
+- Matches the code at `:336-345`: `order_factory.bracket(... entry_order_type=OrderType.LIMIT,
+  emulation_trigger=TriggerType.LAST_PRICE ...)` builds entry LIMIT, default SL STOP_MARKET
+  (from `sl_trigger_price`), TP LIMIT (from `tp_price`), all emulated. PASS.
+- ASCII discipline: the changed docstring (48-60) and inline-comment (320-360) regions are
+  ASCII-clean (`grep -P '[^\x00-\x7F]'` returns nothing). PASS.
+
+### Finding 2 (Minor) — `MARKET_TO_LIMIT` row note — RESOLVED
+
+[`docs/integrations/sinopac.md:185`] reworded to:
+> "Range-market (MKP); stock MKP is rejected locally before reaching the venue; futures and
+> options MKP are supported."
+
+Matches code: `OrderType.MARKET_TO_LIMIT -> SinopacPriceType.MKP` (`execution.py:173`); stock
+MKP rejected locally (`execution.py:425-428`, reason "MARKET_TO_LIMIT (MKP) is not supported
+for stock orders on Shioaji; use LIMIT or MARKET"); the matrix row keeps Stocks ✗ / Futures ✓
+/ Options ✓. The added prose is ASCII (only the pre-existing ✗/✓ table glyphs are non-ASCII,
+unchanged and consistent with the rest of the matrix). PASS.
+
+### Re-run verification
+
+| Check | Command | Result |
+|---|---|---|
+| Sinopac suite | `uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q` | **114 passed in 0.48s** |
+| Exec-tester import + scenarios | `SINOPAC_EXEC_SCENARIO=stop_market SINOPAC_EXEC_DRY_RUN=1 uv run --no-sync python -c "import examples.live.sinopac.sinopac_exec_tester as t; print(t.SCENARIOS)"` | Prints `('common', 'intraday_odd', 'mkp', 'futures_octype', 'stop_market', 'bracket')` — no import error |
+
+Nothing new broken. Both findings resolved. **Verdict updated to APPROVED.**
