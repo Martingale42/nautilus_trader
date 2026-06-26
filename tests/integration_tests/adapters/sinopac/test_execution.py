@@ -21,13 +21,13 @@ import pytest
 
 from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
 from nautilus_trader.adapters.sinopac.execution import SinopacExecutionClient
-from nautilus_trader.common.factories import OrderFactory
 from nautilus_trader.adapters.sinopac.execution import _coid_token
 from nautilus_trader.adapters.sinopac.providers import SinopacInstrumentProvider
 from nautilus_trader.adapters.sinopac.tags import TAG_PREFIX
 from nautilus_trader.adapters.sinopac.tags import SinopacOrderTags
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import MessageBus
+from nautilus_trader.common.factories import OrderFactory
 from nautilus_trader.core.nautilus_pyo3 import sinopac as pyo3_sinopac
 from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOCType
 from nautilus_trader.core.nautilus_pyo3.sinopac import SinopacOrderCond
@@ -42,6 +42,7 @@ from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.enums import TrailingOffsetType
+from nautilus_trader.model.enums import order_type_to_str
 from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import StrategyId
 from nautilus_trader.model.identifiers import TradeId
@@ -2055,6 +2056,7 @@ def test_naked_conditional_order_is_rejected_with_emulation_hint(
     exec_client.generate_order_rejected.assert_called_once()
     reason = exec_client.generate_order_rejected.call_args.kwargs["reason"]
     assert "emulation_trigger" in reason
+    assert order_type_to_str(order_type) in reason
     exec_client._http_client.place_order.assert_not_called()
 
 
@@ -2064,6 +2066,9 @@ def test_naked_conditional_order_is_rejected_with_emulation_hint(
 def test_market_order_preserves_margin_tag_through_submit(
     event_loop, exec_client, sinopac_equity
 ):
+    exec_client._http_client.place_order = AsyncMock(
+        return_value={"trade_id": "T-MARGIN-MKT", "code": "2330", "status": "PendingSubmit"},
+    )
     factory = _order_factory()
     order = factory.market(
         sinopac_equity.id,

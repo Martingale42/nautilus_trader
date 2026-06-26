@@ -70,6 +70,7 @@ from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import PositionSide
 from nautilus_trader.model.enums import TimeInForce
+from nautilus_trader.model.enums import order_type_to_str
 from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import ClientOrderId
@@ -959,14 +960,18 @@ class SinopacExecutionClient(LiveExecutionClient):
         if order.order_type not in _NT_TO_SINOPAC_PRICE_TYPE:
             if order.order_type in _CONDITIONAL_ORDER_TYPES:
                 reason = (
-                    f"Sinopac has no native conditional orders ({order.order_type}); "
+                    f"Sinopac has no native conditional orders "
+                    f"({order_type_to_str(order.order_type)}); "
                     "resubmit with emulation_trigger=LAST_PRICE or BID_ASK to use "
                     "NautilusTrader order emulation"
                 )
             else:
                 # Defensive: no current OrderType reaches here, but a future enum
                 # addition would otherwise be silently dropped.
-                reason = f"Unsupported order type {order.order_type} for Sinopac"
+                reason = (
+                    f"Unsupported order type {order_type_to_str(order.order_type)} "
+                    "for Sinopac"
+                )
             self.generate_order_rejected(
                 strategy_id=order.strategy_id,
                 instrument_id=instrument_id,
