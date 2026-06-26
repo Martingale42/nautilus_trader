@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-26-sinopac-stop-orders-design.md`
 
+**Resume the design session:** `cd /home/cy/Code/MT5/nautilus_trader && claude --resume 6297df69-5502-4399-b9a6-c6126f9c89b7` (see the spec's section 0). This is the design/brainstorming session — distinct from the orchestrator implementation pipeline (`docs/sessions/orchestrator.md`).
+
 ---
 
 ## Setup note (one-time, read before Task 1)

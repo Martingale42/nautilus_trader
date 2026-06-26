@@ -8,6 +8,28 @@
 
 ---
 
+## 0. 接續本設計 session（Resume）
+
+本 spec 與 plan 是在一個互動式 Claude Code **設計 session** 中產出的。日後要回到「同一個
+對話」接續設計討論或修改，用以下指令 resume：
+
+```bash
+# 在原始 repo 目錄執行（session 註冊在此專案下，不是 worktree 目錄）
+cd /home/cy/Code/MT5/nautilus_trader
+claude --resume 6297df69-5502-4399-b9a6-c6126f9c89b7
+```
+
+- **Session ID**: `6297df69-5502-4399-b9a6-c6126f9c89b7`
+  （transcript：`~/.claude/projects/-home-cy-Code-MT5-nautilus-trader/6297df69-5502-4399-b9a6-c6126f9c89b7.jsonl`）
+- **替代方式**：在該目錄執行 `claude --resume`（互動式挑選清單）或 `claude -c`（接續最近一次對話）。
+- **實作 worktree**：程式碼變更在 `.claude/worktrees/sinopac-stop-orders`
+  （branch `sinopac-stop-orders`，base `sinopac-adapter-clean`，仍在磁碟上）。resume 後若要在
+  worktree 內動程式碼，重新進入該 worktree 即可。
+- **注意**：這是「設計 session」。orchestrator 的「實作 pipeline」是**另一個** session，用
+  `docs/sessions/orchestrator.md`（或 `resume.md`）啟動，兩者不同，不要混用。
+
+---
+
 ## 1. 背景與問題陳述
 
 Sinopac adapter 目前的 order type 只支援 `MARKET` / `LIMIT` / `MARKET_TO_LIMIT`（MKP）。
