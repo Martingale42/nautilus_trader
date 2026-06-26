@@ -2056,3 +2056,33 @@ def test_naked_conditional_order_is_rejected_with_emulation_hint(
     reason = exec_client.generate_order_rejected.call_args.kwargs["reason"]
     assert "emulation_trigger" in reason
     exec_client._http_client.place_order.assert_not_called()
+
+
+# -- Tag preservation on emulation-released orders --------------------------------------------------
+
+
+def test_market_order_preserves_margin_tag_through_submit(
+    event_loop, exec_client, sinopac_equity
+):
+    factory = _order_factory()
+    order = factory.market(
+        sinopac_equity.id,
+        OrderSide.SELL,
+        sinopac_equity.make_qty(2000),
+        time_in_force=TimeInForce.IOC,
+        tags=[SinopacOrderTags(order_cond="MarginTrading").value],
+    )
+    exec_client._cache.add_order(order)
+    command = SubmitOrder(
+        trader_id=order.trader_id,
+        strategy_id=order.strategy_id,
+        order=order,
+        command_id=UUID4(),
+        ts_init=0,
+    )
+
+    event_loop.run_until_complete(exec_client._submit_order(command))
+
+    exec_client._http_client.place_order.assert_awaited_once()
+    kwargs = exec_client._http_client.place_order.call_args.kwargs
+    assert kwargs["order_cond"] == SinopacOrderCond.MARGIN_TRADING
