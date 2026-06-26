@@ -6,7 +6,13 @@
 - **Plan:** `docs/plans/2026-06-26-sinopac-stop-orders.md` (Tasks 1-2)
 - **Spec:** `docs/superpowers/specs/2026-06-26-sinopac-stop-orders-design.md`
 
-## Verdict: CHANGES REQUESTED
+## Verdict: APPROVED
+
+> **Updated 2026-06-26 after fix commit `b349a7564a`.** Original verdict was
+> CHANGES REQUESTED; both Important findings (I-1, I-2) and both Minor findings
+> (M-1, M-2) are now resolved. See the **Fix Verification** section at the bottom
+> for the per-finding evidence. The original review text below is preserved
+> unchanged for the record.
 
 The core behavior is correct and well-targeted: all six conditional `OrderType`
 members now reach `generate_order_rejected` with an actionable `emulation_trigger`
@@ -156,3 +162,74 @@ bash .pre-commit-hooks/check_non_latin_text.sh <both files>   # exit 0
    branches) so the rejection reason names the order type.
 3. Recommended: M-1 (assert the type name in the rejection test) and M-2 (set an
    explicit `place_order` `return_value` in the tag test).
+
+---
+
+## Fix Verification (2026-06-26, commit `b349a7564a` vs parent `98db183579`)
+
+All four findings are resolved. Diff touches exactly the two files under review
+(`execution.py` +9/-2, `test_execution.py` +7/-1) with no unrelated changes.
+
+### Per-finding status
+
+**I-1 — Import-ordering lint (ruff `I001`). RESOLVED.**
+The fix moves `from nautilus_trader.common.factories import OrderFactory` out from
+between the two `adapters.sinopac.execution` imports into the
+`nautilus_trader.common.*` group (after `common.component`). A matching
+`order_type_to_str` import was also sorted into the `model.enums` group in both
+files.
+`uv run --no-sync ruff check tests/integration_tests/adapters/sinopac/test_execution.py
+nautilus_trader/adapters/sinopac/execution.py` -> `All checks passed!`
+
+**I-2 — Rejection reason renders the order type by name. RESOLVED.**
+Both reason branches in `_submit_order` (`execution.py`) now interpolate
+`order_type_to_str(order.order_type)` instead of the bare enum:
+- conditional branch: `"Sinopac has no native conditional orders ({order_type_to_str(order.order_type)}); resubmit with emulation_trigger=LAST_PRICE or BID_ASK to use NautilusTrader order emulation"`
+- defensive else: `"Unsupported order type {order_type_to_str(order.order_type)} for Sinopac"`
+Confirmed by direct evaluation that the f-string token rendered `'3'` before and
+`order_type_to_str` renders `'STOP_MARKET'` (and the analogous names for all six
+conditional types). The `emulation_trigger` guidance is retained, so the reason is
+both human-readable and actionable. Output stays ASCII.
+
+**M-1 — Rejection test can now catch an I-2 regression. RESOLVED.**
+`test_naked_conditional_order_is_rejected_with_emulation_hint` adds
+`assert order_type_to_str(order_type) in reason`. This assertion is genuinely
+falsifiable: `order_type_to_str(OrderType.STOP_MARKET) == 'STOP_MARKET'`, which is
+NOT a substring of a reason that rendered the integer `(3)`. A regression to the
+bare enum would therefore fail this assertion rather than pass silently. The
+existing `place_order.assert_not_called()` guard is retained.
+
+**M-2 — `place_order` AsyncMock now models the success path. RESOLVED.**
+`test_market_order_preserves_margin_tag_through_submit` now sets
+`place_order = AsyncMock(return_value={"trade_id": "T-MARGIN-MKT", "code": "2330",
+"status": "PendingSubmit"})`, matching the dict shape used by sibling tests. The
+previously GC-attributed `RuntimeWarning: coroutine ... was never awaited` is gone:
+the targeted run under `-W error::RuntimeWarning` passes, and the full-suite run no
+longer reports the trailing warning.
+
+### Verification commands
+
+```
+uv run --no-sync ruff check tests/integration_tests/adapters/sinopac/test_execution.py \
+    nautilus_trader/adapters/sinopac/execution.py
+# All checks passed!                                              (-> I-1 fixed)
+
+uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q
+# 114 passed in 0.48s    (no warning line; was "114 passed, 1 warning")  (-> M-2 fixed)
+
+uv run --no-sync pytest \
+    ".../test_execution.py::test_market_order_preserves_margin_tag_through_submit" \
+    -W error::RuntimeWarning -q
+# 1 passed                                                        (-> M-2 confirmed)
+
+bash .pre-commit-hooks/check_non_latin_text.sh \
+    nautilus_trader/adapters/sinopac/execution.py \
+    tests/integration_tests/adapters/sinopac/test_execution.py
+# exit 0                                                          (-> ASCII discipline OK)
+```
+
+### Updated verdict: APPROVED
+
+Both Important findings and both addressed Minor findings are resolved; the full
+Sinopac suite is green (114 passed, no warnings) and lint is clean. No new findings
+introduced by the fix.
