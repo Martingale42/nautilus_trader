@@ -13,6 +13,7 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
+from decimal import Decimal
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
@@ -20,6 +21,7 @@ import pytest
 
 from nautilus_trader.adapters.sinopac.config import SinopacExecClientConfig
 from nautilus_trader.adapters.sinopac.execution import SinopacExecutionClient
+from nautilus_trader.common.factories import OrderFactory
 from nautilus_trader.adapters.sinopac.execution import _coid_token
 from nautilus_trader.adapters.sinopac.providers import SinopacInstrumentProvider
 from nautilus_trader.adapters.sinopac.tags import TAG_PREFIX
@@ -39,6 +41,7 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TimeInForce
+from nautilus_trader.model.enums import TrailingOffsetType
 from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import StrategyId
 from nautilus_trader.model.identifiers import TradeId
@@ -1975,4 +1978,81 @@ async def test_daytrade_short_with_short_selling_is_rejected_locally(
     await _submit_built_order(exec_client, order)
 
     exec_client.generate_order_rejected.assert_called_once()
+    exec_client._http_client.place_order.assert_not_called()
+
+
+# -- Conditional order rejection tests ---------------------------------------------------------------
+
+
+def _order_factory():
+    return OrderFactory(
+        trader_id=TestIdStubs.trader_id(),
+        strategy_id=StrategyId("S-001"),
+        clock=LiveClock(),
+    )
+
+
+def _naked_conditional(factory, instrument, order_type):
+    qty = instrument.make_qty(2000)
+    trig = instrument.make_price(590.0)
+    lim = instrument.make_price(589.0)
+    if order_type == OrderType.STOP_MARKET:
+        return factory.stop_market(instrument.id, OrderSide.BUY, qty, trig)
+    if order_type == OrderType.STOP_LIMIT:
+        return factory.stop_limit(instrument.id, OrderSide.BUY, qty, lim, trig)
+    if order_type == OrderType.MARKET_IF_TOUCHED:
+        return factory.market_if_touched(instrument.id, OrderSide.BUY, qty, trig)
+    if order_type == OrderType.LIMIT_IF_TOUCHED:
+        return factory.limit_if_touched(instrument.id, OrderSide.BUY, qty, lim, trig)
+    if order_type == OrderType.TRAILING_STOP_MARKET:
+        return factory.trailing_stop_market(
+            instrument.id,
+            OrderSide.BUY,
+            qty,
+            trailing_offset=Decimal("1.0"),
+            trailing_offset_type=TrailingOffsetType.PRICE,
+        )
+    if order_type == OrderType.TRAILING_STOP_LIMIT:
+        return factory.trailing_stop_limit(
+            instrument.id,
+            OrderSide.BUY,
+            qty,
+            limit_offset=Decimal("1.0"),
+            trailing_offset=Decimal("1.0"),
+            trailing_offset_type=TrailingOffsetType.PRICE,
+        )
+    raise AssertionError(order_type)
+
+
+@pytest.mark.parametrize(
+    "order_type",
+    [
+        OrderType.STOP_MARKET,
+        OrderType.STOP_LIMIT,
+        OrderType.MARKET_IF_TOUCHED,
+        OrderType.LIMIT_IF_TOUCHED,
+        OrderType.TRAILING_STOP_MARKET,
+        OrderType.TRAILING_STOP_LIMIT,
+    ],
+)
+def test_naked_conditional_order_is_rejected_with_emulation_hint(
+    event_loop, exec_client, sinopac_equity, order_type
+):
+    factory = _order_factory()
+    order = _naked_conditional(factory, sinopac_equity, order_type)
+    exec_client._cache.add_order(order)
+    command = SubmitOrder(
+        trader_id=order.trader_id,
+        strategy_id=order.strategy_id,
+        order=order,
+        command_id=UUID4(),
+        ts_init=0,
+    )
+    exec_client.generate_order_rejected = MagicMock()
+
+    event_loop.run_until_complete(exec_client._submit_order(command))
+
+    exec_client.generate_order_rejected.assert_called_once()
+    reason = exec_client.generate_order_rejected.call_args.kwargs["reason"]
+    assert "emulation_trigger" in reason
     exec_client._http_client.place_order.assert_not_called()
