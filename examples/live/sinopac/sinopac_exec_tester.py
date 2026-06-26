@@ -51,10 +51,12 @@ but not submitted.
   trigger, then releases a plain ``MARKET`` order to the venue. In dry-run mode
   the order is built and logged without being submitted.
 - ``bracket``: submits a bracket ``OrderList`` (entry ``LIMIT`` + stop-loss
-  ``STOP_MARKET`` + take-profit ``LIMIT``) on TSMC (2330) with
-  ``emulation_trigger=TriggerType.LAST_PRICE``. The stop-loss and take-profit legs
-  are emulated; the entry limit is placed directly. In dry-run mode the order list
-  is built and logged without being submitted.
+  ``STOP_MARKET`` + take-profit ``LIMIT``) on TSMC (2330), all three legs carrying
+  ``emulation_trigger=TriggerType.LAST_PRICE``. All legs are emulated by the
+  ``OrderEmulator``: the entry is held at submit; the OTO-child SL and TP activate
+  only after the entry fills. Sinopac has no native conditional orders, so no leg
+  rests natively at the venue. In dry-run mode the order list is built and logged
+  without being submitted.
 """
 
 import os
@@ -325,8 +327,11 @@ class OrderSemanticsScenarioStrategy(Strategy):
 
         if self.config.scenario == SCENARIO_BRACKET:
             # Bracket is an OrderList, not a single order, so handle it here
-            # before the single-order path.  The SL leg is emulated in-process by
-            # the OrderEmulator; the TP leg is a plain LIMIT resting at the venue.
+            # before the single-order path.  All three legs (entry LIMIT, SL
+            # STOP_MARKET, TP LIMIT) carry emulation_trigger=LAST_PRICE, so all
+            # are held by the OrderEmulator; SL/TP activate only after the entry
+            # fills. Sinopac has no native conditional orders; no leg rests at the
+            # venue natively.
             entry = self.instrument.make_price(float(quote.ask_price))
             bracket = self.order_factory.bracket(
                 instrument_id=self.instrument_id,

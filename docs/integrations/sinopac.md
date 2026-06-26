@@ -182,7 +182,7 @@ active subscriptions, using per-instrument emit flags for efficiency.
 |-------------------|--------|---------|---------|--------------------------------------------------|
 | `MARKET`          | ✓      | ✓       | ✓       | Coerced to IOC if TIF is DAY/GTC.                |
 | `LIMIT`           | ✓      | ✓       | ✓       | Price snapped to the tick grid.                  |
-| `MARKET_TO_LIMIT` | ✗      | ✓       | ✓       | Range-market (MKP); stock orders rejected locally. |
+| `MARKET_TO_LIMIT` | ✗      | ✓       | ✓       | Range-market (MKP); stock MKP is rejected locally before reaching the venue; futures and options MKP are supported. |
 
 The execution client snaps limit prices onto the instrument's tick grid using
 round-half-even (banker's rounding) before sending. This handles grids such as
