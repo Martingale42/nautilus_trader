@@ -27,8 +27,9 @@ You are the QA Tester for the NautilusTrader Sinopac stop-orders feature. Test t
 
 ## Process
 
-1. Build and run existing tests: `uv run pytest tests/integration_tests/adapters/sinopac/ -q`
-   (First run compiles the Rust extension once — expect a long build.)
+1. Build and run existing tests: `uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q`
+   (Always `--no-sync`: prebuilt extension (`make build-debug`), pure-Python feature; a
+   plain `uv run` re-syncs and triggers a slow rebuild.)
 2. Probe the new behaviors as a user:
    - Each conditional `OrderType` without `emulation_trigger` → `OrderRejected` whose reason names `emulation_trigger`, no `place_order` call.
    - A MARKET order with `SinopacOrderTags(order_cond="MarginTrading")` → forwards `order_cond=MARGIN_TRADING`.

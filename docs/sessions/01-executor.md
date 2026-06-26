@@ -32,8 +32,9 @@ You are the Executor for the NautilusTrader Sinopac stop-orders feature. Your jo
 ## Verification Commands
 
 ```bash
-uv run pytest tests/integration_tests/adapters/sinopac/ -q
-# First run in this worktree compiles the Rust extension once (long build).
+uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q
+# Always --no-sync: extension already built (make build-debug), feature is pure-Python.
+# A plain `uv run` re-syncs and triggers a slow rebuild (minutes).
 ```
 
 ## Batch Order

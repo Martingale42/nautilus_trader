@@ -119,7 +119,7 @@ Review Batch N (Tasks X-Y).
 Batch commits: [paste the commit hashes from the executor's output / progress.json `executor_commits`]
 
 1. Review the listed commits per your checklist (run git log --oneline -20 to cross-check nothing was missed)
-2. Run: uv run pytest tests/integration_tests/adapters/sinopac/ -q
+2. Run: uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q
 3. Write the review report to `docs/reviews/YYYY-MM-DD-batch-N-review.md` and commit it
 4. Special attention for this feature: rejection `reason` and log strings must stay ASCII (non-Latin lint hook); and for Batch 2, every doc-audit claim in `docs/integrations/sinopac.md` must match `execution.py` exactly (order-type map, tag plumbing) — flag any stale claim.
 
@@ -135,7 +135,7 @@ Fix the issues from the Batch N code review.
 
 Review report: `docs/reviews/YYYY-MM-DD-batch-N-review.md`
 
-Fix all Critical and Important issues listed in the review. Do NOT fix Minor issues unless trivial. After each fix, run: uv run pytest tests/integration_tests/adapters/sinopac/ -q, then commit: "fix(scope): description of fix".
+Fix all Critical and Important issues listed in the review. Do NOT fix Minor issues unless trivial. After each fix, run: uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q, then commit: "fix(scope): description of fix".
 
 When done, output list of fixed issues with commit hashes.
 ```
@@ -150,7 +150,7 @@ Verify that the Batch N fixes address the review findings.
 Previous review: `docs/reviews/YYYY-MM-DD-batch-N-review.md`
 
 1. Check each Critical/Important finding — is it actually fixed?
-2. Run: uv run pytest tests/integration_tests/adapters/sinopac/ -q
+2. Run: uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q
 3. Append a "Fix Verification" section to the existing review report
 4. Update verdict to APPROVED if all Critical/Important issues are resolved
 5. Commit updated report
@@ -179,7 +179,7 @@ Fix the bugs from the QA report.
 
 QA report: `docs/qa/YYYY-MM-DD-full-qa.md`
 
-Fix all Critical and High severity bugs. After each fix, run: uv run pytest tests/integration_tests/adapters/sinopac/ -q, then commit: "fix(scope): description of fix".
+Fix all Critical and High severity bugs. After each fix, run: uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q, then commit: "fix(scope): description of fix".
 
 When done, output list of fixed bugs with commit hashes.
 ```
@@ -216,7 +216,7 @@ Fix the Critical findings from the final audit.
 
 Audit findings: [paste the Critical/P0 findings with file:line references]
 
-Fix all Critical findings. After each fix, run: uv run pytest tests/integration_tests/adapters/sinopac/ -q, then commit: "fix(scope): description of fix".
+Fix all Critical findings. After each fix, run: uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q, then commit: "fix(scope): description of fix".
 
 When done, output list of fixed findings with commit hashes.
 ```
@@ -305,7 +305,7 @@ print("FINAL AUDIT PASSED — pipeline complete")
   - "Fixes verified. Batch 1 APPROVED."
 - **All subagents run in the SAME repo/worktree** — they commit directly to branch `sinopac-stop-orders`
 - **After each batch approval**, briefly summarize what was built
-- **First run is slow**: the worktree has no `.venv`, so the first `uv run pytest` compiles the Rust extension once (~10–30 min). This is expected, not a hang.
+- **Always use `uv run --no-sync`**: the worktree extension is already built (`make build-debug`) and this feature is pure-Python, so `--no-sync` runs the suite in <1s. A plain `uv run` (no flag) re-syncs and triggers a slow editable rebuild (minutes) — never use it here. If the `.venv` is ever missing (fresh worktree), run `make build-debug` once first, then resume with `--no-sync`.
 
 ## Progress Tracking (Self-Healing)
 

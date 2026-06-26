@@ -14,13 +14,20 @@
 
 ## Setup note (one-time, read before Task 1)
 
-This is a fresh worktree with **no `.venv`**. All changes in this plan are **pure Python** (no Rust recompilation of logic), but the first `uv run pytest` must build NautilusTrader's compiled extension once — a long build (~10–30 min). Run it once up front:
+The worktree extension is **already built** via `make build-debug` (Rust pyo3 + Cython).
+All changes in this plan are **pure Python**, so no rebuild is ever needed — `.py` edits
+are picked up live by the editable install.
+
+**Always run tests with `uv run --no-sync`.** A plain `uv run` (no flag) re-syncs and
+triggers a slow editable rebuild (minutes); `--no-sync` runs the suite in <1s. Confirm the
+clean baseline once:
 
 ```bash
-uv run pytest tests/integration_tests/adapters/sinopac/test_execution.py -q
+uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q
 ```
 
-Expected: the existing Sinopac suite passes (this is the clean baseline). If it fails before any edits, stop and report — do not start Task 1 on a broken baseline.
+Expected: the existing Sinopac suite passes (baseline: 107 passed in ~0.5s). If it fails
+before any edits, stop and report — do not start Task 1 on a broken baseline.
 
 ---
 
@@ -180,7 +187,7 @@ def test_naked_conditional_order_is_rejected_with_emulation_hint(
 
 **Verification:**
 
-Run: `uv run pytest tests/integration_tests/adapters/sinopac/test_execution.py -k conditional -v`
+Run: `uv run --no-sync pytest tests/integration_tests/adapters/sinopac/test_execution.py -k conditional -v`
 Expected: 6 parametrized cases pass; `place_order` never called.
 
 **Commit:**
@@ -236,7 +243,7 @@ def test_market_order_preserves_margin_tag_through_submit(
 
 **Verification:**
 
-Run: `uv run pytest tests/integration_tests/adapters/sinopac/test_execution.py -k preserves_margin_tag -v`
+Run: `uv run --no-sync pytest tests/integration_tests/adapters/sinopac/test_execution.py -k preserves_margin_tag -v`
 Expected: passes; `place_order` called with `order_cond=MARGIN_TRADING`.
 
 **Commit:**
@@ -331,7 +338,7 @@ Add a `self._submitted = False` guard in `__init__` if the existing code does no
 Run (no live gateway needed — exercises construction + dispatch):
 ```bash
 SINOPAC_EXEC_SCENARIO=stop_market SINOPAC_EXEC_DRY_RUN=1 \
-  uv run python -c "import examples.live.sinopac.sinopac_exec_tester as t; print(t.SCENARIOS)"
+  uv run --no-sync python -c "import examples.live.sinopac.sinopac_exec_tester as t; print(t.SCENARIOS)"
 ```
 Expected: prints the 6-scenario tuple including `stop_market` and `bracket` with no import error.
 
@@ -437,7 +444,7 @@ order_cond/daytrade_short/octype tag matrix that the code already supports."
 ## Final verification
 
 ```bash
-uv run pytest tests/integration_tests/adapters/sinopac/ -q
+uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q
 ```
 Expected: full Sinopac suite green (existing + new tests).
 

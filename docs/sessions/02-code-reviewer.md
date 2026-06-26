@@ -36,7 +36,8 @@ For each changed file:
 ## Verification Commands
 
 ```bash
-uv run pytest tests/integration_tests/adapters/sinopac/ -q
+uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q
+# Always --no-sync: prebuilt extension, pure-Python feature; plain `uv run` rebuilds slowly.
 ```
 
 ## Report Format
@@ -66,7 +67,7 @@ Save to `docs/reviews/YYYY-MM-DD-batch-N-review.md`:
 - [file:line] Description
 
 ## Verification Results
-- `uv run pytest tests/integration_tests/adapters/sinopac/ -q`: [pass/fail, counts]
+- `uv run --no-sync pytest tests/integration_tests/adapters/sinopac/ -q`: [pass/fail, counts]
 ```
 
 ## Usage
