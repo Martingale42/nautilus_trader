@@ -1,0 +1,17 @@
+{
+  "current_batch": 1,
+  "current_step": "execute",
+  "model_assignments": {
+    "executor": {"model": "sonnet", "effort": "high", "agent": "orchestrator-executor"},
+    "reviewer": {"model": "opus", "effort": "xhigh", "agent": "orchestrator-reviewer"},
+    "qa":       {"model": "sonnet", "effort": "high", "agent": "orchestrator-qa"}
+  },
+  "step_detail": "Ready to begin Batch 1 execution.",
+  "batches_completed": [],
+  "batches_in_progress": null,
+  "qa_status": null,
+  "audit_status": null,
+  "audit_attempts": 0,
+  "last_updated": "2026-06-26T00:00:00Z",
+  "notes": "Orchestrator initialized from plan. Audit base branch is sinopac-adapter-clean (this feature branched from there, not develop)."
+}
