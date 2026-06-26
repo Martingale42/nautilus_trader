@@ -2035,6 +2035,7 @@ def _naked_conditional(factory, instrument, order_type):
         OrderType.TRAILING_STOP_MARKET,
         OrderType.TRAILING_STOP_LIMIT,
     ],
+    ids=order_type_to_str,
 )
 def test_naked_conditional_order_is_rejected_with_emulation_hint(
     event_loop, exec_client, sinopac_equity, order_type

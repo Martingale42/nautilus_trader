@@ -472,7 +472,8 @@ def _build_scenario_config(scenario: str, dry_run: bool) -> OrderSemanticsScenar
     Parameters
     ----------
     scenario : str
-        One of ``intraday_odd``, ``mkp``, ``futures_octype``.
+        One of ``intraday_odd``, ``mkp``, ``futures_octype``, ``stop_market``,
+        ``bracket``.
     dry_run : bool
         Whether orders are built and logged but not submitted.
 
@@ -558,9 +559,9 @@ def build_node(scenario: str) -> TradingNode:
             tob_offset_ticks=OFFSET_TICKS,
             subscribe_quotes=True,
             subscribe_trades=True,
-            enable_stop_buys=False,  # Sinopac doesn't support stop orders natively
+            enable_stop_buys=False,  # use the stop_market scenario for emulated stops
             enable_stop_sells=False,
-            enable_brackets=False,  # Sinopac doesn't support bracket orders
+            enable_brackets=False,  # use the bracket scenario for emulated bracket orders
             use_post_only=False,  # Not applicable to Taiwan exchange
             close_positions_time_in_force=TimeInForce.DAY,  # Taiwan uses ROD (rest of day)
             dry_run=dry_run,  # DRY_RUN_DEFAULT (False) unless SINOPAC_EXEC_DRY_RUN set
