@@ -24,6 +24,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use ahash::AHashMap;
@@ -34,6 +35,8 @@ use nautilus_core::{
     string::secret::{REDACTED, SecretString},
     time::get_atomic_clock_realtime,
 };
+#[cfg(test)]
+use nautilus_live::book::DEFAULT_BOOK_SNAPSHOT_TIMEOUT_SECS;
 use nautilus_live::book::{
     BookSequenceOutcome,
     recovery::{BookRecoveryOutcome, BookRecoveryState},
@@ -68,7 +71,7 @@ use super::{
 use crate::{
     book::{
         recovery::{self, BookWorkResult, BookWrite},
-        sync::BookSync,
+        sync::BookSyncTracker,
     },
     common::{
         consts::{
@@ -124,24 +127,24 @@ pub enum HandlerCommand {
     Unsubscribe { channel: LighterWsChannel },
     /// Replace a book subscription for the current recovery owner.
     RecoverBook {
-        market_index: i16,
+        market_index: i64,
         cancel: CancellationToken,
         gate: SnapshotGate,
         completion: tokio::sync::oneshot::Sender<Result<(), LighterWsError>>,
     },
     /// Replace the handler's instrument cache (used on initial connect).
-    InitializeInstruments(Vec<(i16, InstrumentAny)>),
+    InitializeInstruments(Vec<(i64, InstrumentAny)>),
     /// Insert or replace a single instrument by `market_index`.
     UpdateInstrument {
-        market_index: i16,
+        market_index: i64,
         instrument: InstrumentAny,
     },
     /// Toggle whether `update/order_book` frames for `market_index` should
     /// be emitted as [`NautilusWsMessage::Deltas`].
-    SetBookDeltasSub { market_index: i16, subscribed: bool },
+    SetBookDeltasSub { market_index: i64, subscribed: bool },
     /// Toggle whether `update/order_book` frames for `market_index` should
     /// also be emitted as a [`NautilusWsMessage::Depth`] snapshot.
-    SetDepthSub { market_index: i16, subscribed: bool },
+    SetDepthSub { market_index: i64, subscribed: bool },
     /// Provide the execution context (`AccountId` and venue `account_index`)
     /// the handler stamps onto reports parsed from `account_*` frames.
     /// Without this context the handler cannot construct typed reports and
@@ -249,9 +252,10 @@ pub(super) struct FeedHandler {
     subscription_retries: FuturesUnordered<SubscriptionRetry>,
     ignored_completions: AHashMap<Ustr, CompletionKind>,
     next_subscription_generation: u64,
-    instruments: AHashMap<i16, InstrumentAny>,
-    book: BookSync,
-    last_candles: AHashMap<(i16, LighterCandleResolution), LighterWsCandle>,
+    instruments: AHashMap<i64, InstrumentAny>,
+    book: BookSyncTracker,
+    book_snapshot_timeout: Duration,
+    last_candles: AHashMap<(i64, LighterCandleResolution), LighterWsCandle>,
     exec_account: Option<(AccountId, i64)>,
     account_state_reconciler: LighterAccountStateReconciler,
 }
@@ -309,6 +313,7 @@ impl FeedHandler {
             out_tx,
             subscriptions,
             Currency::get_or_create_crypto("USDC"),
+            Duration::from_secs(DEFAULT_BOOK_SNAPSHOT_TIMEOUT_SECS),
         )
     }
 
@@ -319,6 +324,7 @@ impl FeedHandler {
         out_tx: tokio::sync::mpsc::UnboundedSender<NautilusWsMessage>,
         subscriptions: SubscriptionState,
         settlement_currency: Currency,
+        book_snapshot_timeout: Duration,
     ) -> Self {
         Self {
             clock: get_atomic_clock_realtime(),
@@ -338,7 +344,8 @@ impl FeedHandler {
             ignored_completions: AHashMap::new(),
             next_subscription_generation: 1,
             instruments: AHashMap::new(),
-            book: BookSync::default(),
+            book: BookSyncTracker::default(),
+            book_snapshot_timeout,
             last_candles: AHashMap::new(),
             exec_account: None,
             account_state_reconciler: LighterAccountStateReconciler::new_with_settlement_currency(
@@ -671,9 +678,10 @@ impl FeedHandler {
                             }
 
                             let ts_init = self.clock.get_time_ns();
+                            let subscribed_topic = typed_subscribe_topic(&text);
 
                             if let Ok(frame) = serde_json::from_str::<LighterWsFrame>(&text) {
-                                if let Some(topic) = typed_subscribe_topic(&text)
+                                if let Some(topic) = subscribed_topic
                                     && !self.complete_typed_subscription(topic, connection_epoch)
                                 {
                                     continue;
@@ -690,6 +698,14 @@ impl FeedHandler {
                             } else if let Ok(value) =
                                 serde_json::from_str::<serde_json::Value>(&text)
                             {
+                                // The venue acknowledged the subscription even
+                                // though the snapshot body is unparsable.
+                                // Complete from the header so subscribers never
+                                // hang on a malformed confirmation frame.
+                                if let Some(topic) = subscribed_topic {
+                                    self.complete_typed_subscription(topic, connection_epoch);
+                                }
+
                                 let (matched, msg) = self.handle_control_value(&value);
                                 if let Some(first) = msg {
                                     return Some(first.with_connection_epoch(connection_epoch));
@@ -1469,7 +1485,7 @@ impl FeedHandler {
         }
     }
 
-    fn queue_book_replacement(&mut self, market_index: i16, write: BookWrite) {
+    fn queue_book_replacement(&mut self, market_index: i64, write: BookWrite) {
         if write.cancel.is_cancelled() || !self.order_book_stream_is_referenced(market_index) {
             return;
         }
@@ -1498,7 +1514,7 @@ impl FeedHandler {
 
     fn reject_book_subscription(
         &mut self,
-        market_index: i16,
+        market_index: i64,
         generation: u64,
         error: LighterWsError,
     ) {
@@ -1520,7 +1536,7 @@ impl FeedHandler {
         self.reject_book(market_index, error);
     }
 
-    fn reject_book(&mut self, market_index: i16, error: LighterWsError) {
+    fn reject_book(&mut self, market_index: i64, error: LighterWsError) {
         self.book.expected.remove(&market_index);
         self.book.clear_cached_order_book(market_index);
 
@@ -1551,7 +1567,7 @@ impl FeedHandler {
         }
     }
 
-    fn start_book_recovery(&mut self, market_index: i16) {
+    fn start_book_recovery(&mut self, market_index: i64) {
         if !self.order_book_stream_is_referenced(market_index) {
             return;
         }
@@ -1572,9 +1588,12 @@ impl FeedHandler {
         self.inflight_subs.remove(&Ustr::from(topic.as_str()));
         self.pending_subs
             .retain(|(pending, _)| pending.as_str() != topic);
-        self.book
-            .work
-            .push(recovery::recover(market_index, recovery, cmd_tx));
+        self.book.work.push(recovery::recover(
+            market_index,
+            recovery,
+            cmd_tx,
+            self.book_snapshot_timeout,
+        ));
     }
 
     fn complete_typed_subscription(&mut self, topic: &str, epoch: u64) -> bool {
@@ -1619,7 +1638,7 @@ impl FeedHandler {
         })
     }
 
-    fn send_book_subscribe(&mut self, market_index: i16, generation: u64) {
+    fn send_book_subscribe(&mut self, market_index: i64, generation: u64) {
         let write = self.book.writes.remove(&market_index);
         let cancel = write
             .as_ref()
@@ -1637,6 +1656,7 @@ impl FeedHandler {
 
         let client = self.inner.clone();
         let subscriptions = self.subscriptions.clone();
+        let book_snapshot_timeout = self.book_snapshot_timeout;
         self.book.work.push(recovery::subscribe(
             market_index,
             generation,
@@ -1644,12 +1664,13 @@ impl FeedHandler {
             write,
             client,
             subscriptions,
+            book_snapshot_timeout,
         ));
     }
 
     fn complete_book_send(
         &mut self,
-        market_index: i16,
+        market_index: i64,
         generation: u64,
         cancel: CancellationToken,
         write: Option<BookWrite>,
@@ -1676,9 +1697,11 @@ impl FeedHandler {
                     write.gate.open();
                     let _ = write.completion.send(Ok(()));
                 } else {
-                    self.book
-                        .work
-                        .push(recovery::wait_for_snapshot(market_index, cancel));
+                    self.book.work.push(recovery::wait_for_snapshot(
+                        market_index,
+                        cancel,
+                        self.book_snapshot_timeout,
+                    ));
                 }
             }
             Err(e) => {
@@ -1691,7 +1714,7 @@ impl FeedHandler {
         }
     }
 
-    fn order_book_stream_is_referenced(&self, market_index: i16) -> bool {
+    fn order_book_stream_is_referenced(&self, market_index: i64) -> bool {
         let channel = LighterWsChannel::OrderBook(market_index);
         self.subscriptions.get_reference_count(&channel.topic_key()) > 0
             && (self.book.delta_subs.contains(&market_index)
@@ -2215,28 +2238,29 @@ fn log_integrator_not_approved() {
     );
 }
 
-fn market_index_from_topic(topic: &str) -> Option<i16> {
+fn market_index_from_topic(topic: &str) -> Option<i64> {
     let (_, rest) = topic.split_once(':')?;
-    rest.parse::<i16>().ok()
+    rest.parse::<i64>().ok()
 }
 
-fn candle_market_and_resolution_from_topic(topic: &str) -> Option<(i16, LighterCandleResolution)> {
+fn candle_market_and_resolution_from_topic(topic: &str) -> Option<(i64, LighterCandleResolution)> {
     let (channel, rest) = topic.split_once(':')?;
     if LighterWsChannelKind::from_wire_str(channel) != Some(LighterWsChannelKind::Candle) {
         return None;
     }
     let (market, res) = rest.split_once(':')?;
-    let market_index = market.parse::<i16>().ok()?;
+    let market_index = market.parse::<i64>().ok()?;
     let resolution = res.parse::<LighterCandleResolution>().ok()?;
     Some((market_index, resolution))
 }
 
-fn order_book_market_index_from_topic(topic: &str) -> Option<i16> {
+fn order_book_market_index_from_topic(topic: &str) -> Option<i64> {
     let (channel, rest) = topic.split_once(':')?;
     if LighterWsChannelKind::from_wire_str(channel) != Some(LighterWsChannelKind::OrderBook) {
         return None;
     }
-    rest.parse::<i16>().ok()
+
+    rest.parse::<i64>().ok()
 }
 
 pub(crate) fn should_retry_lighter_ws_error(error: &LighterWsError) -> bool {
@@ -2349,6 +2373,10 @@ mod tests {
     const WS_SPOT_MARKET_STATS_UPDATE_ALL: &str =
         include_str!("../../test_data/ws_spot_market_stats_update_all.json");
     const WS_CANDLE_SUBSCRIBED: &str = include_str!("../../test_data/ws_candle_subscribed.json");
+    const WS_SPOT_STATS_SUBSCRIBED_BAD_BODY: &str =
+        include_str!("../../test_data/ws_spot_market_stats_subscribed_single_bad_body.json");
+    const WS_BOOK_SUBSCRIBED_BAD_BODY: &str =
+        include_str!("../../test_data/ws_order_book_subscribed_bad_body.json");
 
     fn handle_control_text(
         handler: &mut FeedHandler,
@@ -2749,6 +2777,39 @@ mod tests {
         assert!(cancel.is_cancelled());
         assert!(handler.book.recovery.is_empty());
         assert!(handler.book.expected.is_empty());
+    }
+
+    #[tokio::test]
+    async fn book_initial_deadline_expires_without_cancellation() {
+        let mut handler = make_handler_with_account();
+        handler.book_snapshot_timeout = Duration::from_millis(50);
+        handler.book.delta_subs.insert(0);
+        let channel = LighterWsChannel::OrderBook(0);
+        handler.subscriptions.add_reference(&channel.topic_key());
+        let (_, generation) = mark_subscription_inflight(&mut handler, channel, None);
+        let cancel = CancellationToken::new();
+        handler.book.initial.insert(
+            0,
+            PendingSnapshot {
+                deadline: None,
+                cancel: cancel.clone(),
+                gate: SnapshotGate::default(),
+            },
+        );
+
+        handler.complete_book_send(0, generation, cancel.clone(), None, Ok(7));
+
+        let BookWorkResult::Initial {
+            market_index,
+            cancel: completed,
+        } = handler.book.work.next().await.unwrap()
+        else {
+            panic!("expected deadline completion");
+        };
+
+        assert_eq!(market_index, 0);
+        assert!(!completed.is_cancelled());
+        assert!(!cancel.is_cancelled());
     }
 
     #[tokio::test]
@@ -3862,6 +3923,24 @@ mod tests {
         "spot_market_stats/2048"
     )]
     #[case(
+        LighterWsChannel::OrderBook(4095),
+        "order_book:4095",
+        "order_book/4095"
+    )]
+    #[case(
+        LighterWsChannel::SpotMarketStats(LighterMarketSelection::Market(50_000)),
+        "spot_market_stats:50000",
+        "spot_market_stats/50000"
+    )]
+    #[case(
+        LighterWsChannel::Candle {
+            market_index: 40_000,
+            resolution: LighterCandleResolution::OneHour,
+        },
+        "candle:40000:1h",
+        "candle/40000/1h"
+    )]
+    #[case(
         LighterWsChannel::AccountOrders { market_index: 0, account_index: 1234 },
         "account_orders:0:1234",
         "account_orders/0/1234",
@@ -3878,15 +3957,19 @@ mod tests {
     #[rstest]
     #[case("order_book:0", Some(0))]
     #[case("trade:42", Some(42))]
+    #[case("order_book:4095", Some(4095))]
+    #[case("trade:40000", Some(40_000))]
+    #[case("market_stats:50000", Some(50_000))]
     #[case("height", None)]
     #[case("malformed", None)]
-    fn market_index_extraction(#[case] topic: &str, #[case] expected: Option<i16>) {
+    fn market_index_extraction(#[case] topic: &str, #[case] expected: Option<i64>) {
         assert_eq!(market_index_from_topic(topic), expected);
     }
 
     #[rstest]
     #[case("order_book:0", Some(0))]
     #[case("order_book:42", Some(42))]
+    #[case("order_book:40000", Some(40_000))]
     #[case("trade:42", None)]
     #[case("ticker:2", None)]
     #[case("market_stats:0", None)]
@@ -3894,7 +3977,7 @@ mod tests {
     #[case("order_book:not-an-int", None)]
     fn order_book_market_index_only_matches_order_book_channel(
         #[case] topic: &str,
-        #[case] expected: Option<i16>,
+        #[case] expected: Option<i64>,
     ) {
         assert_eq!(order_book_market_index_from_topic(topic), expected);
     }
@@ -4081,7 +4164,7 @@ mod tests {
         let messages = handler.handle_frame(frame, UnixNanos::from(99));
 
         assert!(messages.is_empty(), "first observation must not emit");
-        let key = (0_i16, LighterCandleResolution::OneMinute);
+        let key = (0_i64, LighterCandleResolution::OneMinute);
         assert_eq!(handler.last_candles.get(&key).map(|c| c.t), Some(1_000_000));
     }
 
@@ -4111,7 +4194,7 @@ mod tests {
         }
         let cached = handler
             .last_candles
-            .get(&(0_i16, LighterCandleResolution::OneMinute))
+            .get(&(0_i64, LighterCandleResolution::OneMinute))
             .expect("cache populated");
         assert_eq!(cached.t, next_t);
     }
@@ -4136,7 +4219,7 @@ mod tests {
         assert!(messages.is_empty(), "same-`t` update must not emit");
         let cached = handler
             .last_candles
-            .get(&(0_i16, LighterCandleResolution::OneMinute))
+            .get(&(0_i64, LighterCandleResolution::OneMinute))
             .expect("cache populated");
         assert_eq!(cached.h, same_t_h);
         assert_eq!(cached.c, same_t_c);
@@ -4161,7 +4244,7 @@ mod tests {
         assert!(messages.is_empty(), "regressed `t` must not emit");
         let cached = handler
             .last_candles
-            .get(&(0_i16, LighterCandleResolution::OneMinute))
+            .get(&(0_i64, LighterCandleResolution::OneMinute))
             .expect("cache populated");
         // Regressed frame is skipped entirely; cache stays on the original entry.
         assert_eq!(cached.t, initial_t);
@@ -4215,13 +4298,14 @@ mod tests {
     #[rstest]
     #[case::well_formed("candle:0:1m", Some((0, LighterCandleResolution::OneMinute)))]
     #[case::weekly("candle:3:1w", Some((3, LighterCandleResolution::OneWeek)))]
+    #[case::widened_id("candle:40000:1h", Some((40_000, LighterCandleResolution::OneHour)))]
     #[case::other_kind("order_book:0", None)]
     #[case::missing_resolution("candle:0", None)]
     #[case::bad_market("candle:notanint:1m", None)]
     #[case::bad_resolution("candle:0:bogus", None)]
     fn test_candle_market_and_resolution_from_topic(
         #[case] topic: &str,
-        #[case] expected: Option<(i16, LighterCandleResolution)>,
+        #[case] expected: Option<(i64, LighterCandleResolution)>,
     ) {
         assert_eq!(candle_market_and_resolution_from_topic(topic), expected);
     }
@@ -4932,6 +5016,78 @@ mod tests {
 
         assert!(next.is_none());
         assert_eq!(response_rx.await.unwrap(), Ok(()));
+        assert!(handler.inflight_subs.is_empty());
+        assert!(handler.subscription_attempts.is_empty());
+        assert_eq!(handler.subscriptions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unparsable_subscribed_frame_still_completes_subscription() {
+        let signal = Arc::new(AtomicBool::new(false));
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HandlerCommand>();
+        let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, Message)>();
+        let (out_tx, _out_rx) = tokio::sync::mpsc::unbounded_channel::<NautilusWsMessage>();
+        let mut handler =
+            FeedHandler::new(signal, cmd_rx, raw_rx, out_tx, SubscriptionState::new(':'));
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        mark_subscription_inflight(
+            &mut handler,
+            LighterWsChannel::SpotMarketStats(LighterMarketSelection::Market(4098)),
+            Some(response_tx),
+        );
+
+        raw_tx
+            .send((7, Message::Text(WS_SPOT_STATS_SUBSCRIBED_BAD_BODY.into())))
+            .expect("unparsable subscribed frame");
+        drop(raw_tx);
+        drop(cmd_tx);
+
+        let next = tokio::time::timeout(Duration::from_secs(2), handler.next())
+            .await
+            .expect("handler did not process unparsable subscribed frame");
+
+        assert!(matches!(next, Some(NautilusWsMessage::Raw(_))));
+        let response = tokio::time::timeout(Duration::from_secs(2), response_rx)
+            .await
+            .expect("subscription was not completed");
+        assert_eq!(response.unwrap(), Ok(()));
+        assert!(handler.inflight_subs.is_empty());
+        assert!(handler.subscription_attempts.is_empty());
+        assert_eq!(handler.subscriptions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unparsable_book_subscribed_frame_still_completes_subscription() {
+        let signal = Arc::new(AtomicBool::new(false));
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HandlerCommand>();
+        let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, Message)>();
+        let (out_tx, _out_rx) = tokio::sync::mpsc::unbounded_channel::<NautilusWsMessage>();
+        let mut handler =
+            FeedHandler::new(signal, cmd_rx, raw_rx, out_tx, SubscriptionState::new(':'));
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        mark_subscription_inflight(
+            &mut handler,
+            LighterWsChannel::OrderBook(4095),
+            Some(response_tx),
+        );
+
+        // Epoch 0 matches the generation entry seeded by the helper, so the
+        // book-specific snapshot matching accepts this confirmation.
+        raw_tx
+            .send((0, Message::Text(WS_BOOK_SUBSCRIBED_BAD_BODY.into())))
+            .expect("unparsable book subscribed frame");
+        drop(raw_tx);
+        drop(cmd_tx);
+
+        let next = tokio::time::timeout(Duration::from_secs(2), handler.next())
+            .await
+            .expect("handler did not process unparsable book subscribed frame");
+
+        assert!(matches!(next, Some(NautilusWsMessage::Raw(_))));
+        let response = tokio::time::timeout(Duration::from_secs(2), response_rx)
+            .await
+            .expect("book subscription was not completed");
+        assert_eq!(response.unwrap(), Ok(()));
         assert!(handler.inflight_subs.is_empty());
         assert!(handler.subscription_attempts.is_empty());
         assert_eq!(handler.subscriptions.len(), 1);

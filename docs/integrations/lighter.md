@@ -85,12 +85,12 @@ namespace.
 
 ## Product support
 
-| Product type      | Data feed | Trading | Notes                                                        |
-| ----------------- | --------- | ------- | ------------------------------------------------------------ |
-| Spot              | ✓         | ✓       | Spot markets using Lighter market indexes 2048-4094.         |
-| Perpetual futures | ✓         | ✓       | Linear perpetual markets using Lighter market indexes 0-254. |
-| Dated futures     | -         | -       | *Not supported*.                                             |
-| Options           | -         | -       | *Not supported*.                                             |
+| Product type      | Data feed | Trading | Notes                                                     |
+| ----------------- | --------- | ------- | --------------------------------------------------------- |
+| Spot              | ✓         | ✓       | Spot markets; new listings use 64-bit ids from 4095.      |
+| Perpetual futures | ✓         | ✓       | Linear perpetuals; new listings use 64-bit ids from 4095. |
+| Dated futures     | -         | -       | *Not supported*.                                          |
+| Options           | -         | -       | *Not supported*.                                          |
 
 ## Limitations
 
@@ -112,7 +112,10 @@ The current adapter scope is deliberately narrower than the venue's full transac
 
 ## Symbology
 
-Lighter identifies markets by numeric `market_index` values. The adapter bootstraps the mapping from
+Lighter identifies markets by numeric `market_index` values in the venue's 64-bit allocation.
+Legacy markets keep their range-partitioned ids, while markets listed after the September 2026
+upgrade take the next free index from `4095` for either product type. Product type always comes
+from the venue's `market_type` field, never from the index. The adapter bootstraps the mapping from
 `GET /api/v1/orderBookDetails`, then converts the raw venue symbol into a Nautilus `InstrumentId`.
 
 | Deployment product  | Nautilus symbol format                  | Example                            | Notes                    |
@@ -346,9 +349,10 @@ reconnect. See the [Lighter order book contract](https://apidocs.lighter.xyz/doc
 
 ### Snapshot requirements
 
-Initial and replacement subscriptions wait up to **10 seconds** for a typed `subscribed/order_book`
-snapshot after the subscription write completes. A missing snapshot starts or retries recovery,
-including when a control acknowledgement or `Already Subscribed` response arrives without a book.
+Initial and replacement subscriptions wait up to `book_snapshot_timeout_secs` (default **10 seconds**)
+for a typed `subscribed/order_book` snapshot after the subscription write completes. Set it to `0`
+to disable snapshot deadlines. A missing snapshot starts or retries recovery, including when a
+control acknowledgement or `Already Subscribed` response arrives without a book.
 Control acknowledgements release subscription slots but do not complete book recovery.
 
 Book output resumes only after a matching snapshot replaces the cached levels. An empty snapshot
@@ -546,7 +550,7 @@ initial_margin_fraction, margin_mode)`. The `initial_margin_fraction` is in venu
 
 `UpdateLeverage`, `CancelAllOrders`, modify orders with integrator attributes, and conditional
 create orders are byte-pinned against the signer distributed with the official `lighter-python`
-SDK version 1.1.2.
+SDK version 1.1.4.
 
 ### Order querying and reconciliation
 
@@ -852,6 +856,7 @@ endpoints.
 | `http_timeout_secs`                | `60`      | HTTP request timeout in seconds.                              |
 | `ws_timeout_secs`                  | `30`      | WebSocket connection and reconnection timeout.                |
 | `update_instruments_interval_mins` | `60`      | Instrument metadata refresh interval in minutes.              |
+| `book_snapshot_timeout_secs`       | `10`      | Initial, reconnect, and recovery snapshot wait.               |
 | `rest_quota_per_min`               | `None`    | REST quota override; unset keeps 60 req/min.                  |
 | `transport_backend`                | Default   | WebSocket transport backend.                                  |
 

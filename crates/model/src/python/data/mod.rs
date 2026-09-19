@@ -110,16 +110,6 @@ crate::for_each_data_type!(define_nautilus_data_type_class_attrs);
 #[pyo3_stub_gen::derive::gen_stub_pymethods]
 #[pymethods]
 impl PyNautilusDataType {
-    #[classattr]
-    #[expect(
-        non_snake_case,
-        clippy::use_self,
-        reason = "PyO3 stub generation expands class attributes outside the impl scope"
-    )]
-    fn OrderBook() -> PyNautilusDataType {
-        Self::new(NautilusDataType::OrderBook)
-    }
-
     #[cfg(feature = "defi")]
     #[classattr]
     #[expect(
@@ -258,6 +248,7 @@ impl PyNautilusRecordType {
 /// Returns an error for data variants without a Python representation.
 pub fn data_to_pyobject(py: Python<'_>, data: Data) -> PyResult<Py<PyAny>> {
     match data {
+        Data::Custom(custom) => Py::new(py, custom).map(Py::into_any),
         Data::Instrument(instrument) => instrument_any_to_pyobject(py, *instrument),
         Data::Quote(quote) => Py::new(py, quote).map(Py::into_any),
         Data::Trade(trade) => Py::new(py, trade).map(Py::into_any),
@@ -271,7 +262,6 @@ pub fn data_to_pyobject(py: Python<'_>, data: Data) -> PyResult<Py<PyAny>> {
         Data::OptionGreeks(greeks) => Py::new(py, greeks).map(Py::into_any),
         Data::InstrumentStatus(status) => Py::new(py, status).map(Py::into_any),
         Data::InstrumentClose(close) => Py::new(py, close).map(Py::into_any),
-        Data::Custom(custom) => Py::new(py, custom).map(Py::into_any),
         #[cfg(feature = "defi")]
         Data::Defi(_) => Err(to_pytype_err("Unsupported DeFi data variant")),
     }
@@ -629,8 +619,15 @@ fn py_decode_record_batch_to_custom_data(
 /// Use this when you prefer to pass the class instead of a sample instance.
 /// The class must have:
 /// - `type_name_static()` class method or `__name__` (used as type name in storage)
-/// - `decode_record_batch_py(metadata, ipc_bytes)` class method
+/// - `decode_record_batch_py(metadata, batch)` class method
 /// - Instances must have `ts_event`, `ts_init`, and `encode_record_batch_py(items)`.
+///
+/// To write the type to a catalog and query it back, the class must also supply the Arrow
+/// schema its batches use, through a `_schema` class attribute or an `arrow_schema_py()`
+/// class method. That schema must contain `ts_init`. Any `ts_event` or `ts_init` fields must use
+/// `timestamp("ns", tz="UTC")`. The `@customdataclass` decorator generates both the schema
+/// and the Arrow methods. Without a usable schema the class still registers for JSON use, and
+/// `write_custom_data` raises rather than writing a file that cannot be queried.
 ///
 /// # Arguments
 ///

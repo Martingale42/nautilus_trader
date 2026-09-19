@@ -211,7 +211,7 @@ From the repository root, run:
 
 ```bash
 CARGO_BUILD_JOBS=16 bash scripts/strip-adapter-env.bash \
-  cargo run -p nautilus-okx --features examples --example okx-book-sync-stress -- 3 18
+  cargo run -p nautilus-okx --features examples --example okx-book-sync-stress -- 10 18
 ```
 
 The arguments set the snapshot timeout in seconds and the number of stress rounds. Use `0 18` to
@@ -1319,7 +1319,7 @@ The OKX data client provides the following Python configuration options.
 | `update_instruments_interval_mins` | `60`                       | REST instrument cache reconciliation interval in minutes; `0` disables.        |
 | `book_stale_check_interval_secs`   | `5`                        | Stale book check interval.                                                     |
 | `book_stale_threshold_secs`        | `30`                       | Idle time before a stale book warning.                                         |
-| `book_snapshot_timeout_secs`       | `3`                        | Initial, reconnect, and recovery snapshot wait.                                |
+| `book_snapshot_timeout_secs`       | `10`                       | Initial, reconnect, and recovery snapshot wait.                                |
 | `vip_level`                        | `None`                     | Enables higher-depth books by VIP tier.                                        |
 | `proxy_url`                        | `None`                     | Optional HTTP and WebSocket proxy URL.                                         |
 | `transport_backend`                | `Sockudo`                  | WebSocket transport backend.                                                   |
@@ -1398,6 +1398,79 @@ official endpoint list.
 Use `OKXDataClientConfig` with `OKXDataClientFactory` and `OKXExecutionClientConfig` with
 `OKXExecutionClientFactory`. The Python examples show a complete
 `LiveNode.builder(...)` configuration for data and execution clients.
+
+## Deterministic simulation testing
+
+OKX is the reference implementation for the
+[adapter DST contract](../concepts/dst.md#adapter-dst-contract), which the
+[adapter developer guide](../developer_guide/adapters.md#deterministic-simulation) requires of
+maintained adapters. This section records the audited OKX slice: the files the static gate covers,
+the exclusion rationale for the rest, and the runtime slices the `dst` tests prove.
+
+### Audited files
+
+Audited OKX DST-path production files route state-affecting clock reads and timers through the DST
+seams and sort reconnect and bulk-unsubscribe subscription commands. The static gate covers these
+files in `crates/adapters/okx/src`:
+
+- **book**: `mod.rs`, `recovery.rs`, `sync.rs`
+- **common**: `parse.rs`, `task.rs`
+- **Top level**: `config.rs`, `data.rs`, `execution.rs`
+- **http**: `client.rs`, `models.rs`, `query.rs`
+- **websocket**: `client.rs`, `dispatch.rs`, `handler.rs`, `messages.rs`, `parse.rs`,
+  `subscription.rs`
+
+:::warning
+Static coverage alone does not establish runtime eligibility: these files also serve paths outside
+a proven runtime slice.
+:::
+
+### Excluded files
+
+The remaining non-Python OKX production files stay excluded because they carry no DST-path state,
+clock, RNG, task, or transport surface:
+
+- **Module declarations**: `lib.rs`, `common/mod.rs`, `http/mod.rs`, `websocket/mod.rs`.
+- **Pure venue types**: `common/enums.rs`, `websocket/enums.rs`, `http/error.rs`,
+  `websocket/error.rs`, `common/models.rs`.
+- **Pure tables and deterministic mappings**: `common/urls.rs` (endpoint tables) and
+  `common/consts.rs` (pure predicates, validators, and wire-value and channel resolvers; its
+  `AHashSet` is contains-only retry lookup, never iterated).
+- **Deterministic helpers**: `common/credential.rs`, whose HMAC signs a caller-provided timestamp
+  and whose credential resolution reads only config or declared environment at construction, and
+  `common/failure.rs`, which is pure error classification.
+- **Construction wiring only**: `factories.rs`.
+- **Test-only or placeholder**: `common/testing.rs`, `http/parse.rs`.
+
+`check-dst-conventions` records this rationale next to `ADAPTER_PATHS`; re-audit a file if it
+gains DST-path runtime logic. The seven files under `src/python/` stay excluded by the repo-wide
+Python/FFI policy, not by this audit (see
+[Python and FFI are not in DST scope](../concepts/dst.md#python-and-ffi-are-not-in-dst-scope)).
+
+### Proven and unproven slices
+
+Focused Madsim tests in `crates/adapters/okx/tests/integration/dst.rs` prove this slice:
+
+- **Subscribe bytes**: public WebSocket quotes, trades, and books; business WebSocket bars.
+- **Reconnect order**: multi-instrument quote reconnect in topic order. Reconnect also clears quote
+  and funding caches in `data.rs` so a new generation cannot reuse prior values.
+- **Login frame**: key, passphrase, and signature derived from the simulated wall clock.
+- **Wire fields**: single order-submit, amend, and cancel; algo order-submit and cancel; batch
+  order-submit in input order.
+
+Complete request-to-wire-to-domain fresh-process comparison stays in the downstream DST harness.
+These share the DST facades and convention gate but remain unproven:
+
+- Other public channels: tickers, funding rates, index tickers, option summaries, other book
+  depths, and the other candle granularities.
+- Private data streams.
+- Mass cancel, batch amend and cancel, and spread orders.
+- HTTP report and reconciliation paths.
+
+### Simulation test leg
+
+The standard-precision leg runs the integration `dst` tests under `simulation` without the crate's
+default `high-precision` feature.
 
 ## Contributing
 

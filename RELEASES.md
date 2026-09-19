@@ -7,11 +7,20 @@ Released on TBD (UTC).
 - Added `historical_base_url` and `live_gateway_addr` overrides to `DatabentoDataClientConfig`
 - Added `tardis_http_url` override to `TardisDataClientConfig` and `TardisReplayConfig`
 - Added Polymarket session signing and owner-operated session key authorization, listing, and revocation
+- Added `IndexPriceUpdate`, `InstrumentClose`, `FundingRateUpdate`, and `Custom` to `DataBackendSession.add_file`
+- Added Lighter support for 64-bit market IDs at and above 4095
+- Added Tardis full 25-level `OrderBookDepth` for `snapshot25` data
+- Added Lighter `book_snapshot_timeout_secs` override, honoring 0 as disabled
+- Added Polymarket book recovery with snapshot gating and stale-feed detection
 - Migrated Polymarket trade and position history to Data API v2 with cursor pagination
 
 ### Breaking Changes
 
+- Removed `nautilus_trader.persistence.NautilusDataType` - import from `nautilus_trader.model`
+- Removed `NautilusDataType.OrderBook` variant and `"OrderBook"`/`"order_book"` spellings
+- Changed `DataBackendSession.add_file` to accept `model.NautilusDataType`, rejecting `Instrument` and `Defi`
 - Changed Rust `OrderCore.events` to read-only `events()`; construct cores with `OrderCore::new`
+- Changed `reconciliation_startup_delay_secs` to reject values above 86,400 seconds (one day)
 - Changed Python Hyperliquid data and execution client config parameter order to `base_url_http` before `base_url_ws`
 - Changed Polymarket `polymarket_trade_sort_key` inputs to v2 `transaction_hash` and `token_id` fields
 - Changed Tardis `book_snapshot_output` value `"depth10"` to `"depth"` (the legacy value remains accepted)
@@ -23,6 +32,7 @@ Released on TBD (UTC).
 - Renamed Databento `load_order_book_depth10` to `load_order_book_depth` and `get_order_book_depth10` to `get_order_book_depth`
 - Renamed Polymarket `SignatureType` to `PolymarketSignatureType`
 - Renamed Tardis `load_tardis_depth10_from_snapshot5`/`25` and `stream_tardis_depth10_from_snapshot5`/`25` to their `depth` spellings, and `TardisDepth10StreamIterator` to `TardisDepthStreamIterator`
+- Changed custom-data writes to require valid schemas; migrate legacy files with `nautilus catalog migrate-parquet`
 
 ### Security
 
@@ -32,15 +42,27 @@ Released on TBD (UTC).
 - Fixed execution mass-status reconciliation ignoring filled-quantity decreases without companion fills
 - Fixed overlapping mass-status snapshots reversing newer cached fills or fill voids
 - Fixed trailing-stop orders already in the market being accepted despite `reject_stop_orders`
+- Fixed `convert_stream_to_data` silently skipping staged custom data (#4607), thanks for reporting @mystic-io
+- Fixed reconciliation fills from venue fill reports not carrying the `reconciliation` event flag
+- Fixed live node startup panic on an excessively large `reconciliation_startup_delay_secs`
+- Fixed unqueryable Python custom-data writes (#4984), thanks for reporting @shanezilla
+- Fixed `customdataclass` nanosecond decoding without pandas (#4984), thanks for reporting @shanezilla
 - Fixed Betfair false fill voids and missing fills during reconciliation after price replacements
 - Fixed Betfair false fill voids from inconsistent order and fill snapshots during reconciliation
 - Fixed Betfair order quantities in replacement queries and quantity reduction recovery
 - Fixed Lighter book recovery after missing snapshots, sequence gaps, and reconnects
+- Fixed Lighter websocket subscription hangs on unparsable confirmations
+- Fixed Lighter spot stats parsing for empty mid prices
 - Fixed OKX order book snapshots retaining stale price levels after resubscription
+- Fixed OKX book deltas missing the `F_LAST` flag, stalling consumers with `buffer_deltas` enabled
+- Fixed OKX account state always reporting `MARGIN`, ignoring the configured account type
+- Fixed OKX fee and filled-quantity caches growing unbounded over long-running sessions
+- Fixed Polymarket order modifications blocked after a deferred cancel with an unresolved venue outcome
 
 ### Internal Improvements
 
 - Standardized network config field layouts across adapters: URL override block, then `proxy_url`
+- Standardized `Data` and `NautilusDataType` ordering with `Custom` first
 - Renamed the variable-depth Cap'n Proto `OrderBookDepth10` schema declarations to `OrderBookDepth` while pinning node IDs and field ordinals for wire continuity
 - Improved cache order query benchmark coverage
 - Optimized cache order queries and exchange rate lookups from bars
@@ -49,6 +71,8 @@ Released on TBD (UTC).
 - Optimized allocation overhead in Rust exchange rate calculations
 - Standardized book recovery ownership and retry handling across Lighter and OKX
 - Improved OKX public and spread book recovery with bounded retries and cancellation-safe resubscription
+- Standardized book snapshot timeouts on a shared 10s default across Lighter, OKX, and Polymarket
+- Renamed Lighter `BookSync` to `BookSyncTracker`
 - Upgraded `datafusion` crate to v55.1.0
 - Upgraded `jiff` crate to v0.2.37
 - Upgraded `smallvec` crate to v1.16.1
@@ -59,6 +83,7 @@ Released on TBD (UTC).
 - Documented the adapter config field layout convention in the developer guide
 - Documented shared order book recovery ownership and Lighter recovery limits
 - Documented OKX order book recovery and retry limits
+- Documented shared book snapshot defaults and live validation levels
 - Updated Databento and Tardis integration guides with new URL overrides
 
 ### Deprecations
